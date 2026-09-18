@@ -2,6 +2,8 @@ import Suimon.State
 namespace Suimon
 /-- Node code is opaque. Keys include the input identity, never arrival order. --/
 structure Oracle where
+  /-- Prescribed plain and stream results; stream completeness is checked by
+      oracleConforms at completion, separately from the executable step. --/
   leaf : NodeId → List (PortName × ItemId) → List Output
   branch : NodeId → ItemId → PortName
   filter : NodeId → ItemId → Bool

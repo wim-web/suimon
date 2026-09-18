@@ -9,7 +9,7 @@ abbrev Time := Nat
 abbrev Path := List InstanceId
 
 inductive Token | item (id : ItemId) | eos
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Channel where
   id : String
   edge : Edge
@@ -19,7 +19,7 @@ structure Channel where
   exit : Bool := false
   placed : List Token := []
   consumed : Nat := 0
-  deriving BEq, Repr, ToJson, FromJson
+  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 inductive InstanceStatus
   | waitingInputs | ready | running | retryWait | succeeded | failed | cancelled
   deriving DecidableEq, BEq, Repr, ToJson, FromJson
@@ -100,29 +100,31 @@ def identity (parts : List String) : String := (toJson parts).compress
 def instanceId (path : Path) (node : NodeId) (trigger : Option ItemId := none) : InstanceId :=
   (toJson (path, node, trigger)).compress
 
-def Frame.channels (f : Frame) : List Channel := Id.run do
-  let mut cs := []
-  for (e, i) in f.graph.edges.zipIdx do
-    cs := cs ++ [{
+def Frame.edgeChannels (f : Frame) : List Channel :=
+  f.graph.edges.zipIdx.map fun (e, i) => {
       id := identity (f.path ++ ["edge", toString i])
       edge := e
       path := f.path
-      kind := ((f.graph.output? e.src).map (·.kind)).getD .plain }]
-  for (p, i) in f.graph.entries.zipIdx do
-    cs := cs ++ [{
+      kind := ((f.graph.output? e.src).map (·.kind)).getD .plain }
+
+def Frame.entryChannels (f : Frame) : List Channel :=
+  f.graph.entries.zipIdx.map fun (p, i) => {
       id := identity (f.path ++ ["entry", toString i])
       edge := { src := { node := "$input", port := toString i }, dst := p }
       path := f.path
       kind := ((f.graph.input? p).map (·.kind)).getD .plain
-      entry := true }]
-  for (p, i) in f.graph.exits.zipIdx do
-    cs := cs ++ [{
+      entry := true }
+
+def Frame.exitChannels (f : Frame) : List Channel :=
+  f.graph.exits.zipIdx.map fun (p, i) => {
       id := identity (f.path ++ ["exit", toString i])
       edge := { src := p, dst := { node := "$output", port := toString i } }
       path := f.path
       kind := ((f.graph.output? p).map (·.kind)).getD .plain
-      exit := true }]
-  return cs
+      exit := true }
+
+def Frame.channels (f : Frame) : List Channel :=
+  f.edgeChannels ++ f.entryChannels ++ f.exitChannels
 
 def State.initial (g : Graph) : State :=
   let f : Frame := { path := [], graph := g }
@@ -147,6 +149,9 @@ def Channel.pendingItems (c : Channel) : List ItemId := c.pending.filterMap fun 
   match t with | .item id => some id | .eos => none
 
 def State.instance? (s : State) (id : InstanceId) : Option Instance := s.instances.find? (·.id == id)
+/-- Internal scheduling addresses a logical node, independently of its wire ID. --/
+def State.nodeInstance? (s : State) (path : Path) (node : NodeId) : Option Instance :=
+  s.instances.find? (fun i => i.path == path && i.node == node && i.trigger.isNone)
 def State.frame? (s : State) (path : Path) : Option Frame := s.frames.find? (·.path == path)
 def State.node? (s : State) (path : Path) (node : NodeId) : Option Node := do
   let f ← s.frame? path

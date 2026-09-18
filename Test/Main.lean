@@ -4,6 +4,7 @@ import Test.Artifacts
 import Test.Work
 import Test.TraceProjection
 import Test.Determinism
+import Test.OracleConformance
 open Lean Suimon Suimon.Test
 
 private def ensure (ok : Bool) (message : String) : IO Unit :=
@@ -601,3 +602,4 @@ def main (args : List String) : IO Unit := do
   Work.run
   TraceProjection.run
   Determinism.run
+  OracleConformance.run

@@ -6,6 +6,14 @@ import Suimon.Axioms
 import Suimon.Invariants
 import Suimon.Explore
 import Suimon.Trace.Check
+import Suimon.Execution
 import Suimon.Theorems.Safety
 import Suimon.Theorems.Replay
 import Suimon.Theorems.Streams
+import Suimon.Theorems.Determinism
+import Suimon.Theorems.Semantics
+import Suimon.Theorems.History
+import Suimon.Theorems.Layout
+import Suimon.Theorems.CompletedRun
+import Suimon.Theorems.ChannelLayout
+import Suimon.Theorems.Accounting

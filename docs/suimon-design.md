@@ -278,7 +278,7 @@ structure State where
 
 ### 4.4 Step
 
-遷移は「1 トランザクション = 原始 Step の列」として扱い、不変条件はトランザクション境界で述べる。`Step : State → Op → State → Prop` と実行可能な `step : State → Op → Except Reject State` を両方定義し、一致を証明する。
+遷移は「1 トランザクション = 原始 Step の列」として扱い、不変条件はトランザクション境界で述べる。実行可能な `step : State → Op → Except Reject State` を唯一の遷移定義とし、性質はこの関数について直接証明する。独立した関係 `Step` は置かない（§12 D10）。
 
 | Op | 前提 | 効果 |
 | --- | --- | --- |
@@ -347,13 +347,15 @@ Reject は状態を変えない。
 
 T9 は順序までは一致しないので多重集合で述べる。Collect は D5 の ItemId 昇順。drain は root の出口を結果として残し、それ以外の線に未消費アイテムがなく、全線に EOS があり、子 frame が回収済みであること。任意の prefix、cancel、yield の一部を残して終了した失敗とは比較しない。`Test/Determinism.lean` が候補列挙内の固定 oracle に適合する成功実行を乱択し、子 frame の線を含めて比較する。故障なしに加え、leaf の lease 失効 / retryable fail → promoteRetry → 再 claim と同じ occurrence ID の yield 再送を含む。再送先で消費済みの場合も検査する。繰り返し故障による試行上限超過、manualRetry、恒久失敗、cancel はこの有限検査の対象外。
 
+一般命題の型は `Suimon/Execution.lean` の `ScheduleDeterminism`。`oracleConforms` は個々の emit が指定集合に入ることに加え、complete 時に全 stream 出力が指定どおり揃っていることを要求する。生の step の成功・drain だけでは、利用者コードが出すはずだった値の省略を排除できない。ForEach / Loop / DAG を含む完成時の意味論については `GraphEval.functional` で一意性を証明した。実 step の任意長列については、再送・管理操作のチャネル不変性、入力の保持、frame とチャネルの構造、成功時の完了境界を証明している。実際の成功実行から `GraphEval` の導出と全線の観測一致を構成する適合性は未証明であり、T9 全体の証明完了とはしない。
+
 ## 6. 有界探索器
 
 `Explore.lean`。実行可能 `step` の上に、有界の全探索とランダム探索を実装する。
 
 - 入力: `Test/graphs/` の例グラフ。普通の菱形（leaf → 2 leaf → WaitAll）、N 字、Branch、Loop（上限 2）、emit 型 leaf → ForEach → Collect、Merge、を1つずつ含む小さなグラフを複数用意する。
 - worker 数、時間刻み、深さを引数にとり、BFS で到達状態を列挙。§5 を決定可能な述語として検査し、違反への Op 列を JSON で出す。
-- ランダム探索は `Plausible` で Op 列を生成する。
+- ランダム探索は seed 付きの自前乱数で、状態に応じた候補から Op 列を生成する。`Plausible` の導入は T9 の補題着手時に判断する（型駆動の生成は状態依存の Op に向かず、shrink は反例が出るまで出番がないため）。
 - 用途: 証明前は反例探し（設計の穴か証明の腕かを切り分ける）。証明後は §9 のテスト生成器。
 
 ## 7. Trace 検査
@@ -443,7 +445,7 @@ suimon/
 
 例グラフ JSON は `Test/graphs/` に置き、将来の実装もそこを読む。
 
-- Lean: `lean-toolchain` で固定。依存は最初は `Batteries` のみ。`Mathlib` は必要になった時点で判断を記録して追加。
+- Lean: `lean-toolchain` で固定。外部依存は現在なし（D7）。必要になった時点で判断を記録して追加する。
 - CLI: `lake exe suimon check <trace.jsonl> --graph <graph.json>`、`lake exe suimon explore --graph <graph.json> --depth N`、`lake exe suimon gen --seed S --count N`。
 - CI: `lake build`（`sorry` 残数をマイルストーンごとに減らす）、探索器の反例ゼロ、検査器の回帰。
 
@@ -451,7 +453,7 @@ suimon/
 
 ### M1 型と実行可能 step
 
-- §4.1〜4.4 の型と `step` がある。`Step` 関係は定義のみでよい。既存の `formal/suimon/` は root へ移し、§4 に合わせて書き直す。
+- §4.1〜4.4 の型と `step` がある。既存の `formal/suimon/` は root へ移し、§4 に合わせて書き直す。
 - `schema/graph.schema.json`、`schema/events.schema.json` があり、例グラフが適合する。
 - 手書きの最小 trace を適合と判定し、壊した trace（`attempt.started` を削る、EOS 後に `token.placed`）を違反と判定する。
 
@@ -459,7 +461,7 @@ suimon/
 
 - 探索器が全例グラフで深さ 8 以上を完走し、反例ゼロ。反例があれば内容と対処を `docs/` に記録。
 - I1〜I4、T1、T3、T5、T6、T7、T8、T13 が `sorry` なし。
-- `step` と `Step` の一致。
+- 受理された `step` の分解補題（`step_ok_cases`: 恒等な吸収か、認可・前提・不変条件・履歴検査を通った実行）。
 
 ### M3 ストリームの定理
 
@@ -489,12 +491,13 @@ suimon/
 | D7 | Mathlib | 使わない。Lean 標準ライブラリのみ（同上） |
 | D8 | Concurrency の表現 | §3 の Concurrency 箱は §4 では「1つの出力から複数の線 + waitAll」で表す。独立の NodeKind は作らない |
 | D9 | facts の公開射影 | command と公開 facts は必須。facts は `Trace.Projection` に列挙したフィールドだけを厳密照合し、内部構造を直接 JSON 化しない。Instance 作成は id / node / path / trigger。各種カウンタ等は command replay で復元する。区分内は論理 ID 順。公開フィールドは snake_case、主体は by_instance、lease 期限は lease_until。v2 に移行し、今後の内部フィールド追加では公開形式を変えない |
+| D10 | 遷移関係 `Step` | 置かない。`step` は結果が一意に決まる関数であり、関係を別に書いても同じ内容の重複になる。定理は `step` について直接証明し、受理の分解は補題 `step_ok_cases` で行う（2026-09-19） |
 
 ### 判断状況（旧未決番号を維持）
 
 1. 最初の実装言語。M5 で決める。
 2. **解決済み（D9）**。facts は公開射影に決定。command / facts / commit は必須のまま、内部構造との結合を除く。
-3. `Step` 関係を `prepare` / `authorized` の展開でなく独立に書き直すか。現状は `step_iff` がほぼ定義の展開で、§4.4 の「別々に定義して一致を証明する」になっていない。書き直すコストと得られる保証を見て判断する。
+3. **解決済み（D10）**。関係 `Step` は削除し、`step` 関数を唯一の遷移定義とする。
 4. `Graph.WellFormed` を `validate = .ok ()` から構造的定義へ書き直すか。定理で使う段になったら判断する。
 5. 参照実装との対応で確認済みの事項: `ValidLease` の条件、再試行の回数計算、lease 失効時の attempt 放棄。今後の確認は必要になった時点で行う。
 6. 候補列挙の完全性。`hasWork` が偽なら全ての通常 Op が状態を変えられない、という逆方向の一般証明は未完。探索器と独立した Op 生成で、受理され状態が変わるなら hasWork が真、という乱択回帰を行う。`Op` の追加時はこの独立生成も更新する。

@@ -55,7 +55,6 @@ def checkEvent (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
     if e.type == "transaction.committed" then
       unless e.op.isNone && e.data == Json.mkObj [] && c.commands > 0 do
         throw (err "INVALID_COMMIT" "commit must follow at least one complete operation")
-      unless invariants c.state do throw (err "INVARIANT" "invalid transaction boundary")
       return { c with boundary := c.state, txn := none, completed := c.completed ++ [e.txn], currentOp := none, commands := 0 }
     let op ← e.op.toExcept (err "MISSING_OPERATION" "expected a command with op")
     unless e.type == commandType op && e.data == Json.mkObj [] do

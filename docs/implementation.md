@@ -57,6 +57,32 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 現在の `deterministic_item_multiset` / `deterministic_item_counts` は純粋な item 変換が permutation を保存すること、`deterministic_leaf` は A4 の下で leaf の入力 permutation が出力を変えないことを証明する。**これらは状態遷移系全体の合流性の証明ではない。** 完全な T9 は今後の証明課題として残している。
 
+一般命題の型を `Suimon/Execution.lean` の `ScheduleDeterminism` に置いた。同じ graph / inputs とスコープごとの同じ oracle に対する、任意長の受理された2操作列を量化する。候補列挙・worker 数・試行回数・探索深さの制限は付けない。これは証明対象の `Prop` の定義であり、まだその inhabitant を与える定理はない。`ConformingSteps` は実際の `step` の受理と各操作の制約を記録する操作列で、別の遷移意味論ではない。`ConformingSteps.replay` で実際の replay と結び付けた。
+
+`oracleConforms` は emit の所属、complete の plain 出力、Branch / Filter / Loop の選択を固定 oracle と照合する。さらに complete 時、各 stream 出力線の履歴が oracle の指定する多重集合を満たすことを要求する。指定が `[x,y]` でも、生の step は x だけ emit して complete すれば succeeded / drain に至れるため、「送った値は oracle の集合に含まれる」だけでは不十分である。`Test/OracleConformance.lean` はこの到達可能な反例を再現し、完全な通常実行と lease 失効後の再送実行は適合し、途中で打ち切る complete は不適合になることを確認する。`ScopedOracle` は論理 path をキーに含め、occurrence ID が worker や attempt に依存しない形を表す。
+
+`Suimon/Theorems/Determinism.lean` には次を一般補題として追加した。
+
+- `placeToken_duplicate` / `place_duplicate`: 消費位置に関係なく配置履歴全体で再送を排除する。EOS 後は再送も拒否する。
+- `emit_duplicate_channels`: 公開 step が受理した既存 occurrence の emit は、全チャネルの全フィールドを保存する。
+- `transition_administrative_channels` / `administrative_step_channels`: claim / renew / expireLease / promoteRetry / fail は、実際の操作本体を展開してもチャネルを変えない。
+- `retry_fragment_channels` / `retry_fragment_multisets`: これらの管理操作と既存 occurrence の再送だけからなる、任意長の受理された操作列は、全チャネルとその多重集合を保存する。新規 emit、complete、消費や body 操作を含む任意の実行同士の比較ではない。
+- `sortedItems_eq_of_perm` / `collect_value_deterministic`: 任意の入力 permutation について、Collect が実際に使う整列済みリストと結果 ID が一致する。Collect の操作列全体の証明とは区別する。
+
+完成時のデータフローを `Suimon/Semantics.lean` の `GraphEval` / `NodeEval` / `LoopEval` として定義した。leaf、Branch、Filter、Merge、Collect、Coalesce の入出力、Sub の回収、ForEach の各 trigger に対応する子評価、Loop の各反復を含む。`Suimon/Theorems/Semantics.lean` の `GraphEval.functional` は、この意味論の完成結果が一意であることを証明する。グラフの位相順序、子評価、Loop の反復について帰納し、子 frame の全チャネルも結果に含める。候補列挙や探索深さの制限は使わない。
+
+実行可能なモデルとの接続には、次の補題を追加した。
+
+- `Graph.validate` をグラフの大きさで停止する全域関数に変更した。`topology_of_validate`、`validate_port_names`、`input_single_source` で、検証成功から DAG の順位、ポート名の一意性、各入力の唯一の接続元を取り出す。`WellFormed` 自体の定義は引き続き検証成功である。
+- `ConformingSteps.layout` / `frames_certified` / `unique_frames` は、実際の操作列に沿って、チャネルの配置、frame のグラフの検証成功、scope の一意性を保つ。`retained_node` は既存 scope のグラフ定義が変わらないことを示す。
+- `ConformingSteps.completion` / `completedState` は、成功が root の `frameDone` を確認した idle に由来することと、成功時の root・全 frame・チャネルの構造を実際の操作列から取り出す。
+- `ConformingSteps.input_snapshot` は、任意長の受理操作列を通じて、既存 instance の node / path / trigger / inputs が変わらないことを、操作本体から証明する。manualRetry も対象に含む。
+- `ConformingSteps.retains_closed_channel` は、閉じたチャネルの配置履歴が以後変わらないことを示す。`Effects.place_value` / `place_items` は配置処理の正確な更新と item 集合への効果、`consume_item_receipt` は消費時に追加される記録、`succeededDrained_input_receipt` は drain された入力の全 item に消費記録があることを示す。
+
+配置・入力の消費・body の生成と回収は補助関数へ分解した。EOS・plain cardinality の検査順と再送の重複排除は維持している。内部の通常ノード照合は `State.nodeInstance?` に集約し、`(node, path, trigger = none)` で照合する。外部 trace の ID 形式は変えていない。
+
+**残る証明は、成功・drain された `ConformingSteps` から `GraphEval` の導出を構成し、その結果のチャネルと実際の `channelBags` の一致を示す適合性である。** 各 Op の入出力、ForEach の消費 item と子 frame の対応、Loop の反復間の入力引継ぎを、実行履歴からこの導出へ接続する必要がある。`GraphEval.functional` 単独では `ScheduleDeterminism` の証明にならず、M3 は未完のままである。全線の観測と drain の定義は Execution に集約し、乱択検査も同じ定義を使う。
+
 `Test/Determinism.lean` は12例と共有入力・入れ子の Coalesce の計14グラフに対し、6つの固定 oracle 設定、16通りの schedule seed、故障なし / lease 失効 / retryable fail の3モードを使う。候補列挙から、固定した Branch / Filter / Loop の結果と leaf 出力に適合する操作だけを選ぶ。stream は設定ごとに0〜2個の全 occurrence を出してから complete する。oracle の選択に schedule seed や attempt ID を使わない。故障なしの基準実行と比較し、4,032実行、3,948比較を行う。
 
 再試行モードは最初に claim した leaf に1回の故障を注入する。stream を持つ leaf では、schedule seed が選んだ部分集合または全件を emit した後に失効・失敗させる。`expireLease` の時刻進行で他の lease も失効した場合は、全失効 attempt を回収してから retry 時刻へ進め、promoteRetry を済ませて再 claim する。この有限範囲では2回目の attempt を再び故障させない。
@@ -65,7 +91,7 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 各試行に256操作の上限を設け、成功・drain に至らない場合は失敗とする。比較できなかった試行を捨てない。全線の EOS、root の出口以外の未消費アイテムなし、子 frame の回収を検査し、論理 channel ID ごとにアイテムを整列して多重集合を比較する。root の線だけでなく、Sub / Loop / ForEach の子 frame の entry / edge / exit も対象。重複数を保持し、格納順は無視する。実際に到着順が変わった比較が存在することも必須にする。反例には graph、両 seed、故障モード、2本の操作列と比較結果を出す。
 
-cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの比較の対象外。任意長の stream、任意の oracle、全 schedule の証明ではない。次の証明は、各ノードの完了出力の多重集合を入力から定める補題、再送の履歴不変性、ForEach の occurrence と子 frame の対応、Loop の反復と Sub の回収を結び、成功・drain した全体へ持ち上げる必要がある。Step の独立化と WellFormed の構造化は、その補題で必要になる段階で判断する。
+cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの有限比較の対象外。任意長の stream、任意の oracle、全 schedule の証明ではない。一般証明に残る課題は、上記の実行履歴と完成時の意味論の適合性である。
 
 検査の感度確認として、Collect を一時的に到着順のままリスト ID を作る実装に変えたところ、streaming の oracle seed 2、schedule seed 1 / 7 の組で多重集合の不一致を検出した。変更は検証後に戻した。
 
@@ -79,7 +105,7 @@ cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry
 
 | 対象 | 現在の証明・検証 |
 | --- | --- |
-| `step` / `Step` | `step_iff`。ガードの前提で定義した関係と実行関数の受理条件の一致。操作規則を独立に書き直すかは設計書 §12 の未決事項 |
+| `step` | `step_ok_cases`。受理された step は、恒等な吸収か、認可・`prepare`・不変条件・履歴検査を全て通った実行のどちらか。独立した関係 `Step` は置かない（D10） |
 | I1–I3 | `preserves_invariants` / `replay_invariants`。有効な初期状態からガード付き step/replay が保持。例グラフの初期状態は実行検査 |
 | I4 | `preserves_history`。許可された status 遷移、チャネルの prefix 保存、消費位置と時計の単調性 |
 | T1 | `plain_order`。activate 受理時の入力 EOS・上流 succeeded の条件。`coalesce_plain_order` は選択した入力について同じ条件を保証 |
@@ -90,7 +116,7 @@ cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry
 | T6 | `branch_exclusive`。実際に使用するルーティング関数が非選択ポートへ値を出さない。操作全体の回帰テストあり |
 | T7 | `loop_bounded`。追加分を含む実効上限以下であることと、親に属する body frame 数がカウンタに一致することを保持 |
 | T8 | `lease_exclusive` / `invalid_lease_rejected`。running attempt は高々 1、無効な lease は冪等再送以外拒否 |
-| T9 | 局所的な permutation / oracle の補題と、固定 oracle の成功・drain 済み実行同士の全線多重集合比較。グラフ全体の一般定理は未証明 |
+| T9 | `ScheduleDeterminism` に一般命題を定義。`GraphEval.functional` で ForEach / Loop / DAG を含む完成時意味論の一意性を証明。実 step の再送・構造・入力の保持と完了境界を証明。実行履歴から `GraphEval` と全線の観測一致を構成する適合性は未証明であり、T9 全体は未完。固定 oracle の全線多重集合比較は回帰として継続 |
 | T10 | `spawn_without_eos`。入力先頭の item による準備条件に EOS は不要。実際の spawn 受理は回帰テスト |
 | T11 | `replay_append` / `replay_durable` / `complete_idempotent` / `replay_retains_success`。Op replay の合成則と成功状態の保持。JSONL の encode/check 逆変換と torn-log 回復は回帰テスト |
 | T12 | `idle_step_work`。公開 step の idle 後が running なら `hasWork` が真。`hasWork_iff` / `work_step_eq` で、共有候補中に状態を変える受理操作が存在することを証明。`idle_step_enters_blocked_no_work` は公開 step が新たに blocked にするなら候補内に進行可能な操作がないことを証明。全 Op に対する候補列挙の完全性は未証明 |

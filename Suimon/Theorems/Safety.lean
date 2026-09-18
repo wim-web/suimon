@@ -1,74 +1,69 @@
 import Suimon.Axioms
 namespace Suimon
 
-/-- Executable and relational transaction semantics coincide. --/
-theorem step_iff (s : State) (op : Op) (next : State) :
-    step s op = .ok next ↔ Step s op next := by
-  constructor
-  · intro h
-    unfold step at h
+/-- An accepted step is either an absorbed identity or a guarded execution that passed
+    authorization, `prepare`, the invariants and the history check. --/
+theorem step_ok_cases (s : State) (op : Op) (next : State) (h : step s op = .ok next) :
+    (absorbed s op = true ∧ next = s) ∨
+    (absorbed s op = false ∧ authorized s op = true ∧ prepare s op = .ok next ∧
+      Invariants next ∧ historyOK s next = true) := by
+  unfold step guarded at h
+  split at h
+  · cases h
+    exact .inl ⟨‹_›, rfl⟩
+  · rename_i active
+    have active' : absorbed s op = false := by simpa using active
     split at h
-    · cases h
-      exact .absorb ‹_›
-    · rename_i active
-      have active' : absorbed s op = false := by simpa using active
+    · contradiction
+    · rename_i auth
+      have auth' : authorized s op = true := by simpa using auth
       split at h
       · contradiction
-      · rename_i auth
-        have auth' : authorized s op = true := by simpa using auth
+      · rename_i result effect
+        unfold commit at h
         split at h
+        · rename_i safe
+          cases h
+          have hs := Bool.and_eq_true_iff.mp safe
+          exact .inr ⟨active', auth', effect, hs.1, hs.2⟩
         · contradiction
-        · rename_i result effect
-          unfold commit at h
-          split at h
-          · rename_i safe
-            cases h
-            have hs := Bool.and_eq_true_iff.mp safe
-            exact .execute active' auth' effect hs.1 hs.2
-          · contradiction
-  · intro h
-    cases h with
-    | absorb h => simp [step, h]
-    | execute active auth effect safe hist =>
-      change invariants next = true at safe
-      simp [step, active, auth, effect, commit, safe, hist]
 
 /-- I1–I3 (and accounting/loop bounds) hold after every accepted boundary. --/
 theorem preserves_invariants (before after : State) (op : Op)
     (initial : Invariants before) (accepted : step before op = .ok after) : Invariants after := by
-  cases (step_iff before op after).mp accepted with
-  | absorb _ => exact initial
-  | execute _ _ _ safe _ => exact safe
+  rcases step_ok_cases before op after accepted with ⟨_, eq⟩ | ⟨_, _, _, safe, _⟩
+  · rw [eq]; exact initial
+  · exact safe
 
 /-- I4: retained instances follow the allowed transition table. --/
 theorem preserves_history (before after : State) (op : Op)
     (active : absorbed before op = false)
     (accepted : step before op = .ok after) : historyOK before after = true := by
-  cases (step_iff before op after).mp accepted with
-  | absorb h => simp [active] at h
-  | execute _ _ _ _ history => exact history
+  rcases step_ok_cases before op after accepted with ⟨h, _⟩ | ⟨_, _, _, _, history⟩
+  · simp [active] at h
+  · exact history
 
 /-- T13: no accepted operation changes a terminal execution. Rejection also retains the caller's state. --/
 theorem terminal_absorbing (s : State) (op : Op) (next : State)
     (terminal : s.status.terminal = true) (accepted : step s op = .ok next) : next = s := by
-  cases (step_iff s op next).mp accepted with
-  | absorb _ => rfl
-  | execute active auth _ _ _ => simp [absorbed, terminal, auth] at active
+  rcases step_ok_cases s op next accepted with ⟨_, eq⟩ | ⟨active, auth, _, _, _⟩
+  · exact eq
+  · simp [absorbed, terminal, auth] at active
 
 /-- T8: invalid authority is rejected; exact completion receipts are the documented exception. --/
 theorem invalid_lease_rejected (s : State) (op : Op)
     (fresh : duplicateComplete s op = false)
     (bad : authorized s op = false) :
     step s op = .error { code := "INVALID_LEASE", message := "stale, mismatched or expired lease" } := by
-  simp [step, absorbed, fresh, bad]
+  simp [step, guarded, absorbed, fresh, bad]
 
 /-- T11: an exact retransmission is an identity transition. --/
 theorem complete_idempotent (s : State) (op : Op) (h : duplicateComplete s op = true) :
-    step s op = .ok s := by simp [step, absorbed, h]
+    step s op = .ok s := by simp [step, guarded, absorbed, h]
 
 theorem prepare_preconditions (s : State) (op : Op) (next : State)
     (h : prepare s op = .ok next) : preconditions s op = true := by
-  unfold prepare require at h
+  unfold prepare prepareWith require at h
   split at h
   · split at h
     · assumption
@@ -79,17 +74,17 @@ theorem prepare_preconditions (s : State) (op : Op) (next : State)
 theorem plain_order (s next : State) (path : Path) (node : NodeId)
     (active : s.status.terminal = false) (h : step s (.activate path node) = .ok next) :
     plainReady s path node = true := by
-  cases (step_iff s (.activate path node) next).mp h with
-  | absorb impossible => simp [absorbed, active, duplicateComplete] at impossible
-  | execute _ _ effect _ _ => exact prepare_preconditions _ _ _ effect
+  rcases step_ok_cases s (.activate path node) next h with ⟨impossible, _⟩ | ⟨_, _, effect, _, _⟩
+  · simp [absorbed, active, duplicateComplete] at impossible
+  · exact prepare_preconditions _ _ _ effect
 
 /-- T1 for Coalesce concerns the selected input, not the absent arms. --/
 theorem coalesce_plain_order (s next : State) (path : Path) (node edge : String) (item : ItemId)
     (active : s.status.terminal = false) (h : step s (.fireCoalesce path node edge item) = .ok next) :
     coalesceReady s path node edge item = true := by
-  cases (step_iff s (.fireCoalesce path node edge item) next).mp h with
-  | absorb impossible => simp [absorbed, active, duplicateComplete] at impossible
-  | execute _ _ effect _ _ => exact prepare_preconditions _ _ _ effect
+  rcases step_ok_cases s (.fireCoalesce path node edge item) next h with ⟨impossible, _⟩ | ⟨_, _, effect, _, _⟩
+  · simp [absorbed, active, duplicateComplete] at impossible
+  · exact prepare_preconditions _ _ _ effect
 
 /-- No status transition can rerun an already succeeded instance. --/
 theorem succeeded_status_absorbing (status : InstanceStatus)
@@ -141,15 +136,14 @@ theorem idle_enters_blocked_no_work (s : State) (running : s.status = .running)
 /-- T12 for the public step: a running post-idle state has accepted work. --/
 theorem idle_step_work (s next : State) (accepted : step s .idle = .ok next)
     (running : next.status = .running) : next.hasWork = true := by
-  cases (step_iff s .idle next).mp accepted with
-  | absorb h =>
+  rcases step_ok_cases s .idle next accepted with ⟨h, eq⟩ | ⟨_, _, effect, _, _⟩
+  · rw [eq] at running
     have terminal : s.status.terminal = false := by rw [running]; rfl
     simp [absorbed, duplicateComplete, terminal] at h
-  | execute _ _ effect _ _ =>
-    have result : idleState s = next := by
-      unfold prepare require at effect
+  · have result : idleState s = next := by
+      unfold prepare prepareWith require at effect
       split at effect
-      · simpa [preconditions, bind, Except.bind, pure, Except.pure] using effect
+      · simpa [preconditions, transitionOrIdle, bind, Except.bind, pure, Except.pure] using effect
       · simp [bind, Except.bind] at effect
     rw [← result] at running ⊢
     exact idle_result_work s running
@@ -158,13 +152,12 @@ theorem idle_step_work (s next : State) (accepted : step s .idle = .ok next)
 theorem idle_step_enters_blocked_no_work (s next : State)
     (accepted : step s .idle = .ok next) (running : s.status = .running)
     (blocked : next.status = .blocked) : s.hasWork = false := by
-  cases (step_iff s .idle next).mp accepted with
-  | absorb _ => simp [running] at blocked
-  | execute _ _ effect _ _ =>
-    have result : idleState s = next := by
-      unfold prepare require at effect
+  rcases step_ok_cases s .idle next accepted with ⟨_, eq⟩ | ⟨_, _, effect, _, _⟩
+  · rw [eq] at blocked; simp [running] at blocked
+  · have result : idleState s = next := by
+      unfold prepare prepareWith require at effect
       split at effect
-      · simpa [preconditions, bind, Except.bind, pure, Except.pure] using effect
+      · simpa [preconditions, transitionOrIdle, bind, Except.bind, pure, Except.pure] using effect
       · simp [bind, Except.bind] at effect
     rw [← result] at blocked
     exact idle_enters_blocked_no_work s running blocked
@@ -211,10 +204,9 @@ theorem succeeded_retained (s next : State) (op : Op) (id : InstanceId) (i : Ins
     (found : s.instance? id = some i) (done : i.status = .succeeded)
     (accepted : step s op = .ok next) :
     ∃ j, next.instance? id = some j ∧ j.status = .succeeded := by
-  cases (step_iff s op next).mp accepted with
-  | absorb _ => exact ⟨i, found, done⟩
-  | execute _ _ _ _ hist =>
-    have member := List.mem_of_find?_eq_some found
+  rcases step_ok_cases s op next accepted with ⟨_, eq⟩ | ⟨_, _, _, _, hist⟩
+  · rw [eq]; exact ⟨i, found, done⟩
+  · have member := List.mem_of_find?_eq_some found
     have sameId : i.id = id := by
       have key := List.find?_some found
       simpa only [beq_iff_eq] using key

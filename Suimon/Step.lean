@@ -35,18 +35,16 @@ def freshInstance (s : State) (i : Instance) : Result State := do
   require (!s.instances.any (fun j => j.id == i.id || instanceKey j == instanceKey i)) "DUPLICATE_INSTANCE"
   return { s with instances := s.instances ++ [i] }
 
-/-- Deduplicate retry re-emissions before EOS; after EOS even duplicates are rejected. --/
+/-- Deduplicate against the full history, including consumed items. --/
+def placeToken (c : Channel) (t : Token) : Result Channel := do
+  require (!c.closed) "AFTER_EOS" c.id
+  if c.placed.contains t then return c
+  require (c.kind != .plain || t == .eos || c.items.isEmpty) "PLAIN_CARDINALITY"
+  return { c with placed := c.placed ++ [t] }
+
+/-- After EOS even duplicates are rejected; placement does not change consumption. --/
 def place (s : State) (ids : List String) (t : Token) : Result State := do
-  let mut cs := []
-  for c in s.channels do
-    if ids.contains c.id then
-      require (!c.closed) "AFTER_EOS" c.id
-      if c.placed.contains t then
-        cs := cs ++ [c]
-      else
-        require (c.kind != .plain || t == .eos || c.items.isEmpty) "PLAIN_CARDINALITY"
-        cs := cs ++ [{ c with placed := c.placed ++ [t] }]
-    else cs := cs ++ [c]
+  let cs ← s.channels.mapM fun c => if ids.contains c.id then placeToken c t else pure c
   return { s with channels := cs }
 
 def putOutput (s : State) (path : Path) (node port : String) (t : Token) : Result State :=
@@ -54,6 +52,20 @@ def putOutput (s : State) (path : Path) (node port : String) (t : Token) : Resul
 
 def closeOutputs (s : State) (path : Path) (n : Node) : Result State :=
   n.outputs.foldlM (fun s p => putOutput s path n.id p.name .eos) s
+
+def placeOutputs (s : State) (path : Path) (node : NodeId) (outputs : List Output) : Result State :=
+  outputs.foldlM (fun state output =>
+    output.items.foldlM (fun state item => putOutput state path node output.port (.item item)) state) s
+
+def placeBodyOutputs (s : State) (path : Path) (n : Node) (items : List ItemId) : Result State :=
+  (n.outputs.zip items).foldlM (fun state (p, item) => putOutput state path n.id p.name (.item item)) s
+
+def startInputs (s : State) (inputs : List Input) : Result State :=
+  inputs.foldlM (fun state input => do
+    let channels := state.channels.filter (fun c => c.path.isEmpty && c.entry && c.edge.dst == input.entry)
+    require (unique input.items && channels.all (fun c => c.kind != .plain || input.items.length == 1)) "INVALID_INPUT"
+    let state ← input.items.foldlM (fun state item => place state (channels.map (·.id)) (.item item)) state
+    place state (channels.map (·.id)) .eos) s
 
 def consume (s : State) (channel : String) (who : InstanceId) (expected : Option ItemId := none) : Result State := do
   let c ← (s.channels.find? (·.id == channel)).toExcept { code := "UNKNOWN_CHANNEL", message := channel }
@@ -71,6 +83,9 @@ def consume (s : State) (channel : String) (who : InstanceId) (expected : Option
 
 def consumeRest (s : State) (c : Channel) (who : InstanceId) : Result State :=
   c.pending.foldlM (fun s _ => consume s c.id who) s
+
+def consumeChannels (s : State) (channels : List Channel) (who : InstanceId) : Result State :=
+  channels.foldlM (fun state c => consumeRest state c who) s
 
 def decision (s : State) (key value : String) : Result State := do
   match s.decisions.find? (·.key == key) with
@@ -90,26 +105,31 @@ def plainInputs (s : State) (path : Path) (n : Node) : Result (List (PortName ×
     let c ← ((s.incoming path n.id).find? (·.edge.dst.port == p.name)).toExcept
       { code := "MISSING_INPUT", message := p.name }
     require (c.closed) "UPSTREAM_NOT_FINISHED"
-    require (c.entry || (s.instance? (instanceId path c.edge.src.node)).any (·.status == .succeeded))
+    require (c.entry || (s.nodeInstance? path c.edge.src.node).any (·.status == .succeeded))
       "UPSTREAM_NOT_SUCCEEDED"
     match c.pending with
     | .item id :: _ => return (p.name, id)
     | _ => throw { code := "INPUT_NOT_READY", message := c.id }
 
 def consumeInputs (s : State) (path : Path) (node : NodeId) (who : InstanceId) : Result State :=
-  (s.incoming path node).foldlM (fun s c => consumeRest s c who) s
+  consumeChannels s (s.incoming path node) who
 
 def makeInstance (path : Path) (n : Node) (status : InstanceStatus)
     (inputs : List (PortName × ItemId) := []) (trigger : Option ItemId := none) : Instance :=
   { id := instanceId path n.id trigger, node := n.id, path, status, inputs, trigger }
 
 def streamController (s : State) (path : Path) (n : Node) : Result State := do
-  let id := instanceId path n.id
-  match s.instance? id with
+  match s.nodeInstance? path n.id with
   | some i =>
     require (i.status == .waitingInputs) "CONTROL_FINISHED"
     return s
   | none => freshInstance s (makeInstance path n .waitingInputs)
+
+def seedEntries (s : State) (path : Path) (entries : List PortRef) (items : List ItemId) : Result State :=
+  (entries.zip items).foldlM (fun state (p, id) => do
+    let ids := ((state.incoming path p.node).filter (fun c => c.entry && c.edge.dst == p)).map (·.id)
+    let state ← place state ids (.item id)
+    place state ids .eos) s
 
 def addFrame (s : State) (owner : Instance) (body : Graph) (items : List ItemId) : Result State := do
   let path := owner.path ++ [identity [owner.id, toString owner.iteration]]
@@ -118,10 +138,7 @@ def addFrame (s : State) (owner : Instance) (body : Graph) (items : List ItemId)
   let definition := ((s.frame? owner.path).map (·.definition)).getD [] ++ [owner.node]
   let f : Frame := { path, graph := body, definition, owner := some owner.id }
   let s := { s with frames := s.frames ++ [f], channels := s.channels ++ f.channels }
-  (body.entries.zip items).foldlM (fun s (p, id) => do
-    let ids := (s.incoming path p.node).filter (fun c => c.entry && c.edge.dst == p) |>.map (·.id)
-    let s ← place s ids (.item id)
-    place s ids .eos) s
+  seedEntries s path body.entries items
 
 def currentFrame (s : State) (i : Instance) : Result Frame :=
   (s.frame? (i.path ++ [identity [i.id, toString i.iteration]])).toExcept
@@ -132,7 +149,7 @@ def frameDone (s : State) (f : Frame) : Bool :=
   (s.channels.filter (fun c => c.path == f.path && c.exit)).all (·.closed) &&
   (s.channels.filter (fun c => c.path == f.path && !c.exit)).all (fun c => c.closed && c.pendingItems.isEmpty) &&
   (s.instances.filter (·.path == f.path)).all (fun i => i.status == .succeeded || i.status == .cancelled) &&
-  f.graph.nodes.all (fun n => (s.instance? (instanceId f.path n.id)).any
+  f.graph.nodes.all (fun n => (s.nodeInstance? f.path n.id).any
     (fun i => i.status == .succeeded || i.status == .cancelled))
 
 def frameOutputItems (s : State) (f : Frame) : Result (List ItemId) := do
@@ -148,8 +165,7 @@ def bodyResults (s : State) (f : Frame) : Result (List ItemId) := do
   frameOutputItems s f
 
 def closeFrame (s : State) (f : Frame) (who : InstanceId) : Result State := do
-  let s ← (s.channels.filter (fun c => c.path == f.path && c.exit)).foldlM
-    (fun s c => consumeRest s c who) s
+  let s ← consumeChannels s (s.channels.filter (fun c => c.path == f.path && c.exit)) who
   return { s with frames := s.frames.map (fun g => if g.path == f.path then { g with closed := true } else g) }
 
 def routeOutput (arm : Option PortName) (port : PortName) (output : Option ItemId) : Option ItemId :=
@@ -159,15 +175,18 @@ def routeOutput (arm : Option PortName) (port : PortName) (output : Option ItemI
 def spawnInputReady (c : Channel) (item : ItemId) : Bool :=
   c.pending.head? == some (.item item)
 
+def routeOutputs (s : State) (path : Path) (n : Node) (output : Option ItemId) (arm : Option PortName) : Result State :=
+  n.outputs.foldlM (fun s p => do
+    match routeOutput arm p.name output with
+    | some id => putOutput s path n.id p.name (.item id)
+    | none => pure s) s
+
 def finishControl (s : State) (path : Path) (n : Node) (inputs : List (PortName × ItemId))
     (output : Option ItemId) (arm : Option PortName := none) : Result State := do
   let i := makeInstance path n .succeeded inputs
   let s ← freshInstance s i
   let s ← consumeInputs s path n.id i.id
-  let s ← n.outputs.foldlM (fun s p => do
-    match routeOutput arm p.name output with
-    | some id => putOutput s path n.id p.name (.item id)
-    | none => pure s) s
+  let s ← routeOutputs s path n output arm
   closeOutputs s path n
 
 def expireOrFail (s : State) (i : Instance) (n : Node) (now : Time)
@@ -189,7 +208,7 @@ def expireOrFail (s : State) (i : Instance) (n : Node) (now : Time)
 def plainChannelReady (s : State) (c : Channel) : Bool :=
   c.kind == .plain && c.closed &&
     (c.pending.head?.any (fun t => match t with | .item _ => true | _ => false)) &&
-    (c.entry || (s.instance? (instanceId c.path c.edge.src.node)).any (·.status == .succeeded))
+    (c.entry || (s.nodeInstance? c.path c.edge.src.node).any (·.status == .succeeded))
 
 def plainReady (s : State) (path : Path) (node : NodeId) : Bool :=
   (s.incoming path node).all (plainChannelReady s)
@@ -212,11 +231,7 @@ def transition (s : State) (op : Op) : Result State := do
     let f ← (s.frame? []).toExcept { code := "NO_ROOT", message := "missing root graph" }
     require (unique (inputs.map (·.entry)) && inputs.length == f.graph.entries.length &&
       inputs.all (fun i => f.graph.entries.contains i.entry)) "ENTRY_MISMATCH"
-    let s ← inputs.foldlM (fun s input => do
-      let cs := s.channels.filter (fun c => c.path.isEmpty && c.entry && c.edge.dst == input.entry)
-      require (unique input.items && cs.all (fun c => c.kind != .plain || input.items.length == 1)) "INVALID_INPUT"
-      let s ← input.items.foldlM (fun s i => place s (cs.map (·.id)) (.item i)) s
-      place s (cs.map (·.id)) .eos) s
+    let s ← startInputs s inputs
     return { s with started := true }
   | .activate path node =>
     require s.started "NOT_STARTED"
@@ -298,7 +313,7 @@ def transition (s : State) (op : Op) : Result State := do
     require (unique (outputs.map (·.port)) && outputs.length == ps.length &&
       outputs.all (fun o => o.items.length == 1 && ps.any (·.name == o.port))) "OUTPUT_MISMATCH"
     let s ← decision s (identity ["leaf", i.id]) (toJson outputs).compress
-    let s ← outputs.foldlM (fun s o => o.items.foldlM (fun s item => putOutput s i.path i.node o.port (.item item)) s) s
+    let s ← placeOutputs s i.path i.node outputs
     let s ← closeOutputs s i.path n
     let s := setAttempt s auth.attempt .succeeded
     let s := setInstance s { i with status := .succeeded, lease := none }
@@ -369,12 +384,12 @@ def transition (s : State) (op : Op) : Result State := do
     require ((s.instances.filter (fun i => i.path == path && i.node == node && i.trigger.isSome)).all (·.status == .succeeded))
       "CHILDREN_NOT_FINISHED"
     let i := makeInstance path n .succeeded
-    let s ← match s.instance? i.id with
+    let s ← match s.nodeInstance? path node with
       | none => freshInstance s i
       | some old => do
         require (old.status == .waitingInputs) "CONTROL_FINISHED"
         pure (setInstance s { old with status := .succeeded })
-    let s ← cs.foldlM (fun s c => consumeRest s c i.id) s
+    let s ← consumeChannels s cs i.id
     closeOutputs s path n
   | .finishSubworkflow inst =>
     let i ← getInstance s inst
@@ -385,7 +400,7 @@ def transition (s : State) (op : Op) : Result State := do
     let items ← bodyResults s f
     require (n.outputs.length == items.length) "BODY_OUTPUT_ARITY"
     let s ← closeFrame s f i.id
-    let s ← (n.outputs.zip items).foldlM (fun s (p, item) => putOutput s i.path n.id p.name (.item item)) s
+    let s ← placeBodyOutputs s i.path n items
     let s := setInstance s { i with status := .succeeded }
     match n.kind with
     | .subworkflow _ => closeOutputs s i.path n
@@ -470,18 +485,24 @@ def commit (before after : State) : Result State :=
   if invariants after && historyOK before after then .ok after
   else .error { code := "INVARIANT", message := "invalid transaction boundary" }
 
-def prepareNonIdle (s : State) (op : Op) : Result State := do
+/-- Shared startup / precondition checks before any operational body. --/
+def prepareWith (body : State → Op → Result State) (s : State) (op : Op) : Result State := do
   require (startupAllowed s op) "NOT_STARTED"
   require (preconditions s op) "PRECONDITION"
-  transition s op
+  body s op
 
-/-- The same guarded execution as step, without consulting idle/hasWork. --/
-def stepNonIdle (s : State) (op : Op) : Result State :=
+/-- Shared guard: absorption, lease authority, then commit of the executed body. --/
+def guarded (execute : State → Op → Result State) (s : State) (op : Op) : Result State :=
   if absorbed s op then .ok s
   else if !authorized s op then .error { code := "INVALID_LEASE", message := "stale, mismatched or expired lease" }
-  else match prepareNonIdle s op with
+  else match execute s op with
     | .error e => .error e
     | .ok next => commit s next
+
+def prepareNonIdle : State → Op → Result State := prepareWith transition
+
+/-- The same guarded execution as step, without consulting idle/hasWork. --/
+def stepNonIdle : State → Op → Result State := guarded prepareNonIdle
 
 /-- Work changes state. Accepted retries of completed operations are not work. --/
 def acceptedProgress (s : State) (op : Op) : Bool :=
@@ -501,24 +522,12 @@ def idleState (s : State) : State :=
     reason := if success then none else
       if s.status == .blocked && s.reason.isSome then s.reason else some "DEPENDENCIES_UNRESOLVED" }
 
-def prepare (s : State) (op : Op) : Result State := do
-  require (startupAllowed s op) "NOT_STARTED"
-  require (preconditions s op) "PRECONDITION"
-  match op with
+/-- idle is classified after the non-idle rules; every other Op runs `transition`. --/
+def transitionOrIdle (s : State) : Op → Result State
   | .idle => pure (idleState s)
-  | _ => transition s op
+  | op => transition s op
 
-def step (s : State) (op : Op) : Result State :=
-  if absorbed s op then .ok s
-  else if !authorized s op then .error { code := "INVALID_LEASE", message := "stale, mismatched or expired lease" }
-  else match prepare s op with
-    | .error e => .error e
-    | .ok next => commit s next
+def prepare : State → Op → Result State := prepareWith transitionOrIdle
 
-/-- Declarative boundary rules, independently phrased as premises. --/
-inductive Step : State → Op → State → Prop where
-  | absorb {s op} (h : absorbed s op = true) : Step s op s
-  | execute {s op next} (active : absorbed s op = false)
-      (auth : authorized s op = true) (effect : prepare s op = .ok next)
-      (safe : Invariants next) (history : historyOK s next = true) : Step s op next
+def step : State → Op → Result State := guarded prepare
 end Suimon

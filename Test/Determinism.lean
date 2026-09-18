@@ -4,19 +4,8 @@ import Test.Examples
 namespace Suimon.Test.Determinism
 open Lean
 
-/-- Compare every logical channel, including entry/exit channels in child frames.
-    Sorting preserves multiplicity; it does not turn a multiset into a set. --/
-def channelBags (s : State) : List (String × List ItemId) :=
-  (s.channels.map fun c => (c.id, sortedItems c.items)).mergeSort (fun a b => a.1 ≤ b.1)
-
 private def channelSequences (s : State) : List (String × List ItemId) :=
   (s.channels.map fun c => (c.id, c.items)).mergeSort (fun a b => a.1 ≤ b.1)
-
-/-- Root results remain available to the caller; all other items must be drained. --/
-def succeededDrained (s : State) : Bool :=
-  s.status == .succeeded && s.channels.all (fun c =>
-    c.closed && ((c.path.isEmpty && c.exit) || c.pendingItems.isEmpty)) &&
-  s.frames.all (fun f => f.path.isEmpty || f.closed)
 
 private def choice (oracleSeed : Nat) (key : String) : Nat :=
   key.toList.foldl (fun value char => (33 * value + char.toNat) % 4294967296) oracleSeed

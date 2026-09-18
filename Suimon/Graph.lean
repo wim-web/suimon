@@ -7,15 +7,15 @@ abbrev NodeId := String
 abbrev PortName := String
 
 inductive PortKind | plain | stream
-  deriving DecidableEq, Repr, BEq, ToJson, FromJson
+  deriving DecidableEq, Repr, BEq, ReflBEq, LawfulBEq, ToJson, FromJson
 structure Port where
   name : PortName
   kind : PortKind
-  deriving DecidableEq, Repr, BEq, ToJson, FromJson
+  deriving DecidableEq, Repr, BEq, ReflBEq, LawfulBEq, ToJson, FromJson
 structure PortRef where
   node : NodeId
   port : PortName
-  deriving DecidableEq, Repr, BEq, ToJson, FromJson
+  deriving DecidableEq, Repr, BEq, ReflBEq, LawfulBEq, ToJson, FromJson
 structure RetryPolicy where
   maxAttempts : Nat := 1
   leaseSeconds : Nat := 30
@@ -25,7 +25,7 @@ structure RetryPolicy where
 structure Edge where
   src : PortRef
   dst : PortRef
-  deriving DecidableEq, Repr, BEq, ToJson, FromJson
+  deriving DecidableEq, Repr, BEq, ReflBEq, LawfulBEq, ToJson, FromJson
 
 mutual
 inductive NodeKind where
@@ -162,32 +162,61 @@ def Graph.outputConditions (g : Graph) : Nat → PortRef → Option BranchCondit
 def Graph.exclusiveCoalesce (g : Graph) (join : Node) : Bool :=
   join.outputs.head?.any (fun p => (g.outputConditions (g.nodes.length + 1) ⟨join.id, p.name⟩).isSome)
 
-partial def Graph.validate (g : Graph) (isBody : Bool := false) : Except String Unit := do
+def Graph.validateEdge (g : Graph) (e : Edge) : Except String Unit := do
+  match g.output? e.src, g.input? e.dst with
+  | some a, some b => unless a.kind == b.kind do throw "edge port kinds differ"
+  | _, _ => throw "edge references an unknown port"
+
+def Graph.validateEntry (g : Graph) (p : PortRef) : Except String Unit := do
+  unless (g.input? p).isSome do throw "unknown entry port"
+
+def Graph.validateExit (g : Graph) (p : PortRef) : Except String Unit := do
+  unless (g.output? p).isSome do throw "unknown exit port"
+
+def Graph.validateInput (g : Graph) (n : Node) (p : Port) : Except String Unit := do
+  let ref := { node := n.id, port := p.name : PortRef }
+  let count := (g.edges.filter (·.dst == ref)).length + (if g.entries.contains ref then 1 else 0)
+  unless count == 1 do throw s!"input must have exactly one source: {n.id}.{p.name}"
+
+def Graph.validateShape (g : Graph) (n : Node) : Except String Unit := do
+  unless !n.id.isEmpty && unique (n.inputs.map (·.name)) && unique (n.outputs.map (·.name)) &&
+    (n.inputs ++ n.outputs).all (fun p => !p.name.isEmpty) do throw "invalid port or node name"
+  unless n.shapeOK do throw s!"invalid port shape: {n.id}"
+  if n.kind matches .coalesce then
+    unless g.exclusiveCoalesce n do throw s!"Coalesce inputs must correspond to distinct arms of one Branch: {n.id}"
+  let _ ← n.inputs.mapM (g.validateInput n)
+  pure ()
+
+mutual
+def Graph.validate (g : Graph) (isBody : Bool := false) : Except String Unit := do
   unless unique (g.nodes.map (·.id)) do throw "duplicate node id"
   unless unique g.entries && unique g.exits do throw "duplicate graph boundary"
   unless acyclicAux g.edges g.nodes.length (g.nodes.map (·.id)) do throw "graph contains a cycle"
   unless !isBody || g.branchesCoalesced do throw "body Branch must rejoin through Coalesce"
-  for n in g.nodes do
-    unless !n.id.isEmpty && unique (n.inputs.map (·.name)) && unique (n.outputs.map (·.name)) &&
-      (n.inputs ++ n.outputs).all (fun p => !p.name.isEmpty) do throw "invalid port or node name"
-    unless n.shapeOK do throw s!"invalid port shape: {n.id}"
-    if n.kind matches .coalesce then
-      unless g.exclusiveCoalesce n do throw s!"Coalesce inputs must correspond to distinct arms of one Branch: {n.id}"
-    for p in n.inputs do
-      let ref := { node := n.id, port := p.name : PortRef }
-      let count := (g.edges.filter (·.dst == ref)).length + (if g.entries.contains ref then 1 else 0)
-      unless count == 1 do throw s!"input must have exactly one source: {n.id}.{p.name}"
-    match n.kind with
-    | .loop b _ | .subworkflow b | .forEach b => b.validate true
-    | _ => pure ()
-  for e in g.edges do
-    match g.output? e.src, g.input? e.dst with
-    | some a, some b => unless a.kind == b.kind do throw "edge port kinds differ"
-    | _, _ => throw "edge references an unknown port"
-  for p in g.entries do
-    unless (g.input? p).isSome do throw "unknown entry port"
-  for p in g.exits do
-    unless (g.output? p).isSome do throw "unknown exit port"
+  let _ ← g.nodes.attach.mapM fun n => g.validateNode n.val
+  let _ ← g.edges.mapM g.validateEdge
+  let _ ← g.entries.mapM g.validateEntry
+  let _ ← g.exits.mapM g.validateExit
+  pure ()
+termination_by 2 * sizeOf g
+decreasing_by
+  have smaller := List.sizeOf_lt_of_mem n.property
+  cases g
+  simp_all
+  omega
+
+def Graph.validateNode (g : Graph) (n : Node) : Except String Unit := do
+  g.validateShape n
+  match _kind : n.kind with
+  | .loop body _ | .subworkflow body | .forEach body => body.validate true
+  | _ => pure ()
+termination_by 2 * sizeOf n + 1
+decreasing_by
+  all_goals
+    cases n
+    simp_all
+    omega
+end
 
 /-- The same check is used at every external graph boundary. --/
 def Graph.WellFormed (g : Graph) : Prop := g.validate = .ok ()

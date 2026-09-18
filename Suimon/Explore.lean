@@ -35,8 +35,6 @@ def search (g : Graph) (cfg : Config) : Report := Id.run do
             return { states := visited.size, transitions, depth, complete := false, failure := some { reason := r.message, trace := current.trace ++ [op], state := toJson current.state } }
         | .ok next =>
           transitions := transitions + 1
-          if !invariants next || !historyOK current.state next then
-            return { states := visited.size, transitions, depth, complete := false, failure := some { reason := "safety violation", trace := current.trace ++ [op], state := toJson next } }
           let key := (toJson next).compress
           if !visited.contains key then
             if visited.size ≥ cfg.maxStates then
