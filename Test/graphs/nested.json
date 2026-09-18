@@ -1,0 +1,32 @@
+{"nodes":
+ [{"outputs": [{"name": "out", "kind": "plain"}],
+   "kind":
+   {"type": "subworkflow",
+    "body":
+    {"nodes":
+     [{"outputs": [{"name": "out", "kind": "plain"}],
+       "kind":
+       {"type": "loop",
+        "maxIterations": 2,
+        "body":
+        {"nodes":
+         [{"outputs": [{"name": "out", "kind": "plain"}],
+           "kind":
+           {"type": "leaf",
+            "retry": {"retrySeconds": 1, "maxAttempts": 2, "leaseSeconds": 3},
+            "concurrency": 2},
+           "inputs": [{"name": "in", "kind": "plain"}],
+           "id": "work"}],
+         "exits": [{"port": "out", "node": "work"}],
+         "entries": [{"port": "in", "node": "work"}],
+         "edges": []}},
+       "inputs": [{"name": "in", "kind": "plain"}],
+       "id": "loop"}],
+     "exits": [{"port": "out", "node": "loop"}],
+     "entries": [{"port": "in", "node": "loop"}],
+     "edges": []}},
+   "inputs": [{"name": "in", "kind": "plain"}],
+   "id": "sub"}],
+ "exits": [{"port": "out", "node": "sub"}],
+ "entries": [{"port": "in", "node": "sub"}],
+ "edges": []}

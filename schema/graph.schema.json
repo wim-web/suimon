@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wim-web.github.io/suimon/schema/graph.schema.json",
+  "title": "suimon graph v1",
+  "description": "Structural schema. Lean Graph.validate also checks unique IDs, port shapes, single input sources, acyclicity and recursive interfaces.",
+  "$ref": "#/$defs/graph",
+  "$defs": {
+    "graph": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edge"
+          }
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/portRef"
+          }
+        },
+        "exits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/portRef"
+          }
+        }
+      },
+      "required": [
+        "nodes",
+        "edges",
+        "entries",
+        "exits"
+      ],
+      "additionalProperties": false
+    },
+    "portRef": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "node",
+        "port"
+      ],
+      "additionalProperties": false
+    },
+    "port": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "plain",
+            "stream"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "leaseSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retrySeconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxAttempts",
+        "leaseSeconds",
+        "retrySeconds"
+      ],
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {"type": {"const": "coalesce"}},
+              "required": ["type"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "leaf"
+                },
+                "retry": {
+                  "$ref": "#/$defs/retry"
+                },
+                "concurrency": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "type",
+                "retry",
+                "concurrency"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "waitAll"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "branch"
+                },
+                "arms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "required": [
+                "type",
+                "arms"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "loop"
+                },
+                "body": {
+                  "$ref": "#/$defs/graph"
+                },
+                "maxIterations": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "type",
+                "body",
+                "maxIterations"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "subworkflow"
+                },
+                "body": {
+                  "$ref": "#/$defs/graph"
+                }
+              },
+              "required": [
+                "type",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "forEach"
+                },
+                "body": {
+                  "$ref": "#/$defs/graph"
+                }
+              },
+              "required": [
+                "type",
+                "body"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "collect"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "filter"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "merge"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/port"
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/port"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "inputs",
+        "outputs"
+      ],
+      "additionalProperties": false
+    },
+    "edge": {
+      "type": "object",
+      "properties": {
+        "src": {
+          "$ref": "#/$defs/portRef"
+        },
+        "dst": {
+          "$ref": "#/$defs/portRef"
+        }
+      },
+      "required": [
+        "src",
+        "dst"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+if [[ -n "${LAKE:-}" ]]; then
+  lake_bin="$LAKE"
+elif command -v lake >/dev/null 2>&1; then
+  lake_bin="$(command -v lake)"
+else
+  lake_bin="$HOME/.elan/bin/lake"
+fi
+if rg -n '\b(sorry|admit|axiom)\b' Suimon Test Main.lean Suimon.lean lakefile.lean --glob '*.lean'; then
+  echo 'Unfinished proofs or unchecked axioms found.' >&2
+  exit 1
+fi
+"$lake_bin" build suimon suimon_test
+.lake/build/bin/suimon_test
+for graph in Test/graphs/*.json; do
+  echo "explore: $graph"
+  .lake/build/bin/suimon explore --graph "$graph" --depth 8 --workers 2 --tick 1
+done

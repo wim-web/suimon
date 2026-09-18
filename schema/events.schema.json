@@ -1,0 +1,1990 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wim-web.github.io/suimon/schema/events.schema.json",
+  "title": "suimon transactional event v1",
+  "description": "One JSON value per line. A transaction consists of commands, exact effect facts, and transaction.committed. sequence starts at 1; recorded_at is logical integer time.",
+  "type": "object",
+  "properties": {
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "txn": {
+      "type": "string",
+      "minLength": 1
+    },
+    "recorded_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "op": {},
+    "data": {}
+  },
+  "required": [
+    "sequence",
+    "txn",
+    "recorded_at",
+    "type",
+    "op",
+    "data"
+  ],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "type": {"const": "token.placed"},
+        "op": {"$ref": "#/$defs/fireCoalesce"},
+        "data": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "execution.started"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "object",
+              "properties": {
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "entry": {
+                        "$ref": "#/$defs/portRef"
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "entry",
+                      "items"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "inputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "start"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "instance.created"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "activate": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "activate"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "instance.created"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "spawn": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "spawn"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.started"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "claim": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "worker": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "auth",
+                "worker"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "claim"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "lease.renewed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "renew": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                }
+              },
+              "required": [
+                "auth"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "renew"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.finished"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "expireLease": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "now": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "inst",
+                "now"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "expireLease"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "retry.promoted"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "promoteRetry": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "now": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "inst",
+                "now"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "promoteRetry"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "emit": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "port": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "auth",
+                "port",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "emit"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.finished"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "complete": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                }
+              },
+              "required": [
+                "auth",
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "complete"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.finished"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fail": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "auth",
+                "code",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fail"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fireWaitAll": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireWaitAll"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "branch.taken"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fireBranch": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "arm": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "arm"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireBranch"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fireCollect": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireCollect"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "filter.judged"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fireFilter": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                },
+                "keep": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "item",
+                "keep"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireFilter"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "fireMerge": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "edge": {
+                  "type": "string"
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "edge",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireMerge"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "propagateEos": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "propagateEos"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "instance.completed"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "finishSubworkflow": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "inst"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "finishSubworkflow"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "loop.iterated"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "loopIterate": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "done": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "inst",
+                "done"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "loopIterate"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "instance.skipped"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "skip": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "skip"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "retry.requested"
+        },
+        "op": {
+          "type": "object",
+          "properties": {
+            "manualRetry": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "inst"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "manualRetry"
+          ],
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "execution.state_changed"
+        },
+        "op": {
+          "const": "idle"
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "execution.state_changed"
+        },
+        "op": {
+          "const": "cancel"
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "instance.created"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "$ref": "#/$defs/instance"
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.started"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "attempt": {
+              "$ref": "#/$defs/attempt"
+            },
+            "lease_until": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "attempt",
+            "lease_until"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "attempt.finished"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "$ref": "#/$defs/attempt"
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "lease.renewed"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "instance": {
+              "type": "string"
+            },
+            "lease": {
+              "$ref": "#/$defs/lease"
+            }
+          },
+          "required": [
+            "instance",
+            "lease"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "edge": {
+              "type": "string"
+            },
+            "token": {
+              "$ref": "#/$defs/token"
+            },
+            "by_instance": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "edge",
+            "token",
+            "by_instance"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "token.consumed"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "channel": {
+              "type": "string"
+            },
+            "index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "item": {
+              "type": "string"
+            },
+            "byInstance": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "index",
+            "item",
+            "byInstance"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "execution.state_changed"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "running",
+                "blocked",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "type": {
+          "const": "transaction.committed"
+        },
+        "op": {
+          "type": "null"
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "fireCoalesce": {
+      "type": "object",
+      "properties": {
+        "fireCoalesce": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "array", "items": {"type": "string"}},
+            "node": {"type": "string", "minLength": 1},
+            "edge": {"type": "string"},
+            "item": {"type": "string"}
+          },
+          "required": ["path", "node", "edge", "item"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["fireCoalesce"],
+      "additionalProperties": false
+    },
+    "portRef": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "node",
+        "port"
+      ],
+      "additionalProperties": false
+    },
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "instance": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "now": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "instance",
+        "attempt",
+        "token",
+        "now"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "port",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "lease": {
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "until_": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "attempt",
+        "token",
+        "until_"
+      ],
+      "additionalProperties": false
+    },
+    "instance": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trigger": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "waitingInputs",
+            "ready",
+            "running",
+            "retryWait",
+            "succeeded",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/lease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryAt": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "extraAttempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "extraIterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      },
+      "required": [
+        "id",
+        "node",
+        "path",
+        "trigger",
+        "status",
+        "attemptCount",
+        "lease",
+        "retryAt",
+        "iteration",
+        "extraAttempts",
+        "extraIterations",
+        "inputs"
+      ],
+      "additionalProperties": false
+    },
+    "attempt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instance": {
+          "type": "string"
+        },
+        "no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "abandoned",
+            "cancelled"
+          ]
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "instance",
+        "no",
+        "status",
+        "token",
+        "worker"
+      ],
+      "additionalProperties": false
+    },
+    "token": {
+      "oneOf": [
+        {
+          "const": "eos"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "item": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "item"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "op": {
+      "oneOf": [
+        {"$ref": "#/$defs/fireCoalesce"},
+        {
+          "type": "object",
+          "properties": {
+            "start": {
+              "type": "object",
+              "properties": {
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "entry": {
+                        "$ref": "#/$defs/portRef"
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "entry",
+                      "items"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "inputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "start"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "activate": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "activate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "spawn": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "spawn"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "claim": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "worker": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "auth",
+                "worker"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "claim"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "renew": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                }
+              },
+              "required": [
+                "auth"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "renew"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expireLease": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "now": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "inst",
+                "now"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "expireLease"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "promoteRetry": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "now": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "inst",
+                "now"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "promoteRetry"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "emit": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "port": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "auth",
+                "port",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "emit"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "complete": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/output"
+                  }
+                }
+              },
+              "required": [
+                "auth",
+                "outputs"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "complete"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fail": {
+              "type": "object",
+              "properties": {
+                "auth": {
+                  "$ref": "#/$defs/credentials"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "auth",
+                "code",
+                "retryable"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fail"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fireWaitAll": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireWaitAll"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fireBranch": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "arm": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "arm"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireBranch"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fireCollect": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireCollect"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fireFilter": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "item": {
+                  "type": "string"
+                },
+                "keep": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "item",
+                "keep"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireFilter"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fireMerge": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "edge": {
+                  "type": "string"
+                },
+                "item": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "node",
+                "edge",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fireMerge"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propagateEos": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "propagateEos"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "finishSubworkflow": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "inst"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "finishSubworkflow"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "loopIterate": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                },
+                "done": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "inst",
+                "done"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "loopIterate"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "skip": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "node": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "path",
+                "node"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "skip"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "manualRetry": {
+              "type": "object",
+              "properties": {
+                "inst": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "inst"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "manualRetry"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "const": "idle"
+        },
+        {
+          "const": "cancel"
+        }
+      ]
+    }
+  }
+}

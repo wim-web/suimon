@@ -1,0 +1,28 @@
+{"nodes":
+ [{"outputs": [{"name": "out", "kind": "plain"}],
+   "kind":
+   {"type": "leaf",
+    "retry": {"retrySeconds": 1, "maxAttempts": 2, "leaseSeconds": 3},
+    "concurrency": 2},
+   "inputs": [{"name": "in", "kind": "plain"}],
+   "id": "a"},
+  {"outputs": [{"name": "out", "kind": "plain"}],
+   "kind":
+   {"type": "leaf",
+    "retry": {"retrySeconds": 1, "maxAttempts": 2, "leaseSeconds": 3},
+    "concurrency": 2},
+   "inputs": [{"name": "in", "kind": "plain"}],
+   "id": "b"},
+  {"outputs": [{"name": "out", "kind": "plain"}],
+   "kind":
+   {"type": "leaf",
+    "retry": {"retrySeconds": 1, "maxAttempts": 2, "leaseSeconds": 3},
+    "concurrency": 2},
+   "inputs": [{"name": "a", "kind": "plain"}, {"name": "b", "kind": "plain"}],
+   "id": "c"}],
+ "exits": [{"port": "out", "node": "c"}],
+ "entries": [{"port": "in", "node": "a"}],
+ "edges":
+ [{"src": {"port": "out", "node": "a"}, "dst": {"port": "in", "node": "b"}},
+  {"src": {"port": "out", "node": "a"}, "dst": {"port": "a", "node": "c"}},
+  {"src": {"port": "out", "node": "b"}, "dst": {"port": "b", "node": "c"}}]}
