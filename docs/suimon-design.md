@@ -260,7 +260,7 @@ structure State where
 
 `Frame` は `path`, `graph`, 静的なノード定義の経路 `definition`, 親の `owner`, `closed` を持つ。`Consumption` は `channel`, `index`, `item`, `byInstance`、`Receipt` は `instance`, `attempt`, `token`, `outputs`、`Decision` は oracle の `key`, `value` を持つ。正確な型・既定値・JSON 導出は `Suimon/State.lean` を原本とする。
 
-`ExecStatus.failed` は現在の操作からは設定しない予約済みの終端状態。処理失敗は instance.failed と execution.blocked で表し、manualRetry の余地を残す。`reason` は診断文字列であり、その値だけから「どの操作で blocked になったか」を判定しない。外部 facts は現状この内部状態に強く結び付いており、`extraIterations` の追加でも fixture が変わった。安定した射影に分離するかは §12 未決2で扱う。
+`ExecStatus.failed` は現在の操作からは設定しない予約済みの終端状態。処理失敗は instance.failed と execution.blocked で表し、manualRetry の余地を残す。`reason` は診断文字列であり、その値だけから「どの操作で blocked になったか」を判定しない。外部 facts は §12 D9 の公開射影を使う。`extraIterations` などの内部フィールドは command の replay で復元し、追加だけで外部形式や fixture を変更しない。
 
 ### 4.3 不透明関数（oracle）
 
@@ -339,13 +339,13 @@ Reject は状態を変えない。
 | T6 Branch 排他 | アイテムは選ばれた1本の arm にだけ置かれる | — |
 | T7 Loop 有界 | body の実行回数は `maxIterations` 以下 | — |
 | T8 lease 排他と失効拒否 | 1インスタンスに running な attempt は高々1つ。`ValidLease` を満たさない emit / complete / fail / renew は Reject | I3 |
-| T9 決定性 | 各線に置かれるアイテムの多重集合は、スケジューリング（claim の順、到着順、worker 数）に依存しない | A4 |
+| T9 決定性 | 同じ graph / inputs と決定的 oracle に適合し、成功して drain された2実行では、各論理線に置かれたアイテムの多重集合が一致する | A4、安定した occurrence ID、再試行時の重複排除、到着順によらない Collect。一般証明は未完 |
 | T10 ストリームの前進 | forEach のインスタンスは、入力線の EOS を待たずに作られる（アイテムが届けば spawn できる） | — |
 | T11 再開の冪等 | ログを replay した状態は、crash 直前の最後のトランザクション境界の状態と一致する。succeeded なインスタンスは再開後に再実行されない | A1, A5 |
 | T12 停止の明示（liveness の代替） | idle 直後に status = running なら `hasWork` が真。idle が running から blocked へ変えるのは、状態を変える通常操作が無いときだけ。既に blocked の状態を維持する場合はこの逆の対象外 | 全 Op についての逆方向には候補列挙の完全性が必要。現時点では候補内の定理と独立生成による回帰検査 |
 | T13 終端吸収 | status ∈ {succeeded, failed, cancelled} の後はどの Op も状態を変えない | — |
 
-T9 は Kahn process network の決定性に相当する。順序までは一致しないので多重集合で述べる。Collect の出力リストの順序は §12 で決める。
+T9 は順序までは一致しないので多重集合で述べる。Collect は D5 の ItemId 昇順。drain は root の出口を結果として残し、それ以外の線に未消費アイテムがなく、全線に EOS があり、子 frame が回収済みであること。任意の prefix、cancel、yield の一部を残して終了した失敗とは比較しない。`Test/Determinism.lean` が候補列挙内の固定 oracle に適合する成功実行を乱択し、子 frame の線を含めて比較する。故障なしに加え、leaf の lease 失効 / retryable fail → promoteRetry → 再 claim と同じ occurrence ID の yield 再送を含む。再送先で消費済みの場合も検査する。繰り返し故障による試行上限超過、manualRetry、恒久失敗、cancel はこの有限検査の対象外。
 
 ## 6. 有界探索器
 
@@ -362,7 +362,7 @@ T9 は Kahn process network の決定性に相当する。順序までは一致�
 
 ### 7.1 イベント
 
-`schema/events.schema.json` で定義する。すべてに `sequence`、`txn`（トランザクション識別子）、`recorded_at` を持つ。
+`schema/events.schema.json` で定義する。すべてに `schema_version: 2`、`sequence`、`txn`（トランザクション識別子）、`recorded_at` を持つ。command と、D9 の必須の公開 facts、commit の順に記録する。具体的なフィールドと順序は [trace-format.md](trace-format.md) を原本とする。
 
 | イベント | Op |
 | --- | --- |
@@ -464,7 +464,7 @@ suimon/
 ### M3 ストリームの定理
 
 - T2、T4、T10、T12。
-- T9（決定性）が A4 の下で成立。
+- T9（決定性）が §5 の前提の下で成立。有限範囲の乱択検査だけではこの受入条件を満たさない。
 
 ### M4 再開
 
@@ -476,7 +476,7 @@ suimon/
 
 ## 12. 決定事項と未決事項
 
-### 決定済み（2026-09-17、D1 / D2 は 2026-09-18 改訂）
+### 決定済み（2026-09-17、D1 / D2 は 2026-09-18 改訂、D9 は 2026-09-19 追加）
 
 | # | 事項 | 決定 |
 | --- | --- | --- |
@@ -488,11 +488,12 @@ suimon/
 | D6 | アイテム識別子 | 「同じ処理・同じ入力・同じ出力番号なら同じ ID」。モデルでは JSON 配列の符号化、実装で digest を使う場合は衝突しない射影を要求（同上） |
 | D7 | Mathlib | 使わない。Lean 標準ライブラリのみ（同上） |
 | D8 | Concurrency の表現 | §3 の Concurrency 箱は §4 では「1つの出力から複数の線 + waitAll」で表す。独立の NodeKind は作らない |
+| D9 | facts の公開射影 | command と公開 facts は必須。facts は `Trace.Projection` に列挙したフィールドだけを厳密照合し、内部構造を直接 JSON 化しない。Instance 作成は id / node / path / trigger。各種カウンタ等は command replay で復元する。区分内は論理 ID 順。公開フィールドは snake_case、主体は by_instance、lease 期限は lease_until。v2 に移行し、今後の内部フィールド追加では公開形式を変えない |
 
-### 未決
+### 判断状況（旧未決番号を維持）
 
 1. 最初の実装言語。M5 で決める。
-2. trace の facts を Lean の内部表現との完全一致で照合するか、射影に緩めるか。§9「言語非依存」との整合上、command のみ必須・facts は射影、が候補。
+2. **解決済み（D9）**。facts は公開射影に決定。command / facts / commit は必須のまま、内部構造との結合を除く。
 3. `Step` 関係を `prepare` / `authorized` の展開でなく独立に書き直すか。現状は `step_iff` がほぼ定義の展開で、§4.4 の「別々に定義して一致を証明する」になっていない。書き直すコストと得られる保証を見て判断する。
 4. `Graph.WellFormed` を `validate = .ok ()` から構造的定義へ書き直すか。定理で使う段になったら判断する。
 5. 参照実装との対応で確認済みの事項: `ValidLease` の条件、再試行の回数計算、lease 失効時の attempt 放棄。今後の確認は必要になった時点で行う。

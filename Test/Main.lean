@@ -2,6 +2,8 @@ import Suimon
 import Test.Examples
 import Test.Artifacts
 import Test.Work
+import Test.TraceProjection
+import Test.Determinism
 open Lean Suimon Suimon.Test
 
 private def ensure (ok : Bool) (message : String) : IO Unit :=
@@ -597,3 +599,5 @@ def main (args : List String) : IO Unit := do
   if args == ["--write-fixtures"] then writeFixtures else fixtureTests
   Artifacts.run
   Work.run
+  TraceProjection.run
+  Determinism.run

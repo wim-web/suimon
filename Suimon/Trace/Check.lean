@@ -35,6 +35,7 @@ structure Cursor where
 /-- Reads one event at a time, retaining model state and committed transaction IDs. --/
 def checkEvent (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
   let err := fun code msg => diagnose e (e.op.or c.currentOp) c.boundary code msg
+  unless e.schema_version == 2 do throw (err "SCHEMA_VERSION" "expected event schema_version 2")
   unless e.sequence == c.sequence do throw (err "SEQUENCE" "sequence must be contiguous and start at 1")
   unless !e.txn.isEmpty && e.recorded_at ≥ c.time do throw (err "METADATA" "empty transaction or non-monotone clock")
   let c ← match c.txn with

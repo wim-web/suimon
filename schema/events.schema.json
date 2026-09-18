@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://wim-web.github.io/suimon/schema/events.schema.json",
-  "title": "suimon transactional event v1",
-  "description": "One JSON value per line. A transaction consists of commands, exact effect facts, and transaction.committed. sequence starts at 1; recorded_at is logical integer time.",
+  "title": "suimon transactional event v2",
+  "description": "One JSON value per line. Commands, mandatory public projected facts, and transaction.committed; no internal State snapshots. sequence starts at 1; recorded_at is logical integer time.",
   "type": "object",
   "properties": {
     "sequence": {
@@ -22,9 +22,13 @@
       "minLength": 1
     },
     "op": {},
-    "data": {}
+    "data": {},
+    "schema_version": {
+      "const": 2
+    }
   },
   "required": [
+    "schema_version",
     "sequence",
     "txn",
     "recorded_at",
@@ -36,9 +40,18 @@
   "oneOf": [
     {
       "properties": {
-        "type": {"const": "token.placed"},
-        "op": {"$ref": "#/$defs/fireCoalesce"},
-        "data": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
+        "type": {
+          "const": "token.placed"
+        },
+        "op": {
+          "$ref": "#/$defs/fireCoalesce"
+        },
+        "data": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
       }
     },
     {
@@ -1042,7 +1055,7 @@
             "item": {
               "type": "string"
             },
-            "byInstance": {
+            "by_instance": {
               "type": "string"
             }
           },
@@ -1050,7 +1063,7 @@
             "channel",
             "index",
             "item",
-            "byInstance"
+            "by_instance"
           ],
           "additionalProperties": false
         }
@@ -1119,16 +1132,35 @@
         "fireCoalesce": {
           "type": "object",
           "properties": {
-            "path": {"type": "array", "items": {"type": "string"}},
-            "node": {"type": "string", "minLength": 1},
-            "edge": {"type": "string"},
-            "item": {"type": "string"}
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "node": {
+              "type": "string",
+              "minLength": 1
+            },
+            "edge": {
+              "type": "string"
+            },
+            "item": {
+              "type": "string"
+            }
           },
-          "required": ["path", "node", "edge", "item"],
+          "required": [
+            "path",
+            "node",
+            "edge",
+            "item"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["fireCoalesce"],
+      "required": [
+        "fireCoalesce"
+      ],
       "additionalProperties": false
     },
     "portRef": {
@@ -1207,7 +1239,7 @@
           "type": "string",
           "minLength": 1
         },
-        "until_": {
+        "lease_until": {
           "type": "integer",
           "minimum": 0
         }
@@ -1215,7 +1247,7 @@
       "required": [
         "attempt",
         "token",
-        "until_"
+        "lease_until"
       ],
       "additionalProperties": false
     },
@@ -1244,85 +1276,13 @@
               "type": "null"
             }
           ]
-        },
-        "status": {
-          "enum": [
-            "waitingInputs",
-            "ready",
-            "running",
-            "retryWait",
-            "succeeded",
-            "failed",
-            "cancelled"
-          ]
-        },
-        "attemptCount": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "lease": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/lease"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "retryAt": {
-          "anyOf": [
-            {
-              "type": "integer",
-              "minimum": 0
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "iteration": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "extraAttempts": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "extraIterations": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "inputs": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "prefixItems": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "minItems": 2,
-            "maxItems": 2
-          }
         }
       },
       "required": [
         "id",
         "node",
         "path",
-        "trigger",
-        "status",
-        "attemptCount",
-        "lease",
-        "retryAt",
-        "iteration",
-        "extraAttempts",
-        "extraIterations",
-        "inputs"
+        "trigger"
       ],
       "additionalProperties": false
     },
@@ -1398,7 +1358,9 @@
     },
     "op": {
       "oneOf": [
-        {"$ref": "#/$defs/fireCoalesce"},
+        {
+          "$ref": "#/$defs/fireCoalesce"
+        },
         {
           "type": "object",
           "properties": {

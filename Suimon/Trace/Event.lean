@@ -1,9 +1,11 @@
 import Suimon.Step
+import Suimon.Trace.Projection
 namespace Suimon.Trace
 open Lean
 
-/-- A transaction contains command records, their exact effect records, then a commit marker. --/
+/-- A transaction contains commands, exact public projections, then a commit marker. --/
 structure Event where
+  schema_version : Nat := 2
   sequence : Nat
   txn : String
   recorded_at : Time
@@ -16,6 +18,7 @@ structure Event where
 def parseEvent (line : String) : Except String Event := do
   let json ← Json.parse line
   let event : Event ← fromJson? json
+  unless event.schema_version == 2 do throw "unsupported event schema_version (expected 2)"
   unless toJson event == json do throw "event fields do not match the canonical schema"
   return event
 
@@ -53,36 +56,38 @@ def opActor : Op → String
   | .expireLease i _ | .promoteRetry i _ | .finishSubworkflow i | .loopIterate i _ | .manualRetry i => i
   | _ => "$execution"
 
-/-- Every externally observable mutation must be present, in this canonical order. --/
+/-- All public facts are mandatory; internal fields are reconstructed by replay.
+    Within each category, sort by logical ID rather than State storage order. --/
 def effects (before after : State) (op : Op) : List Fact := Id.run do
   let mut facts := []
-  for i in after.instances do
+  for i in after.instances.mergeSort (fun a b => a.id ≤ b.id) do
     if !(before.instance? i.id).isSome then
-      facts := facts ++ [{ type := "instance.created", data := toJson i }]
-  for a in after.attempts do
+      facts := facts ++ [{ type := "instance.created", data := Projection.instanceCreated i }]
+  for a in after.attempts.mergeSort (fun a b => a.id ≤ b.id) do
     match before.attempts.find? (·.id == a.id) with
     | none =>
       let lease := (after.instance? a.instance).bind (·.lease)
       facts := facts ++ [{ type := "attempt.started", data := Json.mkObj [
-        ("attempt", toJson a), ("lease_until", toJson (lease.map (·.until_)))] }]
+        ("attempt", Projection.attempt a), ("lease_until", toJson (lease.map (·.until_)))] }]
     | some b =>
       if a.status != b.status then
-        facts := facts ++ [{ type := "attempt.finished", data := toJson a }]
-  for i in after.instances do
+        facts := facts ++ [{ type := "attempt.finished", data := Projection.attempt a }]
+  for i in after.instances.mergeSort (fun a b => a.id ≤ b.id) do
     if let some b := before.instance? i.id then
-      if i.lease != b.lease && i.lease.isSome && b.lease.isSome then
+      if i.lease.map Projection.lease != b.lease.map Projection.lease && i.lease.isSome && b.lease.isSome then
         facts := facts ++ [{ type := "lease.renewed", data := Json.mkObj [
-          ("instance", toJson i.id), ("lease", toJson i.lease)] }]
-  for c in after.channels do
+          ("instance", toJson i.id), ("lease", (i.lease.map Projection.lease).getD .null)] }]
+  for c in after.channels.mergeSort (fun a b => a.id ≤ b.id) do
     let oldLength := ((before.channels.find? (·.id == c.id)).map (·.placed.length)).getD 0
     for t in c.placed.drop oldLength do
       facts := facts ++ [{ type := "token.placed", data := Json.mkObj [
-        ("edge", toJson c.id), ("token", toJson t), ("by_instance", toJson (opActor op))] }]
-  for c in after.consumed.drop before.consumed.length do
-    facts := facts ++ [{ type := "token.consumed", data := toJson c }]
+        ("edge", toJson c.id), ("token", Projection.token t), ("by_instance", toJson (opActor op))] }]
+  for c in (after.consumed.drop before.consumed.length).mergeSort
+      (fun a b => a.channel < b.channel || (a.channel == b.channel && a.index ≤ b.index)) do
+    facts := facts ++ [{ type := "token.consumed", data := Projection.consumption c }]
   if before.status != after.status then
     facts := facts ++ [{ type := "execution.state_changed", data := Json.mkObj [
-      ("status", toJson after.status), ("reason", toJson after.reason)] }]
+      ("status", toJson (Projection.execStatus after.status)), ("reason", toJson after.reason)] }]
   return facts
 
 def recordOp (before after : State) (op : Op) (sequence : Nat) (txn : String) (time : Nat) : List Event :=

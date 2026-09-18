@@ -35,6 +35,7 @@
 - **キャンセル**: running attempt と未完 instance を cancelled にし、完了・放棄済み attempt の履歴は保持する。
 - **idle と解除（D2、2026-09-18 改訂）**: `State.hasWork` は探索器と共有する候補列挙のうち、idle / cancel / manualRetry を除いて、受理され**状態を変える** Op があるかを調べる。冪等な complete の再送と、単に残っている未消費アイテムは作業に数えない。ready の claim、期限に進めた retryWait の promoteRetry、期限切れ lease の回収、activate / spawn、EOS の伝播、Loop の次の回、body の回収を含む。作業があれば idle は状態を維持する。作業がなければ、全 root ノードと出口が終端した場合は succeeded、それ以外は blocked。既存の `LOOP_LIMIT` や失敗理由は保持する。自動 resume は削除した。blocked から running への解除は manualRetry が行う。
 - **依存**: Lean 4.34.0 の標準ライブラリだけで実装した。Batteries/Mathlib は追加していない。設計書の Plausible による乱択は未導入で、現在は固定 LCG を用いる。再現性のある seed と有限候補集合による探索を提供する。
+- **facts の公開射影（D9、2026-09-19）**: `Suimon/Trace/Projection.lean` が wire format のフィールドを明示する。Instance 作成は id / node / path / trigger のみ。カウンタ・inputs・内部状態等は command の replay から復元する。attempt、lease、token、消費、execution 状態も公開フィールドを明示し、内部構造の ToJson 導出に結合しない。facts は必須で、欠落・余分なフィールド・改変を拒否する。区分内の順序は論理 ID で固定する。破壊的変更として `schema_version: 2` を必須にし、fixture を更新した。公開フィールドは snake_case とし、配置と消費の主体は `by_instance`、lease 期限は開始・更新とも `lease_until` に統一する。内部フィールド追加では wire format を変更しない。詳細は trace-format.md。
 
 ## 設計書の命題に必要な修正
 
@@ -56,6 +57,20 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 現在の `deterministic_item_multiset` / `deterministic_item_counts` は純粋な item 変換が permutation を保存すること、`deterministic_leaf` は A4 の下で leaf の入力 permutation が出力を変えないことを証明する。**これらは状態遷移系全体の合流性の証明ではない。** 完全な T9 は今後の証明課題として残している。
 
+`Test/Determinism.lean` は12例と共有入力・入れ子の Coalesce の計14グラフに対し、6つの固定 oracle 設定、16通りの schedule seed、故障なし / lease 失効 / retryable fail の3モードを使う。候補列挙から、固定した Branch / Filter / Loop の結果と leaf 出力に適合する操作だけを選ぶ。stream は設定ごとに0〜2個の全 occurrence を出してから complete する。oracle の選択に schedule seed や attempt ID を使わない。故障なしの基準実行と比較し、4,032実行、3,948比較を行う。
+
+再試行モードは最初に claim した leaf に1回の故障を注入する。stream を持つ leaf では、schedule seed が選んだ部分集合または全件を emit した後に失効・失敗させる。`expireLease` の時刻進行で他の lease も失効した場合は、全失効 attempt を回収してから retry 時刻へ進め、promoteRetry を済ませて再 claim する。この有限範囲では2回目の attempt を再び故障させない。
+
+ドライバは attempt ごとの送信済み集合を State と別に記録し、再 claim 後にも同じ occurrence ID の全件を実際に再送してから complete する。重複排除された emit は State を変えなくても試行に残し、同じ attempt では各 ID を1回だけ送って停止性を保つ。再送が channel の履歴を変えないことと、下流で既に消費されたアイテムの再送まで実行したことも検査する。現在の固定 seed 群では1,304失効、1,248 retryable fail、2,552 promoteRetry / 再 claim、506再送（うち消費後482件）を通る。
+
+各試行に256操作の上限を設け、成功・drain に至らない場合は失敗とする。比較できなかった試行を捨てない。全線の EOS、root の出口以外の未消費アイテムなし、子 frame の回収を検査し、論理 channel ID ごとにアイテムを整列して多重集合を比較する。root の線だけでなく、Sub / Loop / ForEach の子 frame の entry / edge / exit も対象。重複数を保持し、格納順は無視する。実際に到着順が変わった比較が存在することも必須にする。反例には graph、両 seed、故障モード、2本の操作列と比較結果を出す。
+
+cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの比較の対象外。任意長の stream、任意の oracle、全 schedule の証明ではない。次の証明は、各ノードの完了出力の多重集合を入力から定める補題、再送の履歴不変性、ForEach の occurrence と子 frame の対応、Loop の反復と Sub の回収を結び、成功・drain した全体へ持ち上げる必要がある。Step の独立化と WellFormed の構造化は、その補題で必要になる段階で判断する。
+
+検査の感度確認として、Collect を一時的に到着順のままリスト ID を作る実装に変えたところ、streaming の oracle seed 2、schedule seed 1 / 7 の組で多重集合の不一致を検出した。変更は検証後に戻した。
+
+再送の感度確認では、重複排除の対象を配置履歴全体から未消費部分だけに変えた。streaming の oracle seed 1、schedule seed 1、lease 失効モードで、消費済みアイテムの再送時に `INVARIANT` 拒否を検出した。ガードによる拒否も検査失敗として扱うため、壊れた再送を候補から除いて成功扱いにはしない。この変更も検証後に戻した。
+
 ## Lean の証明と実行時の検証
 
 `step` は操作の前提と lease を検証し、`transition` の結果を `commit` に渡す。`commit` は不変条件と状態履歴の検査に成功した結果だけを返す。これは仕様の一部であり、ガード無しの `transition` が常に不変条件を保存する、という主張ではない。探索器は `INVARIANT` による拒否も反例として報告するため、ガードで実装の欠陥を隠さない。
@@ -75,7 +90,7 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 | T6 | `branch_exclusive`。実際に使用するルーティング関数が非選択ポートへ値を出さない。操作全体の回帰テストあり |
 | T7 | `loop_bounded`。追加分を含む実効上限以下であることと、親に属する body frame 数がカウンタに一致することを保持 |
 | T8 | `lease_exclusive` / `invalid_lease_rejected`。running attempt は高々 1、無効な lease は冪等再送以外拒否 |
-| T9 | 局所的な permutation / oracle の補題のみ。グラフ全体の決定性は未証明 |
+| T9 | 局所的な permutation / oracle の補題と、固定 oracle の成功・drain 済み実行同士の全線多重集合比較。グラフ全体の一般定理は未証明 |
 | T10 | `spawn_without_eos`。入力先頭の item による準備条件に EOS は不要。実際の spawn 受理は回帰テスト |
 | T11 | `replay_append` / `replay_durable` / `complete_idempotent` / `replay_retains_success`。Op replay の合成則と成功状態の保持。JSONL の encode/check 逆変換と torn-log 回復は回帰テスト |
 | T12 | `idle_step_work`。公開 step の idle 後が running なら `hasWork` が真。`hasWork_iff` / `work_step_eq` で、共有候補中に状態を変える受理操作が存在することを証明。`idle_step_enters_blocked_no_work` は公開 step が新たに blocked にするなら候補内に進行可能な操作がないことを証明。全 Op に対する候補列挙の完全性は未証明 |
@@ -100,3 +115,5 @@ M1 は完了。M2 の探索と関係の一致・各局所補題は実装済み�
 `DEPENDENCIES_UNRESOLVED` という文字列だけでは「failed インスタンスがない」とは言えない。二つの失敗の片方だけを manualRetry して完了させ、idle に入ると、この理由で止まりつつもう片方を再試行できる。初期状態からこの経路を回帰にしている。`ExecStatus.failed` は予約状態で、現在の遷移からは設定しない。
 
 テストは `Test/Artifacts.lean` で CLI の実プロセスを起動し、`Test/Schema.lean` で現在の JSON Schema が使うキーワードを検証する。Lean の標準ライブラリだけを使う。Schema 検証は Draft 2020-12 全体の実装ではなく、このリポジトリの型・必須フィールド・追加フィールド禁止・参照・選択肢・値や配列の制約に対応する。未対応キーワードや未解決の参照は検証前にエラーとする。
+
+`Test/TraceProjection.lean` は公開フィールドの固定、非公開 Instance フィールド変更と channel 格納順に対する facts の不変性、余分な内部フィールド・改変・facts 欠落・旧 version の拒否、replay が元の内部状態を復元することを検査する。消費と lease 更新の実際の操作列から snake_case の facts を検証し、旧 `byInstance` / `until_` を Schema と検査器の両方が拒否することも確認する。フィールド変更のテストだけは射影関数の入力を意図的に変えたもので、変更後の状態の到達可能性を主張しない。

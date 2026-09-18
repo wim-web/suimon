@@ -62,6 +62,13 @@ private def schemaTests (graphs events : Schema.Validator) (original : List Json
     rejected events (event.setObjVal! "txn" (.str ""))
     rejected events (event.setObjVal! "op" (.str "unknown"))
     rejected events (event.setObjVal! "extra" (.bool true))
+    rejected events (event.setObjVal! "schema_version" (toJson (1 : Nat)))
+    rejected events (Json.mkObj (["sequence", "txn", "recorded_at", "type", "op", "data"].map
+      fun key => (key, event.getObjValD key)))
+  for event in original do
+    if event.getObjValD "type" == .str "instance.created" && (event.getObjValD "op").isNull then
+      rejected events (event.setObjVal! "data"
+        ((event.getObjValD "data").setObjVal! "extraIterations" (toJson (0 : Nat))))
   let oneOf ← liftError (Json.parse "{\"oneOf\":[{},{}]}")
   rejected (← liftError (Schema.compile oneOf)) .null
   for text in ["{\"pattern\":\".*\"}", "{\"$ref\":\"#/$defs/missing\"}",
@@ -91,6 +98,9 @@ private def mutationTests (temp : System.FilePath) (graphs : Schema.Validator)
     ("unknown-field", original.zipIdx.map fun (event, idx) =>
       if idx == 0 then event.setObjVal! "unexpected" (.bool true) else event),
     ("wrong-expiry", wrongExpiry),
+    ("old-version", original.map fun event => event.setObjVal! "schema_version" (toJson (1 : Nat))),
+    ("missing-version", original.map fun event => Json.mkObj
+      (["sequence", "txn", "recorded_at", "type", "op", "data"].map fun key => (key, event.getObjValD key))),
     ("missing-commit", removedCommit)]
   for (name, trace) in mutations do
     let path := temp / s!"{name}.jsonl"
