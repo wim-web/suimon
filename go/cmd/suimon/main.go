@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	suimon "github.com/wim-web/suimon/go"
 )
@@ -40,7 +41,25 @@ func natOpt(opts map[string]string, key string, def suimon.Nat) (suimon.Nat, err
 	if !ok {
 		return def, nil
 	}
-	n, err := suimon.ParseNat(s)
+	// Match Lean String.toNat?: a single underscore may separate digit runs.
+	// Keep this CLI spelling separate from Nat's decimal and JSON codecs.
+	var digits strings.Builder
+	lastWasDigit := false
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9':
+			digits.WriteByte(byte(c))
+			lastWasDigit = true
+		case c == '_' && lastWasDigit:
+			lastWasDigit = false
+		default:
+			return suimon.Nat{}, fmt.Errorf("invalid nonnegative integer for %s", key)
+		}
+	}
+	if !lastWasDigit {
+		return suimon.Nat{}, fmt.Errorf("invalid nonnegative integer for %s", key)
+	}
+	n, err := suimon.ParseNat(digits.String())
 	if err != nil {
 		return n, fmt.Errorf("invalid nonnegative integer for %s", key)
 	}
@@ -152,11 +171,11 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 		if err != nil {
 			return 2, err
 		}
-		cfg, err := config(opts)
-		if err != nil {
-			return 2, err
-		}
 		if args[0] == "explore" {
+			cfg, err := config(opts)
+			if err != nil {
+				return 2, err
+			}
 			report := suimon.Search(g, cfg)
 			writeJSON(stdout, report)
 			if report.Failure != nil || !report.Complete {
@@ -169,6 +188,10 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 			return 2, err
 		}
 		count, err := natOpt(opts, "--count", suimon.N(20))
+		if err != nil {
+			return 2, err
+		}
+		cfg, err := config(opts)
 		if err != nil {
 			return 2, err
 		}
