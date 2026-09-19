@@ -21,6 +21,19 @@ private def respond (s : State) (request : Json) : Except String (State × Json)
     let cfg : Explore.Config ← request.getObjValAs? _ "config"
     return (s, Json.mkObj [("state", toJson s), ("candidates", toJson (Explore.candidates cfg s)),
       ("hasWork", toJson s.hasWork)])
+  | "conforms" =>
+    let state : State ← request.getObjValAs? _ "state"
+    let op : Op ← request.getObjValAs? _ "op"
+    let leaf : List Output ← request.getObjValAs? _ "leaf"
+    let arm : String ← request.getObjValAs? _ "arm"
+    let keep : Bool ← request.getObjValAs? _ "keep"
+    let done : Bool ← request.getObjValAs? _ "done"
+    let oracle : ScopedOracle := fun _ => {
+      leaf := fun _ _ => leaf
+      branch := fun _ _ => arm
+      filter := fun _ _ => keep
+      loop := fun _ _ _ => done }
+    return (s, toJson (oracleConforms oracle state op))
   | "step" =>
     let op : Op ← request.getObjValAs? _ "op"
     match step s op with
@@ -53,7 +66,8 @@ private def respond (s : State) (request : Json) : Except String (State × Json)
     let result := if action == "check" then Trace.checkText g lines else Trace.recoverText g lines
     return (s, match result with
       | .error d => Json.mkObj [("diagnostic", toJson d)]
-      | .ok state => Json.mkObj [("state", toJson state), ("diagnostic", .null)])
+      | .ok state => Json.mkObj [("state", toJson state), ("diagnostic", .null),
+          ("bags", toJson (channelBags state)), ("drained", toJson (succeededDrained state))])
   | _ => throw s!"unknown oracle action: {action}"
 
 def main : IO Unit := do
