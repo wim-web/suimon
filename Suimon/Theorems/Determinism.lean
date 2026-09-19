@@ -83,6 +83,10 @@ theorem emit_duplicate_channels (s next : State) (auth : Credentials) (port : Po
     | error e => simp [hn] at h
     | ok n =>
       simp only [hn] at h
+      cases hl : leafPolicy n with
+      | error e => simp [hl] at h
+      | ok policy =>
+      simp only [hl] at h
       cases hr : require (n.outputs.any (fun p => p.name == port && p.kind == .stream)) "NOT_STREAM_OUTPUT" with
       | error e => simp only [hr] at h; contradiction
       | ok value =>

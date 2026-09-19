@@ -339,7 +339,7 @@ Reject は状態を変えない。
 | T6 Branch 排他 | アイテムは選ばれた1本の arm にだけ置かれる | — |
 | T7 Loop 有界 | body の実行回数は `maxIterations` 以下 | — |
 | T8 lease 排他と失効拒否 | 1インスタンスに running な attempt は高々1つ。`ValidLease` を満たさない emit / complete / fail / renew は Reject | I3 |
-| T9 決定性 | 同じ graph / inputs と決定的 oracle に適合し、成功して drain された2実行では、各論理線に置かれたアイテムの多重集合が一致する | A4、安定した occurrence ID、再試行時の重複排除、到着順によらない Collect。一般証明は未完 |
+| T9 決定性 | 同じ graph / inputs と決定的 oracle に適合し、成功して drain された2実行では、各論理線に置かれたアイテムの多重集合が一致する | A4、安定した occurrence ID、再試行時の重複排除、到着順によらない Collect。`schedule_determinism` で一般証明済み |
 | T10 ストリームの前進 | forEach のインスタンスは、入力線の EOS を待たずに作られる（アイテムが届けば spawn できる） | — |
 | T11 再開の冪等 | ログを replay した状態は、crash 直前の最後のトランザクション境界の状態と一致する。succeeded なインスタンスは再開後に再実行されない | A1, A5 |
 | T12 停止の明示（liveness の代替） | idle 直後に status = running なら `hasWork` が真。idle が running から blocked へ変えるのは、状態を変える通常操作が無いときだけ。既に blocked の状態を維持する場合はこの逆の対象外 | 全 Op についての逆方向には候補列挙の完全性が必要。現時点では候補内の定理と独立生成による回帰検査 |
@@ -347,7 +347,7 @@ Reject は状態を変えない。
 
 T9 は順序までは一致しないので多重集合で述べる。Collect は D5 の ItemId 昇順。drain は root の出口を結果として残し、それ以外の線に未消費アイテムがなく、全線に EOS があり、子 frame が回収済みであること。任意の prefix、cancel、yield の一部を残して終了した失敗とは比較しない。`Test/Determinism.lean` が候補列挙内の固定 oracle に適合する成功実行を乱択し、子 frame の線を含めて比較する。故障なしに加え、leaf の lease 失効 / retryable fail → promoteRetry → 再 claim と同じ occurrence ID の yield 再送を含む。再送先で消費済みの場合も検査する。繰り返し故障による試行上限超過、manualRetry、恒久失敗、cancel はこの有限検査の対象外。
 
-一般命題の型は `Suimon/Execution.lean` の `ScheduleDeterminism`。`oracleConforms` は個々の emit が指定集合に入ることに加え、complete 時に全 stream 出力が指定どおり揃っていることを要求する。生の step の成功・drain だけでは、利用者コードが出すはずだった値の省略を排除できない。ForEach / Loop / DAG を含む完成時の意味論については `GraphEval.functional` で一意性を証明した。実 step の任意長列については、再送・管理操作のチャネル不変性、入力の保持、frame とチャネルの構造、成功時の完了境界を証明している。実際の成功実行から `GraphEval` の導出と全線の観測一致を構成する適合性は未証明であり、T9 全体の証明完了とはしない。
+一般命題の型は `Suimon/Execution.lean` の `ScheduleDeterminism`。`oracleConforms` は個々の emit が指定集合に入ることに加え、complete 時に全 stream 出力が指定どおり揃っていることを要求する。生の step の成功・drain だけでは、利用者コードが出すはずだった値の省略を排除できない。`Suimon/Theorems/Adequacy.lean` の `frame_adequacy` が実際の受理操作列から ForEach / Loop / DAG の `GraphEval` と、子 frame を含む全線の観測一致を構成する。`GraphEval.functional` と組み合わせた `schedule_determinism : ScheduleDeterminism` により T9 全体を証明済み。候補列挙・操作数・worker 数・再試行回数に制限せず、lease 失効、再送、Loop 上限到達後の manualRetry も含む。
 
 ## 6. 有界探索器
 
@@ -468,6 +468,8 @@ suimon/
 - T2、T4、T10、T12。
 - T9（決定性）が §5 の前提の下で成立。有限範囲の乱択検査だけではこの受入条件を満たさない。
 
+T9 の受入条件は `schedule_determinism` で達成済み。T12 の全 Op に対する候補列挙の完全性は §12 の未決事項として残る。
+
 ### M4 再開
 
 - T11。イベントログからの replay の定義と、境界状態との一致。
@@ -498,7 +500,7 @@ suimon/
 1. 最初の実装言語。M5 で決める。
 2. **解決済み（D9）**。facts は公開射影に決定。command / facts / commit は必須のまま、内部構造との結合を除く。
 3. **解決済み（D10）**。関係 `Step` は削除し、`step` 関数を唯一の遷移定義とする。
-4. `Graph.WellFormed` を `validate = .ok ()` から構造的定義へ書き直すか。定理で使う段になったら判断する。
+4. `Graph.WellFormed` は `validate = .ok ()` のまま全体を構造的定義に書き直さない。定理で必要な性質は検証成功から個別の補題で取り出す（`topology_of_validate`、`validate_port_names`、`input_single_source` が既にある）。T9 の橋渡しで新たに要る性質も同じ方式で足す。
 5. 参照実装との対応で確認済みの事項: `ValidLease` の条件、再試行の回数計算、lease 失効時の attempt 放棄。今後の確認は必要になった時点で行う。
 6. 候補列挙の完全性。`hasWork` が偽なら全ての通常 Op が状態を変えられない、という逆方向の一般証明は未完。探索器と独立した Op 生成で、受理され状態が変わるなら hasWork が真、という乱択回帰を行う。`Op` の追加時はこの独立生成も更新する。
 
@@ -513,4 +515,4 @@ suimon/
 
 ## 13. 実装状況の補足（2026-09-17）
 
-実行可能な Lean モデル、CLI、例グラフ、Schema、回帰と CI を追加した。未決事項の選択、設計上必要だった追加操作、T2/T9 の前提の問題、証明済みの正確な範囲は [implementation.md](implementation.md) に記録する。イベントの具体的な wire format は [trace-format.md](trace-format.md) を参照。M1 は完了し、M2–M4 の全受入条件の達成はまだ宣言していない。
+実行可能な Lean モデル、CLI、例グラフ、Schema、回帰と CI を追加した。未決事項の選択、設計上必要だった追加操作、T2/T9 の前提の問題、証明済みの正確な範囲は [implementation.md](implementation.md) に記録する。イベントの具体的な wire format は [trace-format.md](trace-format.md) を参照。M1 と M3 の T9 受入条件は完了し、M2–M4 の全受入条件の達成はまだ宣言していない。

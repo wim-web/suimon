@@ -22,7 +22,7 @@ structure Channel where
   deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 inductive InstanceStatus
   | waitingInputs | ready | running | retryWait | succeeded | failed | cancelled
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Lease where
   attempt : AttemptId
   token : LeaseToken
@@ -53,7 +53,7 @@ structure Attempt where
   worker : String
   deriving DecidableEq, BEq, Repr, ToJson, FromJson
 inductive ExecStatus | running | blocked | succeeded | failed | cancelled
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Frame where
   path : Path
   graph : Graph

@@ -52,8 +52,8 @@ def succeededDrained (s : State) : Bool :=
     c.closed && ((c.path.isEmpty && c.exit) || c.pendingItems.isEmpty)) &&
   s.frames.all (fun f => f.path.isEmpty || f.closed)
 
-/-- The unrestricted T9 proof target. This is a proposition, not a completed
-    theorem: no candidate enumeration, bound or equality of results is assumed. --/
+/-- The unrestricted T9 statement, proved by `schedule_determinism` in
+    Theorems/Adequacy: no candidate enumeration, bound or equality of results is assumed. --/
 def ScheduleDeterminism : Prop :=
   ∀ (graph : Graph) (inputs : List Input) (oracle : ScopedOracle),
     graph.WellFormed → oracle.Deterministic →

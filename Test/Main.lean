@@ -7,6 +7,9 @@ import Test.Determinism
 import Test.OracleConformance
 open Lean Suimon Suimon.Test
 
+-- Keep the unrestricted T9 theorem available through the public library.
+example : ScheduleDeterminism := schedule_determinism
+
 private def ensure (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
 

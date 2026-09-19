@@ -302,6 +302,7 @@ def transition (s : State) (op : Op) : Result State := do
   | .emit auth port item =>
     let i ← getInstance s auth.instance
     let n ← getNode s i.path i.node
+    let _ ← leafPolicy n
     require (n.outputs.any (fun p => p.name == port && p.kind == .stream)) "NOT_STREAM_OUTPUT"
     let s ← putOutput s i.path i.node port (.item item)
     return { s with now := auth.now }
@@ -433,6 +434,7 @@ def transition (s : State) (op : Op) : Result State := do
       | _ => inputs.any (fun c => c.closed && c.items.isEmpty)
     require (allKind n.inputs .plain && absent) "NOT_SKIPPABLE"
     require ((s.incoming path node).all (·.closed)) "INPUT_NOT_FINISHED"
+    require (!s.instances.any (fun j => j.path == path && j.node == node)) "NODE_ALREADY_STARTED"
     let i := makeInstance path n .cancelled
     let s ← freshInstance s i
     let s ← consumeInputs s path node i.id

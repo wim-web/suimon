@@ -55,9 +55,9 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 全体の決定性には少なくとも、同じ graph/inputs、同じ決定的 oracle に適合した操作列、成功して stream が drain された実行、同じ安定した occurrence ID、再試行時の yield 重複排除、到着順によらない AllWait の結果、という前提が必要。一部を yield したまま失敗した実行との比較も除外する。
 
-現在の `deterministic_item_multiset` / `deterministic_item_counts` は純粋な item 変換が permutation を保存すること、`deterministic_leaf` は A4 の下で leaf の入力 permutation が出力を変えないことを証明する。**これらは状態遷移系全体の合流性の証明ではない。** 完全な T9 は今後の証明課題として残している。
+`deterministic_item_multiset` / `deterministic_item_counts` は純粋な item 変換が permutation を保存すること、`deterministic_leaf` は A4 の下で leaf の入力 permutation が出力を変えないことを証明する。T9 全体は、これらの局所補題に加えて、`Suimon/Theorems/Adequacy.lean` の `schedule_determinism : ScheduleDeterminism` で証明済みである。
 
-一般命題の型を `Suimon/Execution.lean` の `ScheduleDeterminism` に置いた。同じ graph / inputs とスコープごとの同じ oracle に対する、任意長の受理された2操作列を量化する。候補列挙・worker 数・試行回数・探索深さの制限は付けない。これは証明対象の `Prop` の定義であり、まだその inhabitant を与える定理はない。`ConformingSteps` は実際の `step` の受理と各操作の制約を記録する操作列で、別の遷移意味論ではない。`ConformingSteps.replay` で実際の replay と結び付けた。
+一般命題の型は `Suimon/Execution.lean` の `ScheduleDeterminism`。同じ graph / inputs とスコープごとの同じ oracle に対する、任意長の受理された2操作列を量化する。候補列挙・worker 数・試行回数・探索深さの制限は付けない。`schedule_determinism` はこの型の証明であり、適合性や結果の一致を追加の仮定として受け取らない。`ConformingSteps` は実際の `step` の受理と各操作の制約を記録する操作列で、別の遷移意味論ではない。`ConformingSteps.replay` で実際の replay と結び付けた。
 
 `oracleConforms` は emit の所属、complete の plain 出力、Branch / Filter / Loop の選択を固定 oracle と照合する。さらに complete 時、各 stream 出力線の履歴が oracle の指定する多重集合を満たすことを要求する。指定が `[x,y]` でも、生の step は x だけ emit して complete すれば succeeded / drain に至れるため、「送った値は oracle の集合に含まれる」だけでは不十分である。`Test/OracleConformance.lean` はこの到達可能な反例を再現し、完全な通常実行と lease 失効後の再送実行は適合し、途中で打ち切る complete は不適合になることを確認する。`ScopedOracle` は論理 path をキーに含め、occurrence ID が worker や attempt に依存しない形を表す。
 
@@ -69,7 +69,7 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 - `retry_fragment_channels` / `retry_fragment_multisets`: これらの管理操作と既存 occurrence の再送だけからなる、任意長の受理された操作列は、全チャネルとその多重集合を保存する。新規 emit、complete、消費や body 操作を含む任意の実行同士の比較ではない。
 - `sortedItems_eq_of_perm` / `collect_value_deterministic`: 任意の入力 permutation について、Collect が実際に使う整列済みリストと結果 ID が一致する。Collect の操作列全体の証明とは区別する。
 
-完成時のデータフローを `Suimon/Semantics.lean` の `GraphEval` / `NodeEval` / `LoopEval` として定義した。leaf、Branch、Filter、Merge、Collect、Coalesce の入出力、Sub の回収、ForEach の各 trigger に対応する子評価、Loop の各反復を含む。`Suimon/Theorems/Semantics.lean` の `GraphEval.functional` は、この意味論の完成結果が一意であることを証明する。グラフの位相順序、子評価、Loop の反復について帰納し、子 frame の全チャネルも結果に含める。候補列挙や探索深さの制限は使わない。
+完成時のデータフローを `Suimon/Semantics.lean` の `GraphEval` / `NodeEval` / `LoopEval` として定義した。これは完成結果の等式であり、完了可能性は含まない。`LoopEval` に回数上限はなく、Sub / ForEach の出口に「値ちょうど 1 個」も要求しない。上限や出口の個数は `step` が完了できるかを決めるだけで、完了した結果の値には影響しないため、決定性の仕様としてはこの広い形でよい。`GraphEval` を suimon の動作の定義として読まないこと。動作の定義は `step` だけである。leaf、Branch、Filter、Merge、Collect、Coalesce の入出力、Sub の回収、ForEach の各 trigger に対応する子評価、Loop の各反復を含む。`Suimon/Theorems/Semantics.lean` の `GraphEval.functional` は、この意味論の完成結果が一意であることを証明する。グラフの位相順序、子評価、Loop の反復について帰納し、子 frame の全チャネルも結果に含める。候補列挙や探索深さの制限は使わない。
 
 実行可能なモデルとの接続には、次の補題を追加した。
 
@@ -81,7 +81,19 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 配置・入力の消費・body の生成と回収は補助関数へ分解した。EOS・plain cardinality の検査順と再送の重複排除は維持している。内部の通常ノード照合は `State.nodeInstance?` に集約し、`(node, path, trigger = none)` で照合する。外部 trace の ID 形式は変えていない。
 
-**残る証明は、成功・drain された `ConformingSteps` から `GraphEval` の導出を構成し、その結果のチャネルと実際の `channelBags` の一致を示す適合性である。** 各 Op の入出力、ForEach の消費 item と子 frame の対応、Loop の反復間の入力引継ぎを、実行履歴からこの導出へ接続する必要がある。`GraphEval.functional` 単独では `ScheduleDeterminism` の証明にならず、M3 は未完のままである。全線の観測と drain の定義は Execution に集約し、乱択検査も同じ定義を使う。
+`Suimon/Theorems/LeafOutputs.lean` の `complete_stream_output_final` は、適合し吸収されない `complete` を先頭に持つ任意長の受理操作列について、その leaf の各 stream 出力線が、操作列の最後で閉じており、oracle が指定する多重集合とちょうど一致することを証明する。`LeafFinal.lean` / `PlainOutputs.lean` / `NodeValues.lean` で plain 出力も接続し、成功した leaf の結果と oracle の対応を実行履歴から導出した。
+
+**実行履歴から完成時の意味論への適合性も証明済みである。** `frame_adequacy` はグラフの大きさに関する帰納法で、実際の成功・drain 実行から `GraphEval` の証人を構成する。証明の接続は次のとおり。
+
+- `NodeValues.lean` / `Stream.lean` / `Coalesce.lean` は primitive ノードの入出力を、`Compound.lean` / `ForEach.lean` / `Loop.lean` は複合ノードの出力チャネル方程式を証明する。
+- `Start.lean` は実際の root の start と子 frame の seeding から `FrameStart` を導出する。`FrameTree.lean` / `FrameOwners.lean` は祖先 frame と所有インスタンスの対応を操作列全体で保持する。
+- `SubEval.lean` / `ForEachEval.lean` は activate / spawn と body の完了を履歴から取り出す。ForEach の各入力 item は実際の消費記録を介して子 frame に対応する。出力線のないノードも、`FrameCompletes.nodes` の完了したインスタンスを使って扱う。
+- `LoopChain.lean` の `loop_eval_active` は実際の反復列を `LoopEval` に変換する。通常の `loopIterate false` と、上限到達後の `manualRetry` の両方を扱い、前回の body 出力と false の oracle 判定を次回へ接続する。
+- `NodeEval.lean` の `completed_node_eval` は全ノード種別を扱う。成功実行の中で cancelled になったノードは skip に由来し、入力の欠落による抑制と一致することも導出する。
+- `ChildFrames.lean` / `ChildPartition.lean` は実在する子 frame の網羅と重複の排除を証明する。`ChannelAssembly.lean` の `frame_channels_equations` は親 frame 自身と全子 frame の entry / edge / exit の組み立てが、実状態の `subtreeBags` に一致することを証明する。
+- `Adequacy.lean` の `frame_adequacy` と `GraphEval.functional` を組み合わせ、`schedule_determinism` が元の `ScheduleDeterminism` を閉じる。`Suimon.lean` から公開し、テスト側でもこの型の証明が import できることを検査する。
+
+全線の観測と drain の定義は Execution に集約し、乱択検査も同じ定義を使う。`schedule_determinism` / `frame_adequacy` の依存公理は Lean 標準の `propext`、`Classical.choice`、`Quot.sound` のみ。未完証明や独自の未検証公理は使わない。
 
 `Test/Determinism.lean` は12例と共有入力・入れ子の Coalesce の計14グラフに対し、6つの固定 oracle 設定、16通りの schedule seed、故障なし / lease 失効 / retryable fail の3モードを使う。候補列挙から、固定した Branch / Filter / Loop の結果と leaf 出力に適合する操作だけを選ぶ。stream は設定ごとに0〜2個の全 occurrence を出してから complete する。oracle の選択に schedule seed や attempt ID を使わない。故障なしの基準実行と比較し、4,032実行、3,948比較を行う。
 
@@ -91,7 +103,7 @@ Loop と Sub では、同じ node と trigger の組が複数のスコープに�
 
 各試行に256操作の上限を設け、成功・drain に至らない場合は失敗とする。比較できなかった試行を捨てない。全線の EOS、root の出口以外の未消費アイテムなし、子 frame の回収を検査し、論理 channel ID ごとにアイテムを整列して多重集合を比較する。root の線だけでなく、Sub / Loop / ForEach の子 frame の entry / edge / exit も対象。重複数を保持し、格納順は無視する。実際に到着順が変わった比較が存在することも必須にする。反例には graph、両 seed、故障モード、2本の操作列と比較結果を出す。
 
-cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの有限比較の対象外。任意長の stream、任意の oracle、全 schedule の証明ではない。一般証明に残る課題は、上記の実行履歴と完成時の意味論の適合性である。
+cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの有限比較の対象外。一般定理には操作数や retry 回数の制限はなく、leaf / Loop の manualRetry を経た成功・drain 実行も含む。cancel や失敗で終わった実行は、定理の比較対象である成功・drain 実行には含まれない。
 
 検査の感度確認として、Collect を一時的に到着順のままリスト ID を作る実装に変えたところ、streaming の oracle seed 2、schedule seed 1 / 7 の組で多重集合の不一致を検出した。変更は検証後に戻した。
 
@@ -116,13 +128,13 @@ cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry
 | T6 | `branch_exclusive`。実際に使用するルーティング関数が非選択ポートへ値を出さない。操作全体の回帰テストあり |
 | T7 | `loop_bounded`。追加分を含む実効上限以下であることと、親に属する body frame 数がカウンタに一致することを保持 |
 | T8 | `lease_exclusive` / `invalid_lease_rejected`。running attempt は高々 1、無効な lease は冪等再送以外拒否 |
-| T9 | `ScheduleDeterminism` に一般命題を定義。`GraphEval.functional` で ForEach / Loop / DAG を含む完成時意味論の一意性を証明。実 step の再送・構造・入力の保持と完了境界を証明。実行履歴から `GraphEval` と全線の観測一致を構成する適合性は未証明であり、T9 全体は未完。固定 oracle の全線多重集合比較は回帰として継続 |
+| T9 | **一般証明完了。** `schedule_determinism : ScheduleDeterminism`。`frame_adequacy` が実際の成功・drain 操作列から ForEach / Loop / DAG の `GraphEval` と全線の観測一致を構成し、`GraphEval.functional` で2実行を比較する。lease 失効・再送・manualRetry を含み、候補列挙や探索深さに制限しない。固定 oracle の全線多重集合比較も回帰として継続 |
 | T10 | `spawn_without_eos`。入力先頭の item による準備条件に EOS は不要。実際の spawn 受理は回帰テスト |
 | T11 | `replay_append` / `replay_durable` / `complete_idempotent` / `replay_retains_success`。Op replay の合成則と成功状態の保持。JSONL の encode/check 逆変換と torn-log 回復は回帰テスト |
 | T12 | `idle_step_work`。公開 step の idle 後が running なら `hasWork` が真。`hasWork_iff` / `work_step_eq` で、共有候補中に状態を変える受理操作が存在することを証明。`idle_step_enters_blocked_no_work` は公開 step が新たに blocked にするなら候補内に進行可能な操作がないことを証明。全 Op に対する候補列挙の完全性は未証明 |
 | T13 | `terminal_absorbing`。すべての Op に対して終端状態は変わらない |
 
-M1 は完了。M2 の探索と関係の一致・各局所補題は実装済みだが、すべての設計命題を操作列全体について証明し切った状態ではない。M3 の T9、M4 のイベント codec と回復の一般的な対応証明などは未完。M5 は対象外。
+M1 と M3 の T9 受入条件は完了。T12 の全 Op に対する候補列挙の完全性、M4 のイベント codec と回復の一般的な対応証明などは引き続き未完であり、M2–M4 全体の完了は宣言しない。M5 は対象外。
 
 ## 探索と回帰
 
