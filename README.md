@@ -32,6 +32,12 @@ go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl 
 
 原本は引き続き Lean の定義です。Go 版との一致は `bin/test-go` で比較検証します。
 
+[簡単な実行例](implementations/go/example/README.md)では、2つのノードをGoで作って接続し、文字列を処理して完了するまでを確認できます。
+
+```sh
+go -C implementations/go run ./example
+```
+
 ## 検証
 
 Lean 仕様のテストは `elan` / `lake` とシェルで実行できます。

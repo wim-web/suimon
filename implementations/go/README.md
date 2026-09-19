@@ -4,6 +4,16 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 
 グラフ検証、全 23 種類の操作、状態遷移の不変条件検査、候補列挙、探索、履歴生成、v2 JSONL の検査と未コミット末尾の回復を実装しています。ノードの利用者コードや外部副作用を実行する worker は、Lean 版と同様に含みません。
 
+## 最初の実行例
+
+リポジトリ直下で実行すると、2つのノードを作り、接続して文字列を処理します。
+
+```sh
+go -C implementations/go run ./example
+```
+
+`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。ノードの定義・処理関数・状態遷移は [example/main.go](example/main.go) の1ファイルにあります。[手順と出力](example/README.md)も参照してください。
+
 ## CLI
 
 リポジトリ直下で実行します。
