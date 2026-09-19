@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	suimon "github.com/wim-web/suimon/go"
+	suimon "github.com/wim-web/suimon/implementations/go"
 )
 
 func TestNatOptionDigitSeparators(t *testing.T) {
@@ -46,14 +46,14 @@ func TestNatOptionDigitSeparators(t *testing.T) {
 }
 
 func TestCLI(t *testing.T) {
-	graph := "../../../Test/graphs/minimal.json"
+	graph := "../../../../Test/graphs/minimal.json"
 	for _, tc := range []struct {
 		args []string
 		code int
 	}{
 		{[]string{"--help"}, 0}, {nil, 2}, {[]string{"check"}, 2},
-		{[]string{"check", "../../../Test/traces/minimal.jsonl", "--graph", graph}, 0},
-		{[]string{"check", "../../../Test/traces/after-eos.jsonl", "--graph", graph}, 1},
+		{[]string{"check", "../../../../Test/traces/minimal.jsonl", "--graph", graph}, 0},
+		{[]string{"check", "../../../../Test/traces/after-eos.jsonl", "--graph", graph}, 1},
 		{[]string{"explore", "--graph", graph, "--max-states", "1"}, 1},
 		{[]string{"explore", "--graph", graph, "--depth", "-1"}, 2},
 		{[]string{"explore", "--graph", graph, "--workers", "0"}, 2},
@@ -119,7 +119,7 @@ func TestGeneratedTraceAndLongLine(t *testing.T) {
 	}
 	out.Reset()
 	stderr.Reset()
-	code, err = run([]string{"check", path, "--graph", "../../../Test/graphs/minimal.json"}, &out, &stderr)
+	code, err = run([]string{"check", path, "--graph", "../../../../Test/graphs/minimal.json"}, &out, &stderr)
 	if err != nil || code != 0 {
 		t.Fatalf("check: %d %v %s", code, err, &stderr)
 	}

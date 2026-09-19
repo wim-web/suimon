@@ -33,7 +33,7 @@ func comparisonCLIs(t *testing.T) cliPair {
 	if lean == "" || goCLI == "" {
 		t.Fatal("both SUIMON_LEAN_CLI and SUIMON_GO_CLI are required")
 	}
-	root, err := filepath.Abs("../../..")
+	root, err := filepath.Abs("../../../..")
 	if err != nil {
 		t.Fatal(err)
 	}

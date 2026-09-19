@@ -19,7 +19,7 @@ func TestLeanSourceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, want := range sources {
-		b, err := os.ReadFile(filepath.Join("..", path))
+		b, err := os.ReadFile(filepath.Join("..", "..", path))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -18,7 +18,7 @@ bin/test
 export SUIMON_LEAN_ORACLE="$repo_root/.lake/build/bin/suimon_go_oracle"
 export SUIMON_LEAN_CLI="$repo_root/.lake/build/bin/suimon"
 export SUIMON_GO_CLI="$go_test_tmp/suimon"
-cd go
+cd implementations/go
 go build -o "$SUIMON_GO_CLI" ./cmd/suimon
 go test -count=1 -v ./...
 go vet ./...

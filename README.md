@@ -22,10 +22,12 @@ lake exe suimon check /tmp/suimon.jsonl --graph Test/graphs/streaming.json
 
 ## Go 実装
 
-Lean の実行可能な定義から生成した [Go パッケージと CLI](go/README.md) も利用できます。状態遷移・グラフ検証・履歴検査・探索を Go だけで実行でき、実行時に Lean や cgo は不要です。
+各言語の実装は `implementations/{language}/` にまとめています。Go 版は `implementations/go/` にあります。
+
+Lean の実行可能な定義から生成した [Go パッケージと CLI](implementations/go/README.md) も利用できます。状態遷移・グラフ検証・履歴検査・探索を Go だけで実行でき、実行時に Lean や cgo は不要です。
 
 ```sh
-go -C go run ./cmd/suimon check ../Test/traces/minimal.jsonl --graph ../Test/graphs/minimal.json
+go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl --graph ../../Test/graphs/minimal.json
 ```
 
 原本は引き続き Lean の定義です。Go 版との一致は `bin/test-go` で比較検証します。

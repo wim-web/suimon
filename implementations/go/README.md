@@ -9,11 +9,11 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 リポジトリ直下で実行します。
 
 ```sh
-go -C go run ./cmd/suimon check ../Test/traces/minimal.jsonl --graph ../Test/graphs/minimal.json
-go -C go run ./cmd/suimon explore --graph ../Test/graphs/streaming.json --depth 8 --workers 2 --tick 1
-go -C go run ./cmd/suimon gen --graph ../Test/graphs/streaming.json --seed 17 --count 30 > /tmp/suimon-go.jsonl
-go -C go run ./cmd/suimon check /tmp/suimon-go.jsonl --graph ../Test/graphs/streaming.json
-CGO_ENABLED=0 go -C go build -o /tmp/suimon-go ./cmd/suimon
+go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl --graph ../../Test/graphs/minimal.json
+go -C implementations/go run ./cmd/suimon explore --graph ../../Test/graphs/streaming.json --depth 8 --workers 2 --tick 1
+go -C implementations/go run ./cmd/suimon gen --graph ../../Test/graphs/streaming.json --seed 17 --count 30 > /tmp/suimon-go.jsonl
+go -C implementations/go run ./cmd/suimon check /tmp/suimon-go.jsonl --graph ../../Test/graphs/streaming.json
+CGO_ENABLED=0 go -C implementations/go build -o /tmp/suimon-go ./cmd/suimon
 ```
 
 ビルドした CLI のオプションと終了コードは Lean 版と共通です。JSON のキー順・空白・数値の表記は異なる場合があります。構造と値を比較してください。JSON 構文エラーの説明文は Go の parser に依存し、診断コードと確定境界は共通です。
@@ -23,7 +23,7 @@ CLI の数値引数には `--count 1_000` のような区切りを使えます�
 ## パッケージ
 
 ```go
-import suimon "github.com/wim-web/suimon/go"
+import suimon "github.com/wim-web/suimon/implementations/go"
 
 graph, err := suimon.ParseGraph(graphJSON)
 if err != nil {
@@ -68,7 +68,7 @@ bin/test-go
 
 コンパイルした両 CLI についても、全 fixture の `check`、全例グラフの `explore` と複数 seed の `gen`、既定グラフ、生成 JSONL の双方向検査を実行します。数値引数の区切り・検査順序、余分なキー、数値の小数表記、空行、CRLF、途中で切れた末尾も比較します。終了コードと stdout / stderr の内容を検査し、JSON の表記差と `INVALID_JSON` の parser 依存の説明文だけを比較時に除外します。
 
-Go だけの検証は `go -C go test ./...` です。この場合、Lean が必要な比較テストは明示的に skip します。CI では `bin/test-go` を使って比較を必須にしています。
+Go だけの検証は `go -C implementations/go test ./...` です。この場合、Lean が必要な比較テストは明示的に skip します。CI では `bin/test-go` を使って比較を必須にしています。
 
 ## Lean 定義を変更したとき
 
