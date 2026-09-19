@@ -1,5 +1,6 @@
 import Suimon.Step
 import Suimon.Trace.Projection
+import Suimon.Trace.JsonEquality
 namespace Suimon.Trace
 open Lean
 
@@ -15,12 +16,14 @@ structure Event where
   deriving BEq, ToJson, FromJson
 
 /-- Reject missing/extra keys instead of silently normalizing an external event. --/
-def parseEvent (line : String) : Except String Event := do
-  let json ← Json.parse line
+def parseEventJson (json : Json) : Except String Event := do
   let event : Event ← fromJson? json
   unless event.schema_version == 2 do throw "unsupported event schema_version (expected 2)"
-  unless toJson event == json do throw "event fields do not match the canonical schema"
+  unless sameJson (toJson event) json do throw "event fields do not match the canonical schema"
   return event
+
+def parseEvent (line : String) : Except String Event := do
+  parseEventJson (← Json.parse line)
 
 structure Fact where
   type : String
@@ -90,23 +93,41 @@ def effects (before after : State) (op : Op) : List Fact := Id.run do
       ("status", toJson (Projection.execStatus after.status)), ("reason", toJson after.reason)] }]
   return facts
 
+def recordFacts : List Fact → Nat → String → Nat → List Event
+  | [], _, _, _ => []
+  | f :: rest, sequence, txn, time =>
+    { sequence, txn, recorded_at := time, type := f.type, data := f.data } ::
+      recordFacts rest (sequence + 1) txn time
+
 def recordOp (before after : State) (op : Op) (sequence : Nat) (txn : String) (time : Nat) : List Event :=
-  let command : Event := { sequence, txn, recorded_at := time, type := commandType op, op := some op }
-  command :: ((effects before after op).zipIdx.map fun (f, idx) => {
-    sequence := sequence + idx + 1, txn, recorded_at := time, type := f.type, data := f.data })
+  { sequence, txn, recorded_at := time, type := commandType op, op := some op } ::
+    recordFacts (effects before after op) (sequence + 1) txn time
 
 def commitEvent (sequence : Nat) (txn : String) (time : Nat) : Event :=
   { sequence, txn, recorded_at := time, type := "transaction.committed" }
 
+/-- A timed command must keep its own timestamp; increasing recorded_at alone
+    would produce a command which the checker rejects. --/
+def recordTime (time : Nat) (op : Op) : Result Nat := do
+  let next := (opTime op).getD time
+  require (time ≤ next) "CLOCK_REGRESSION"
+  return next
+
+def recordCommands (s : State) (ops : List Op) (sequence : Nat) (txn : String)
+    (time : Nat) : Result (State × List Event × Nat) := do
+  match ops with
+  | [] => return (s, [], time)
+  | op :: rest =>
+    let clock ← recordTime time op
+    let next ← step s op
+    let events := recordOp s next op sequence txn clock
+    let (last, tail, lastTime) ← recordCommands next rest (sequence + events.length) txn clock
+    return (last, events ++ tail, lastTime)
+
 def recordTransaction (s : State) (ops : List Op) (sequence : Nat) (txn : String)
     (time : Nat) : Result (State × List Event) := do
-  let mut state := s
-  let mut events := []
-  let mut clock := time
-  for op in ops do
-    clock := max clock ((opTime op).getD clock)
-    let next ← step state op
-    events := events ++ recordOp state next op (sequence + events.length) txn clock
-    state := next
+  require (!ops.isEmpty) "EMPTY_TRANSACTION"
+  require (!txn.isEmpty) "EMPTY_TRANSACTION_ID"
+  let (state, events, clock) ← recordCommands s ops sequence txn time
   return (state, events ++ [commitEvent (sequence + events.length) txn clock])
 end Suimon.Trace

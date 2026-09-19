@@ -32,8 +32,8 @@ structure Cursor where
   currentOp : Option Op := none
   commands : Nat := 0
 
-/-- Reads one event at a time, retaining model state and committed transaction IDs. --/
-def checkEvent (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
+/-- Validate and advance only the record metadata. --/
+def checkMetadata (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
   let err := fun code msg => diagnose e (e.op.or c.currentOp) c.boundary code msg
   unless e.schema_version == 2 do throw (err "SCHEMA_VERSION" "expected event schema_version 2")
   unless e.sequence == c.sequence do throw (err "SEQUENCE" "sequence must be contiguous and start at 1")
@@ -45,25 +45,37 @@ def checkEvent (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
     | some t => do
       unless t == e.txn do throw (err "UNCOMMITTED_TXN" "previous transaction has no commit marker")
       pure c
-  let c := { c with sequence := c.sequence + 1, time := e.recorded_at }
+  return { c with sequence := c.sequence + 1, time := e.recorded_at }
+
+/-- Facts verify the pending projection; only commands execute the model, and
+    only commit markers advance the durable boundary. --/
+def checkPayloadWith (c : Cursor) (e : Event) (dataEqual : Json → Bool) : Except Diagnostic Cursor := do
+  let err := fun code msg => diagnose e (e.op.or c.currentOp) c.boundary code msg
   match c.expected with
   | f :: rest =>
-    unless e.op.isNone && e.type == f.type && e.data == f.data do
+    unless e.op.isNone && e.type == f.type && dataEqual f.data do
       throw (err "EFFECT_MISMATCH" s!"expected {f.type}: {f.data.compress}")
     return { c with expected := rest }
   | [] =>
     if e.type == "transaction.committed" then
-      unless e.op.isNone && e.data == Json.mkObj [] && c.commands > 0 do
+      unless e.op.isNone && dataEqual (Json.mkObj []) && c.commands > 0 do
         throw (err "INVALID_COMMIT" "commit must follow at least one complete operation")
       return { c with boundary := c.state, txn := none, completed := c.completed ++ [e.txn], currentOp := none, commands := 0 }
     let op ← e.op.toExcept (err "MISSING_OPERATION" "expected a command with op")
-    unless e.type == commandType op && e.data == Json.mkObj [] do
+    unless e.type == commandType op && dataEqual (Json.mkObj []) do
       throw (err "COMMAND_MISMATCH" "event type does not match operation")
     unless (opTime op).all (· == e.recorded_at) do throw (err "CLOCK_MISMATCH" "operation time differs from recorded_at")
     match step c.state op with
     | .error r => throw { (err r.code r.message) with reason := r }
     | .ok next =>
       return { c with state := next, expected := effects c.state next op, currentOp := some op, commands := c.commands + 1 }
+
+def checkPayload (c : Cursor) (e : Event) : Except Diagnostic Cursor :=
+  checkPayloadWith c e (sameJson e.data)
+
+/-- Reads one event at a time, retaining model state and committed transaction IDs. --/
+def checkEvent (c : Cursor) (e : Event) : Except Diagnostic Cursor := do
+  checkPayload (← checkMetadata c e) e
 
 def finish (c : Cursor) : Except Diagnostic State :=
   match c.txn with

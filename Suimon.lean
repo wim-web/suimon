@@ -35,3 +35,6 @@ import Suimon.Theorems.Records
 import Suimon.Theorems.Coalesce
 import Suimon.Theorems.Stream
 import Suimon.Theorems.Adequacy
+import Suimon.Theorems.WorkComplete
+import Suimon.Theorems.TraceCodec
+import Suimon.Theorems.TraceTorn

@@ -55,26 +55,12 @@ private def checkFile (g : Graph) (file : String) : IO UInt32 := do
   let stream ← IO.FS.Handle.mk file .read
   let initial := State.initial g
   let mut cursor : Trace.Cursor := { state := initial, boundary := initial }
-  let mut lineNo := 0
   repeat
     let line ← stream.getLine
     if line.isEmpty then break
-    lineNo := lineNo + 1
-    let parsed := Trace.parseEvent line
-    match parsed with
-    | .error e =>
-      let d : Trace.Diagnostic := {
-        sequence := cursor.sequence
-        txn := cursor.txn.getD ""
-        op := cursor.currentOp
-        reason := { code := "INVALID_JSON", message := s!"line {lineNo}: {e}" }
-        boundary := Trace.summary cursor.boundary }
-      IO.eprintln (toJson d).compress
-      return 1
-    | .ok event =>
-      match Trace.checkEvent cursor event with
-      | .error d => IO.eprintln (toJson d).compress; return 1
-      | .ok next => cursor := next
+    match Trace.checkTextLine cursor line with
+    | .error d => IO.eprintln (toJson d).compress; return 1
+    | .ok next => cursor := next
   match Trace.finish cursor with
   | .error d => IO.eprintln (toJson d).compress; return 1
   | .ok s =>
@@ -102,7 +88,7 @@ def main (args : List String) : IO UInt32 := do
       match Explore.generate g (← config opts) seed count with
       | .error r => IO.eprintln (toJson r).compress; return 1
       | .ok (_, events) =>
-        for event in events do IO.println (toJson event).compress
+        for event in events do IO.println (Trace.encodeEvent event)
         return 0
     | _ => IO.eprintln usage; return 2
   catch e =>

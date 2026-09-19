@@ -20,7 +20,7 @@ structure RetryPolicy where
   maxAttempts : Nat := 1
   leaseSeconds : Nat := 30
   retrySeconds : Nat := 0
-  deriving DecidableEq, Repr, BEq, ToJson, FromJson
+  deriving DecidableEq, Repr, BEq, ReflBEq, LawfulBEq, ToJson, FromJson
 
 structure Edge where
   src : PortRef
@@ -39,20 +39,97 @@ inductive NodeKind where
   | collect
   | filter
   | merge
-  deriving Repr, BEq
+  deriving Repr
 structure Node where
   id : NodeId
   kind : NodeKind
   inputs : List Port
   outputs : List Port
-  deriving Repr, BEq
+  deriving Repr
 structure Graph where
   nodes : List Node
   edges : List Edge
   entries : List PortRef
   exits : List PortRef
-  deriving Repr, BEq
+  deriving Repr
 end
+
+mutual
+  def nodeKindEq (a b : NodeKind) : Bool :=
+    match a, b with
+    | .leaf r c, .leaf r' c' => r == r' && c == c'
+    | .waitAll, .waitAll | .coalesce, .coalesce | .collect, .collect | .filter, .filter | .merge, .merge => true
+    | .branch arms, .branch arms' => arms == arms'
+    | .loop body limit, .loop body' limit' => graphEq body body' && limit == limit'
+    | .subworkflow body, .subworkflow body' | .forEach body, .forEach body' => graphEq body body'
+    | _, _ => false
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+
+  def nodeEq (a b : Node) : Bool :=
+    a.id == b.id && nodeKindEq a.kind b.kind && a.inputs == b.inputs && a.outputs == b.outputs
+  termination_by sizeOf a
+  decreasing_by cases a; simp; omega
+
+  def graphEq (a b : Graph) : Bool :=
+    nodeListEq a.nodes b.nodes && a.edges == b.edges && a.entries == b.entries && a.exits == b.exits
+  termination_by sizeOf a
+  decreasing_by cases a; simp; omega
+
+  def nodeListEq (a b : List Node) : Bool :=
+    match a, b with
+    | [], [] => true
+    | x :: xs, y :: ys => nodeEq x y && nodeListEq xs ys
+    | _, _ => false
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+end
+
+mutual
+  theorem nodeKindEq_correct (a b : NodeKind) : nodeKindEq a b = true ↔ a = b := by
+    cases a <;> cases b <;> try simp only [nodeKindEq, Bool.and_eq_true, beq_iff_eq,
+      NodeKind.leaf.injEq, NodeKind.branch.injEq, NodeKind.loop.injEq,
+      NodeKind.subworkflow.injEq, NodeKind.forEach.injEq]
+    all_goals first | exact graphEq_correct _ _ | rw [graphEq_correct] | simp
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+
+  theorem nodeEq_correct (a b : Node) : nodeEq a b = true ↔ a = b := by
+    cases a; cases b
+    simp only [nodeEq, Bool.and_eq_true, beq_iff_eq, Node.mk.injEq]
+    rw [nodeKindEq_correct]
+    simp only [and_assoc]
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+
+  theorem graphEq_correct (a b : Graph) : graphEq a b = true ↔ a = b := by
+    cases a; cases b
+    simp only [graphEq, Bool.and_eq_true, beq_iff_eq, Graph.mk.injEq]
+    rw [nodeListEq_correct]
+    simp only [and_assoc]
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+
+  theorem nodeListEq_correct (a b : List Node) : nodeListEq a b = true ↔ a = b := by
+    cases a <;> cases b <;> try simp only [nodeListEq, Bool.and_eq_true, List.cons.injEq]
+    all_goals first | rw [nodeEq_correct, nodeListEq_correct] | simp
+  termination_by sizeOf a
+  decreasing_by all_goals simp_all <;> omega
+end
+
+instance : BEq NodeKind := ⟨nodeKindEq⟩
+instance : LawfulBEq NodeKind where
+  eq_of_beq h := (nodeKindEq_correct _ _).mp h
+  rfl := (nodeKindEq_correct _ _).mpr rfl
+instance : BEq Node := ⟨nodeEq⟩
+instance : LawfulBEq Node where
+  eq_of_beq h := (nodeEq_correct _ _).mp h
+  rfl := (nodeEq_correct _ _).mpr rfl
+instance : BEq Graph := ⟨graphEq⟩
+instance : LawfulBEq Graph where
+  eq_of_beq h := (graphEq_correct _ _).mp h
+  rfl := (graphEq_correct _ _).mpr rfl
+
 
 def Graph.node? (g : Graph) (id : NodeId) : Option Node :=
   g.nodes.find? (·.id == id)

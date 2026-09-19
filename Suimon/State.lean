@@ -27,7 +27,7 @@ structure Lease where
   attempt : AttemptId
   token : LeaseToken
   until_ : Time
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Instance where
   id : InstanceId
   node : NodeId
@@ -41,9 +41,9 @@ structure Instance where
   extraAttempts : Nat := 0
   extraIterations : Nat := 0
   inputs : List (PortName × ItemId) := []
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 inductive AttemptStatus | running | succeeded | failed | abandoned | cancelled
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Attempt where
   id : AttemptId
   «instance» : InstanceId
@@ -51,7 +51,7 @@ structure Attempt where
   status : AttemptStatus
   token : LeaseToken
   worker : String
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 inductive ExecStatus | running | blocked | succeeded | failed | cancelled
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Frame where
@@ -60,27 +60,27 @@ structure Frame where
   definition : List NodeId := []
   owner : Option InstanceId := none
   closed : Bool := false
-  deriving BEq, Repr, ToJson, FromJson
+  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Consumption where
   channel : String
   index : Nat
   item : ItemId
   byInstance : InstanceId
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Output where
   port : PortName
   items : List ItemId
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Receipt where
   «instance» : InstanceId
   attempt : AttemptId
   token : LeaseToken
   outputs : List Output
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure Decision where
   key : String
   value : String
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 structure State where
   status : ExecStatus := .running
   channels : List Channel := []
@@ -93,7 +93,7 @@ structure State where
   now : Time := 0
   started : Bool := false
   reason : Option String := none
-  deriving BEq, Repr, ToJson, FromJson
+  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 
 def identity (parts : List String) : String := (toJson parts).compress
 
@@ -168,7 +168,7 @@ structure Credentials where
   attempt : AttemptId
   token : LeaseToken
   now : Time
-  deriving DecidableEq, BEq, Repr, ToJson, FromJson
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
 
 /-- A stale worker cannot regain authority by merely naming the current instance. --/
 def validLease (s : State) (c : Credentials) : Bool :=

@@ -1,157 +1,83 @@
-# 実装上の決定と検証範囲
+# 保証の読み方
 
-2026-09-17。対象は `suimon-design.md` の Lean 仕様と検査・探索ツールである。着手時のリポジトリは設計書のみであり、既存の `formal/`・`python/` は存在しなかった。参照プロジェクトは変更していない。
+保証の正確な主張と前提は Lean の定理に置く。この文書は、その意味と適用範囲を読むための案内である。設計上の選択理由は [設計理由](suimon-design.md) を参照。
 
-更新後の §4・§10 に合わせ、Lake プロジェクトはリポジトリ直下に移設済み。`Suimon/` にモジュール、`Test/` にテスト、`Test/graphs/` に例グラフ JSON、`Test/traces/` に履歴を置く。旧 `formal/` 階層は削除した。
+## 決定性で保証するもの
 
-説明の部品名は設計書 §3 に合わせる。Lean の型・操作名と JSON の識別子は §4 の名前を使う。主な対応は次のとおり。
+[Execution.lean](../Suimon/Execution.lean) の `ScheduleDeterminism` は、同じグラフ・入力・決定的 oracle に対する成功実行を比較する。証明は [Adequacy.lean](../Suimon/Theorems/Adequacy.lean) の `schedule_determinism`。各論理チャネルに置かれたアイテムの多重集合が一致し、Sub・ForEach・Loop の子 frame の線も比較に含む。
 
-| 説明での用語 | Lean モデルでの表現 |
+この主張を使うには、次の前提が必要になる。
+
+- グラフが検証を通り、両実行の操作列が同じ oracle に適合している。
+- 出力 occurrence の ID が安定しており、worker や attempt の違いで変わらない。
+- 両実行が成功し、stream が drain されている。root の結果以外の未消費アイテムがなく、全線が閉じ、子 frame が回収されていることを指す。
+
+oracle への適合には、送った値が期待される集合に入ることだけでなく、complete 時に期待される stream 出力がすべて揃うことも含む。利用者の処理が出すはずの値を省略しても、生の `step` だけではそれを判定できない。[OracleConformance.lean](../Test/OracleConformance.lean) がこの違いを示す。
+
+操作列の長さ、worker 数、再試行回数を有限の探索範囲に制限した定理ではない。lease 失効、再送、leaf・Loop の `manualRetry` を経た実行も、上の前提を満たせば比較できる。一方、任意の途中経過、cancel や失敗で終わった実行、アイテムの到着順、必ず成功まで進むことは保証の対象に含まれない。
+
+証明では、実際の操作列から `frame_adequacy` で完成結果の意味論 `GraphEval` を構成し、[Semantics.lean](../Suimon/Theorems/Semantics.lean) の `GraphEval.functional` で結果の一意性を使う。[完成結果の定義](../Suimon/Semantics.lean) は完了可能性を主張しない。動作仕様の `step` と証明の役割を分けて読むための区別である。
+
+## 安全性の定理を読む
+
+[Safety.lean](../Suimon/Theorems/Safety.lean) の基本定理は、受理された操作や不変条件を満たす状態について述べる。`step_ok_cases` と `preserves_invariants` は、認可・前提・不変条件・履歴の検査を含む `step` が安全性を保持することを示す。検査を外した操作本体 `transition` が常に安全だという主張ではない。
+
+| 関心 | 定理への入口 | 適用範囲の注意 |
+| --- | --- | --- |
+| 状態と履歴の整合性 | `preserves_invariants`、`preserves_history` | 有効な初期状態と、定理が要求する受理条件を前提に読む |
+| plain 入力の順序 | `plain_order`、`coalesce_plain_order` | Coalesce の条件は選択された入力についてのもの |
+| 消費の非重複 | `consumption_unique`、`once_only` | 前者は線上の位置ごとの消費記録、後者は同じ instance key の再挿入拒否についての定理 |
+| Branch の排他性 | `branch_exclusive` | 非選択 arm に値を流さないルーティング関数についての定理 |
+| Loop の有界性 | `loop_bounded` | 手動で追加した回数を含む実効上限。初期上限だけを永久に守るという意味ではない |
+| lease の排他性と失効拒否 | `lease_exclusive`、`invalid_lease_rejected` | 成功済み complete の完全に一致する再送は、状態を変えない例外 |
+| 終端の保持 | `terminal_absorbing`、`succeeded_retained` | モデル内の終端 execution と成功済み instance の保持 |
+
+lease が制限するのはモデルへの結果の確定である。失効 worker が既に行った外部副作用を取り消したり、外部サービスでの処理を exactly-once にしたりする保証ではない。Loop・Sub の別起動も区別するため、instance の識別では node と trigger に加えて path が重要になる。
+
+[Streams.lean](../Suimon/Theorems/Streams.lean) の `consumed_items_accounted` は、消費に対応する記録が残ることを示す。`channel_history` と合わせたアイテムの保存は安全性の主張であり、「置いたアイテムはいつか必ず消費される」という進行性を意味しない。同ファイルの `eos_final` は EOS の位置について、`spawn_without_eos` は EOS を前提にしない起動準備条件についての局所的な定理である。
+
+## 停止の判定と進行性
+
+`hasWork_iff` は、共有する候補列挙の中に状態を変える受理操作があることと `hasWork` の対応を示す。`idle_step_work` は idle 後も running なら作業があること、`idle_step_enters_blocked_no_work` は running から blocked に入るときに作業がないことを示す。いずれも [Safety.lean](../Suimon/Theorems/Safety.lean) から読める。
+
+[WorkComplete.lean](../Suimon/Theorems/WorkComplete.lean) の `hasWork_iff_all_ops` は、不変条件を満たす start 後の状態について、候補列挙の外も含む任意の通常 Op と `hasWork` の同値を証明する。Op の引数、ID、時刻を有限集合に制限しない。通常 Op は idle / cancel / manualRetry を除く操作で、進行は受理に加えて状態が変わることを指す。
+
+`idle_enters_blocked_no_progress` は、不変条件を満たす running 状態を idle が blocked に変えたなら、その直前に進行できる通常 Op が一つもなかったことを示す。start 済みという条件は受理された idle から導出する。証明では、任意の claim に対する新しい資格情報や、任意の worker 操作に対する lease 失効など、実際に受理され状態を変える候補を構成する。[Work.lean](../Test/Work.lean) の独立した乱択検査も回帰として残す。
+
+worker が実行を続けることや公平性は保証していない。たとえば start 後に一切操作を行わなければ、処理は進まない。
+
+## replay と外部環境
+
+[Replay.lean](../Suimon/Theorems/Replay.lean) の `replay_append` は、操作列を一括で再生しても途中で分けても同じ結果になることを示す。`replay_durable` は回復した操作列が記録済みのものと等しいという前提を使う。`replay_retains_success` は、再生後の受理操作列でも成功済み instance が保持されることを示す。
+
+イベントの境界まで接続する定理は、次の三つの層に分けて読む。
+
+- [TraceRecording.lean](../Suimon/Theorems/TraceRecording.lean) の `recordTransaction_checked` は、任意の受理された操作列から記録した command・facts・commit を実際の検査器が受理し、同じ境界状態を得ることを示す。トランザクション ID の新規性と時刻の単調性は、接続先の cursor に対する前提である。
+- [TraceWire.lean](../Suimon/Theorems/TraceWire.lean) の `recordTransaction_jsonl_roundtrip` は、記録、文字列への符号化、復号、検査を接続する。任意の v2 イベントの codec 往復を補題から証明し、往復することを仮定には置かない。文字列・数値・データの深さ・操作数に探索上限はない。CLI の `gen` と `check` は、この `encodeEvent` と `checkTextLine` を使用する。
+- [TraceTorn.lean](../Suimon/Theorems/TraceTorn.lean) の `recordCommands_torn_jsonl` は、生成した未コミットの command・facts 列を任意のレコード位置で切っても、回復結果が直前の確定境界のままであることを示す。切断位置は操作とその facts の間でもよく、その prefix の受理も証明する。[TraceRecovery.lean](../Suimon/Theorems/TraceRecovery.lean) の `check_replays_commands` と `recover_replays_prefix` は、受理された一般のイベント列と操作 replay の接続を与える。
+
+文字列往復の定理は suimon の出力する表記を対象にする。互換入力として受ける別の空白・キー順などは Lean 標準 JSON parser から同じ検査器へ渡す。この互換経路と標準 JSON parser による生成結果の読み取りは、[TraceText.lean](../Test/TraceText.lean) で交差検査する。
+
+回復 API は完全に読めた行を受け取る。物理的に途中で切れた最後の行の検出、DB・ファイルの flush や原子性はストレージ側の責務であり、これらの定理で実ストレージの永続性を証明したことにはならない。定義は [Trace/Check.lean](../Suimon/Trace/Check.lean) と [Trace/Wire.lean](../Suimon/Trace/Wire.lean)、利用方法は [イベント履歴の利用](trace-format.md) を参照。
+
+原子性、時計、ID の一意性、oracle、永続化に関する環境の前提は [Axioms.lean](../Suimon/Axioms.lean) の `Assumptions` に明示する。これを持つこと自体が、外部実装の DB や時計の正しさを証明するわけではない。
+
+## 証明と回帰検査の使い分け
+
+[Determinism.lean](../Test/Determinism.lean) は固定 oracle の下で操作順、lease 失効、再試行、消費後の再送を変えて結果を比較する。[Explore.lean](../Suimon/Explore.lean) は有限の候補と指定した深さで反例を探す。どちらも、探索対象にないグラフ・値・操作列の性質を一般化する根拠にはしない。
+
+[Schema.lean](../Test/Schema.lean) の検証対象は、このリポジトリの Schema が使うキーワードである。JSON Schema 規格全体を実装した検証器ではなく、未対応キーワードはエラーになる。
+
+検証の実行手順は [README](../README.md#検証) を参照。
+
+## 受入状況
+
+2026-09-19 時点で M2〜M4 の受入条件を満たした。
+
+| 段階 | 確認した根拠 |
 | --- | --- |
-| 逐次 | plain の線 |
-| ForEach | `forEach` |
-| Concurrency | 出力から複数の線を引き、`waitAll` で合流 |
-| Coalesce | `coalesce`。発火操作は `fireCoalesce` |
-| Sub | `subworkflow` |
-| yield できるノード | stream 出力を持つ `leaf`。出力操作は `emit` |
-| AllWait | `collect`。発火操作は `fireCollect` |
-| ノード種別ごとの全体上限 | `leaf` の `concurrency` 属性 |
+| M2 探索器と基本定理 | I1〜I4、T1・T3・T5・T6・T7・T8・T13 と `step_ok_cases` が未完の証明なしでビルド。全 12 例グラフの深さ 8 探索が完走し、反例ゼロ |
+| M3 ストリーム | T2・T4・T10 に加え、T9 は `schedule_determinism`、T12 の逆方向は `idle_enters_blocked_no_progress` で証明。`hasWork_iff_all_ops` が start 後の不変条件を満たす状態で全 Op の完全性を与える |
+| M4 再開 | イベント検査と command replay の一致、`recordTransaction_jsonl_roundtrip` による文字列往復、`recordCommands_torn_jsonl` による任意の未コミット prefix の回復を証明 |
 
-## 決めたこと
-
-- **配線の型**: 両端の種別が完全に一致する。plain → stream には plain 入力を受けて yield できるノードを明示的に挟む。stream → plain は AllWait（`collect`）。
-- **入力元**: 各入力に edge または graph entry がちょうど 1 つある。未接続入力は定義時に拒否する。名前の重複、cycle、部分グラフの境界と外側の arity の不一致も拒否する。body 内の Branch は、各 arm の全経路が body の出口に達する前に共通の Coalesce に合流することも検査する。逆向きには root / body 両方で Coalesce の入力を検査する。各入力の Branch 選択条件が、共通の Branch の入力条件と異なる arm 1 つの組に一致し、全 arm と1対1になることを要求する。これにより共有の plain 入力と正しく再合流した入れ子を許し、独立した leaf、同じ arm の重複、別 Branch の選択条件の混入を拒否する。
-- **境界チャネル**: entry/exits を独立した仮想チャネルで表す。entry のアイテムは start で置く。出口の結果は保持し、root の結果自体は未消費作業として数えない。body の出口は親が回収し、消費記録も残す。
-- **スコープ**: `Frame` が部分グラフの実行ごとのチャネルを分離する。インスタンスの一意性は `(node, trigger, path)`。path の要素は親 ID と iteration を符号化したスコープ ID。Loop の同じノードは異なる path で実行される。
-- **ノード種別ごとの全体上限**: `leaf` の `concurrency` 属性を、同じ静的なグラフ定義のノードごとに、ForEach の複数起動を横断して適用する。別々の部分グラフに同名のノードがあっても共有しない。
-- **AllWait**: `collect` は ItemId の昇順で整列し、JSON で符号化した象徴的なリスト ID を作る。到着順を結果に含めない。Concurrency の合流に使う `waitAll` は入力ポート名と ItemId の組を record の象徴的 ID にする。実データはモデル外。
-- **アイテム ID**: 暗号 digest の代わりに JSON 配列を符号化する。実装時に digest を用いる場合、衝突しない抽象識別子への射影が必要。同じ処理・入力・出力番号は同じ ID を使い、再送は同じ occurrence とみなす。別の occurrence は別 ID にする。
-- **Merge**: fan-out 後に同じ ItemId が別々の入力線から戻る場合も occurrence を保持するため、入力線と元 ID から新しい ID を作る。同じ線・同じ ID の再送は重複排除する。
-- **Branch / Coalesce（D1、2026-09-18 改訂）**: 非選択 arm は EOS のみ。`skip` がその先の plain ノードを cancelled として終端させる。body 内では必ず Coalesce に合流し、出口には値ちょうど 1 個を渡す。root では合流しない Branch も許す。Coalesce は単一 Branch の排他的な合流であり、独立した値の first-wins にはしない。`fireCoalesce` は選択した plain 入力の EOS と上流 succeeded を確認し、先頭アイテムを 1 回だけ転送して出力を EOS で閉じる。非選択経路の EOS がまだ届いていなければ、その到着・skip 完了まで body の回収を待つ。Coalesce 自身の skip は全入力が空の EOS の場合に限る。不正な由来の入力は実行前のグラフ検証で拒否する。
-- **body の回収**: 親の inputs/outputs と body の entries/exits は宣言順に対応する。`finishSubworkflow` が Sub / ForEach の完了を親に反映する。ForEach の出力 EOS は入力 EOS と全起動の成功後だけ置く。この EOS を受けて AllWait が発火する。Loop は `loopIterate` が body を回収し、次回の frame を作る。
-- **Loop（D3）**: 回数は 1 始まり。上限回の判定が true なら成功、false なら instance を failed、execution を blocked(`LOOP_LIMIT`) にする。`manualRetry` は leaf と loop に対応する。loop はその起動の上限を 1 増やし、最後の body の出力を次の回へ渡して running に戻す。終了済みの回は再実行しない。追加上限を `Instance.extraIterations` に保持し、実効上限は定義の `maxIterations + extraIterations` とする。同じ定義を使う別の Loop 起動の上限は変えない。leaf の試行上限追加と retryWait は従来どおり。
-- **lease**: attempt/token/instance と時刻を検証する。`now = until_` は無効。失効は abandoned、再試行待ちは `now + retrySeconds`。期限切れ attempt と期限到来 retry の処理を claim より先に行う。
-- **再送**: yield の操作 `emit` は EOS 前に限り、同じ線の同じ ID を重複排除する。complete は成功時の attempt/token/outputs 全体が一致する receipt のみ冪等。成功後の異なる出力は拒否する。終端 execution は状態を変えない（T13）。無効な worker 操作は終端後も拒否し、それ以外の操作は恒等として受理する。
-- **キャンセル**: running attempt と未完 instance を cancelled にし、完了・放棄済み attempt の履歴は保持する。
-- **idle と解除（D2、2026-09-18 改訂）**: `State.hasWork` は探索器と共有する候補列挙のうち、idle / cancel / manualRetry を除いて、受理され**状態を変える** Op があるかを調べる。冪等な complete の再送と、単に残っている未消費アイテムは作業に数えない。ready の claim、期限に進めた retryWait の promoteRetry、期限切れ lease の回収、activate / spawn、EOS の伝播、Loop の次の回、body の回収を含む。作業があれば idle は状態を維持する。作業がなければ、全 root ノードと出口が終端した場合は succeeded、それ以外は blocked。既存の `LOOP_LIMIT` や失敗理由は保持する。自動 resume は削除した。blocked から running への解除は manualRetry が行う。
-- **依存**: Lean 4.34.0 の標準ライブラリだけで実装した。Batteries/Mathlib は追加していない。設計書の Plausible による乱択は未導入で、現在は固定 LCG を用いる。再現性のある seed と有限候補集合による探索を提供する。
-- **facts の公開射影（D9、2026-09-19）**: `Suimon/Trace/Projection.lean` が wire format のフィールドを明示する。Instance 作成は id / node / path / trigger のみ。カウンタ・inputs・内部状態等は command の replay から復元する。attempt、lease、token、消費、execution 状態も公開フィールドを明示し、内部構造の ToJson 導出に結合しない。facts は必須で、欠落・余分なフィールド・改変を拒否する。区分内の順序は論理 ID で固定する。破壊的変更として `schema_version: 2` を必須にし、fixture を更新した。公開フィールドは snake_case とし、配置と消費の主体は `by_instance`、lease 期限は開始・更新とも `lease_until` に統一する。内部フィールド追加では wire format を変更しない。詳細は trace-format.md。
-
-## 設計書の命題に必要な修正
-
-### T2 は未来の進行と保存を分ける
-
-`start` の直後に worker が二度と動かなければ、アイテムは未消費のまま execution は running に留まる。元の「必ず消費されるか blocked/cancelled になる」は進行性を含み、公平性なしでは成り立たない。
-
-実装では、置いたトークン列を消さない、消費位置は単調、消費したアイテムには一意な消費記録と下流インスタンスがある、という保存の安全性を検査する。未消費のアイテムが残ることを違反にはしない。Filter が落としたアイテム、skip が終端させた入力にも消費記録がある。
-
-### T3 は path を含める
-
-Loop と Sub では、同じ node と trigger の組が複数のスコープに現れる。非重複の単位は設計書 I2 と同じ `(node, trigger, path)` とし、線の消費は `(channel ID, token index)` で識別する。lease が保証するのは有効な結果の確定の排他性であり、期限切れ worker の外部副作用を取り消すものではない。
-
-### T9 は A4 だけでは足りない
-
-同じ oracle でも、出力前に cancel した実行と正常終了した実行の出力は一致しない。任意の有限 prefix 同士も一致しない。また現モデルの Op は外部から oracle の結果を受け取るため、`Oracle` と Op 列の適合関係を全体の定理の前提に含める必要がある。
-
-全体の決定性には少なくとも、同じ graph/inputs、同じ決定的 oracle に適合した操作列、成功して stream が drain された実行、同じ安定した occurrence ID、再試行時の yield 重複排除、到着順によらない AllWait の結果、という前提が必要。一部を yield したまま失敗した実行との比較も除外する。
-
-`deterministic_item_multiset` / `deterministic_item_counts` は純粋な item 変換が permutation を保存すること、`deterministic_leaf` は A4 の下で leaf の入力 permutation が出力を変えないことを証明する。T9 全体は、これらの局所補題に加えて、`Suimon/Theorems/Adequacy.lean` の `schedule_determinism : ScheduleDeterminism` で証明済みである。
-
-一般命題の型は `Suimon/Execution.lean` の `ScheduleDeterminism`。同じ graph / inputs とスコープごとの同じ oracle に対する、任意長の受理された2操作列を量化する。候補列挙・worker 数・試行回数・探索深さの制限は付けない。`schedule_determinism` はこの型の証明であり、適合性や結果の一致を追加の仮定として受け取らない。`ConformingSteps` は実際の `step` の受理と各操作の制約を記録する操作列で、別の遷移意味論ではない。`ConformingSteps.replay` で実際の replay と結び付けた。
-
-`oracleConforms` は emit の所属、complete の plain 出力、Branch / Filter / Loop の選択を固定 oracle と照合する。さらに complete 時、各 stream 出力線の履歴が oracle の指定する多重集合を満たすことを要求する。指定が `[x,y]` でも、生の step は x だけ emit して complete すれば succeeded / drain に至れるため、「送った値は oracle の集合に含まれる」だけでは不十分である。`Test/OracleConformance.lean` はこの到達可能な反例を再現し、完全な通常実行と lease 失効後の再送実行は適合し、途中で打ち切る complete は不適合になることを確認する。`ScopedOracle` は論理 path をキーに含め、occurrence ID が worker や attempt に依存しない形を表す。
-
-`Suimon/Theorems/Determinism.lean` には次を一般補題として追加した。
-
-- `placeToken_duplicate` / `place_duplicate`: 消費位置に関係なく配置履歴全体で再送を排除する。EOS 後は再送も拒否する。
-- `emit_duplicate_channels`: 公開 step が受理した既存 occurrence の emit は、全チャネルの全フィールドを保存する。
-- `transition_administrative_channels` / `administrative_step_channels`: claim / renew / expireLease / promoteRetry / fail は、実際の操作本体を展開してもチャネルを変えない。
-- `retry_fragment_channels` / `retry_fragment_multisets`: これらの管理操作と既存 occurrence の再送だけからなる、任意長の受理された操作列は、全チャネルとその多重集合を保存する。新規 emit、complete、消費や body 操作を含む任意の実行同士の比較ではない。
-- `sortedItems_eq_of_perm` / `collect_value_deterministic`: 任意の入力 permutation について、Collect が実際に使う整列済みリストと結果 ID が一致する。Collect の操作列全体の証明とは区別する。
-
-完成時のデータフローを `Suimon/Semantics.lean` の `GraphEval` / `NodeEval` / `LoopEval` として定義した。これは完成結果の等式であり、完了可能性は含まない。`LoopEval` に回数上限はなく、Sub / ForEach の出口に「値ちょうど 1 個」も要求しない。上限や出口の個数は `step` が完了できるかを決めるだけで、完了した結果の値には影響しないため、決定性の仕様としてはこの広い形でよい。`GraphEval` を suimon の動作の定義として読まないこと。動作の定義は `step` だけである。leaf、Branch、Filter、Merge、Collect、Coalesce の入出力、Sub の回収、ForEach の各 trigger に対応する子評価、Loop の各反復を含む。`Suimon/Theorems/Semantics.lean` の `GraphEval.functional` は、この意味論の完成結果が一意であることを証明する。グラフの位相順序、子評価、Loop の反復について帰納し、子 frame の全チャネルも結果に含める。候補列挙や探索深さの制限は使わない。
-
-実行可能なモデルとの接続には、次の補題を追加した。
-
-- `Graph.validate` をグラフの大きさで停止する全域関数に変更した。`topology_of_validate`、`validate_port_names`、`input_single_source` で、検証成功から DAG の順位、ポート名の一意性、各入力の唯一の接続元を取り出す。`WellFormed` 自体の定義は引き続き検証成功である。
-- `ConformingSteps.layout` / `frames_certified` / `unique_frames` は、実際の操作列に沿って、チャネルの配置、frame のグラフの検証成功、scope の一意性を保つ。`retained_node` は既存 scope のグラフ定義が変わらないことを示す。
-- `ConformingSteps.completion` / `completedState` は、成功が root の `frameDone` を確認した idle に由来することと、成功時の root・全 frame・チャネルの構造を実際の操作列から取り出す。
-- `ConformingSteps.input_snapshot` は、任意長の受理操作列を通じて、既存 instance の node / path / trigger / inputs が変わらないことを、操作本体から証明する。manualRetry も対象に含む。
-- `ConformingSteps.retains_closed_channel` は、閉じたチャネルの配置履歴が以後変わらないことを示す。`Effects.place_value` / `place_items` は配置処理の正確な更新と item 集合への効果、`consume_item_receipt` は消費時に追加される記録、`succeededDrained_input_receipt` は drain された入力の全 item に消費記録があることを示す。
-
-配置・入力の消費・body の生成と回収は補助関数へ分解した。EOS・plain cardinality の検査順と再送の重複排除は維持している。内部の通常ノード照合は `State.nodeInstance?` に集約し、`(node, path, trigger = none)` で照合する。外部 trace の ID 形式は変えていない。
-
-`Suimon/Theorems/LeafOutputs.lean` の `complete_stream_output_final` は、適合し吸収されない `complete` を先頭に持つ任意長の受理操作列について、その leaf の各 stream 出力線が、操作列の最後で閉じており、oracle が指定する多重集合とちょうど一致することを証明する。`LeafFinal.lean` / `PlainOutputs.lean` / `NodeValues.lean` で plain 出力も接続し、成功した leaf の結果と oracle の対応を実行履歴から導出した。
-
-**実行履歴から完成時の意味論への適合性も証明済みである。** `frame_adequacy` はグラフの大きさに関する帰納法で、実際の成功・drain 実行から `GraphEval` の証人を構成する。証明の接続は次のとおり。
-
-- `NodeValues.lean` / `Stream.lean` / `Coalesce.lean` は primitive ノードの入出力を、`Compound.lean` / `ForEach.lean` / `Loop.lean` は複合ノードの出力チャネル方程式を証明する。
-- `Start.lean` は実際の root の start と子 frame の seeding から `FrameStart` を導出する。`FrameTree.lean` / `FrameOwners.lean` は祖先 frame と所有インスタンスの対応を操作列全体で保持する。
-- `SubEval.lean` / `ForEachEval.lean` は activate / spawn と body の完了を履歴から取り出す。ForEach の各入力 item は実際の消費記録を介して子 frame に対応する。出力線のないノードも、`FrameCompletes.nodes` の完了したインスタンスを使って扱う。
-- `LoopChain.lean` の `loop_eval_active` は実際の反復列を `LoopEval` に変換する。通常の `loopIterate false` と、上限到達後の `manualRetry` の両方を扱い、前回の body 出力と false の oracle 判定を次回へ接続する。
-- `NodeEval.lean` の `completed_node_eval` は全ノード種別を扱う。成功実行の中で cancelled になったノードは skip に由来し、入力の欠落による抑制と一致することも導出する。
-- `ChildFrames.lean` / `ChildPartition.lean` は実在する子 frame の網羅と重複の排除を証明する。`ChannelAssembly.lean` の `frame_channels_equations` は親 frame 自身と全子 frame の entry / edge / exit の組み立てが、実状態の `subtreeBags` に一致することを証明する。
-- `Adequacy.lean` の `frame_adequacy` と `GraphEval.functional` を組み合わせ、`schedule_determinism` が元の `ScheduleDeterminism` を閉じる。`Suimon.lean` から公開し、テスト側でもこの型の証明が import できることを検査する。
-
-全線の観測と drain の定義は Execution に集約し、乱択検査も同じ定義を使う。`schedule_determinism` / `frame_adequacy` の依存公理は Lean 標準の `propext`、`Classical.choice`、`Quot.sound` のみ。未完証明や独自の未検証公理は使わない。
-
-`Test/Determinism.lean` は12例と共有入力・入れ子の Coalesce の計14グラフに対し、6つの固定 oracle 設定、16通りの schedule seed、故障なし / lease 失効 / retryable fail の3モードを使う。候補列挙から、固定した Branch / Filter / Loop の結果と leaf 出力に適合する操作だけを選ぶ。stream は設定ごとに0〜2個の全 occurrence を出してから complete する。oracle の選択に schedule seed や attempt ID を使わない。故障なしの基準実行と比較し、4,032実行、3,948比較を行う。
-
-再試行モードは最初に claim した leaf に1回の故障を注入する。stream を持つ leaf では、schedule seed が選んだ部分集合または全件を emit した後に失効・失敗させる。`expireLease` の時刻進行で他の lease も失効した場合は、全失効 attempt を回収してから retry 時刻へ進め、promoteRetry を済ませて再 claim する。この有限範囲では2回目の attempt を再び故障させない。
-
-ドライバは attempt ごとの送信済み集合を State と別に記録し、再 claim 後にも同じ occurrence ID の全件を実際に再送してから complete する。重複排除された emit は State を変えなくても試行に残し、同じ attempt では各 ID を1回だけ送って停止性を保つ。再送が channel の履歴を変えないことと、下流で既に消費されたアイテムの再送まで実行したことも検査する。現在の固定 seed 群では1,304失効、1,248 retryable fail、2,552 promoteRetry / 再 claim、506再送（うち消費後482件）を通る。
-
-各試行に256操作の上限を設け、成功・drain に至らない場合は失敗とする。比較できなかった試行を捨てない。全線の EOS、root の出口以外の未消費アイテムなし、子 frame の回収を検査し、論理 channel ID ごとにアイテムを整列して多重集合を比較する。root の線だけでなく、Sub / Loop / ForEach の子 frame の entry / edge / exit も対象。重複数を保持し、格納順は無視する。実際に到着順が変わった比較が存在することも必須にする。反例には graph、両 seed、故障モード、2本の操作列と比較結果を出す。
-
-cancel、恒久失敗、試行上限を超える繰り返し故障、manualRetry はこの有限比較の対象外。一般定理には操作数や retry 回数の制限はなく、leaf / Loop の manualRetry を経た成功・drain 実行も含む。cancel や失敗で終わった実行は、定理の比較対象である成功・drain 実行には含まれない。
-
-検査の感度確認として、Collect を一時的に到着順のままリスト ID を作る実装に変えたところ、streaming の oracle seed 2、schedule seed 1 / 7 の組で多重集合の不一致を検出した。変更は検証後に戻した。
-
-再送の感度確認では、重複排除の対象を配置履歴全体から未消費部分だけに変えた。streaming の oracle seed 1、schedule seed 1、lease 失効モードで、消費済みアイテムの再送時に `INVARIANT` 拒否を検出した。ガードによる拒否も検査失敗として扱うため、壊れた再送を候補から除いて成功扱いにはしない。この変更も検証後に戻した。
-
-## Lean の証明と実行時の検証
-
-`step` は操作の前提と lease を検証し、`transition` の結果を `commit` に渡す。`commit` は不変条件と状態履歴の検査に成功した結果だけを返す。これは仕様の一部であり、ガード無しの `transition` が常に不変条件を保存する、という主張ではない。探索器は `INVARIANT` による拒否も反例として報告するため、ガードで実装の欠陥を隠さない。
-
-全 Lean ファイルに未完証明や独自の未検証公理はない。公理 A1–A5 は `Assumptions` の値として表現し、Lean カーネルに新しい命題を無条件で追加していない。
-
-| 対象 | 現在の証明・検証 |
-| --- | --- |
-| `step` | `step_ok_cases`。受理された step は、恒等な吸収か、認可・`prepare`・不変条件・履歴検査を全て通った実行のどちらか。独立した関係 `Step` は置かない（D10） |
-| I1–I3 | `preserves_invariants` / `replay_invariants`。有効な初期状態からガード付き step/replay が保持。例グラフの初期状態は実行検査 |
-| I4 | `preserves_history`。許可された status 遷移、チャネルの prefix 保存、消費位置と時計の単調性 |
-| T1 | `plain_order`。activate 受理時の入力 EOS・上流 succeeded の条件。`coalesce_plain_order` は選択した入力について同じ条件を保証 |
-| T2 | `channel_history` / `consumed_items_accounted`。上記の保存に関する安全性の形 |
-| T3 | `consumption_unique` と `succeeded_retained` / `replay_retains_success`。同じ消費位置の重複記録禁止と成功状態の保持 |
-| T4 | `eos_final`。有効な境界で EOS が末尾にある。prefix 保存と併せ、実行検査で EOS 後の配置を拒否 |
-| T5 | `once_only`。同じ instance key の再挿入拒否。Concurrency の合流（`waitAll`）/ AllWait（`collect`）/ Coalesce の操作全体については回帰テストも実施 |
-| T6 | `branch_exclusive`。実際に使用するルーティング関数が非選択ポートへ値を出さない。操作全体の回帰テストあり |
-| T7 | `loop_bounded`。追加分を含む実効上限以下であることと、親に属する body frame 数がカウンタに一致することを保持 |
-| T8 | `lease_exclusive` / `invalid_lease_rejected`。running attempt は高々 1、無効な lease は冪等再送以外拒否 |
-| T9 | **一般証明完了。** `schedule_determinism : ScheduleDeterminism`。`frame_adequacy` が実際の成功・drain 操作列から ForEach / Loop / DAG の `GraphEval` と全線の観測一致を構成し、`GraphEval.functional` で2実行を比較する。lease 失効・再送・manualRetry を含み、候補列挙や探索深さに制限しない。固定 oracle の全線多重集合比較も回帰として継続 |
-| T10 | `spawn_without_eos`。入力先頭の item による準備条件に EOS は不要。実際の spawn 受理は回帰テスト |
-| T11 | `replay_append` / `replay_durable` / `complete_idempotent` / `replay_retains_success`。Op replay の合成則と成功状態の保持。JSONL の encode/check 逆変換と torn-log 回復は回帰テスト |
-| T12 | `idle_step_work`。公開 step の idle 後が running なら `hasWork` が真。`hasWork_iff` / `work_step_eq` で、共有候補中に状態を変える受理操作が存在することを証明。`idle_step_enters_blocked_no_work` は公開 step が新たに blocked にするなら候補内に進行可能な操作がないことを証明。全 Op に対する候補列挙の完全性は未証明 |
-| T13 | `terminal_absorbing`。すべての Op に対して終端状態は変わらない |
-
-M1 と M3 の T9 受入条件は完了。T12 の全 Op に対する候補列挙の完全性、M4 のイベント codec と回復の一般的な対応証明などは引き続き未完であり、M2–M4 全体の完了は宣言しない。M5 は対象外。
-
-## 探索と回帰
-
-探索候補は有限である。各 entry に象徴的アイテム 1 個、yield できるノードの出力に最大 2 種の ID、全 Branch arm、Filter の真偽、Loop の真偽、指定 worker 数、lease 失効、再試行、キャンセルを含める。時間は固定 tick の更新に加え、lease 期限と retryAt に進める。任意の実データ・任意の長さの stream の全探索という意味ではない。
-
-候補列挙を `Suimon/Candidates.lean` に置き、探索と `hasWork` の両方で使う。`hasWork` は標準設定の候補を検査し、idle の判定を含まない実行関数で循環依存を避ける。数える操作についてはこの関数と公開 `step` が一致する。claim 用の ID は使用済み attempt/token を調べて新しいものを選ぶため、外部履歴の ID と偶然衝突して ready を作業なしと判定することはない。この列挙が全 Op の進行を代表できるという完全性までは、これらの定理からは得られない。
-
-`Test/Work.lean` は探索器の候補列挙を使用せず、各種 Op と別の時刻・ID・oracle 結果を生成する。初期状態から実際の Op を適用した状態だけで「通常 Op が受理されて状態が変わるなら hasWork が真」を乱択検査する。claim / fireCoalesce の候補を意図的に抜いた場合に検査が検出することも確認する。Op のコンストラクタ追加時にはこのテストの更新をコンパイル時に要求する。これは完全性の一般証明の代わりではない。
-
-状態そのものを JSON 化して重複を除き、BFS で指定深さまでの到達状態を調べる。深さは primitive token イベント数ではなく Op 数。状態上限に達した場合は `complete: false` と非ゼロ終了を返し、反例ゼロの完走として扱わない。
-
-回帰には菱形の Concurrency、N 字、Branch、Coalesce、共有入力と入れ子の合流、body に Branch → Coalesce を持つ Loop と外側の Sub、上限 2 の Loop と手動再試行、yield できるノード → ForEach → AllWait、Merge、Filter を含む。idle は ready・retryWait・回収待ち frame を見落とさないこと、冪等な再送で終了を妨げないことを確認する。状態の status を直接書き換えた resume テストは削除し、複数失敗の一部を回復させた実際の操作列から、依存停止と残りの manualRetry を確認する。`DEPENDENCIES_UNRESOLVED` がユーザー指定の失敗コードだった場合も、通常操作による自動解除をしない。CLI テストは不正な Coalesce 配線の拒否、JSON Schema 適合、正しい履歴、claim 欠落、EOS 後の yield（`emit`）、偽の token/lease_until、sequence/txn の破損、未確定末尾、seed の再現性を確認する。
-
-`Test/graphs/coalesce-stages.json` は Branch → Coalesce → Branch → Coalesce の多段例で、深さ8の探索で両段を完了できる。前段・後段の arm の全4組み合わせを root と Sub の body で実行し、前段の合流前には後段を動かせないこと、前段の arm を後段の合流へ混ぜた配線を静的に拒否することも回帰に含める。
-
-`DEPENDENCIES_UNRESOLVED` という文字列だけでは「failed インスタンスがない」とは言えない。二つの失敗の片方だけを manualRetry して完了させ、idle に入ると、この理由で止まりつつもう片方を再試行できる。初期状態からこの経路を回帰にしている。`ExecStatus.failed` は予約状態で、現在の遷移からは設定しない。
-
-テストは `Test/Artifacts.lean` で CLI の実プロセスを起動し、`Test/Schema.lean` で現在の JSON Schema が使うキーワードを検証する。Lean の標準ライブラリだけを使う。Schema 検証は Draft 2020-12 全体の実装ではなく、このリポジトリの型・必須フィールド・追加フィールド禁止・参照・選択肢・値や配列の制約に対応する。未対応キーワードや未解決の参照は検証前にエラーとする。
-
-`Test/TraceProjection.lean` は公開フィールドの固定、非公開 Instance フィールド変更と channel 格納順に対する facts の不変性、余分な内部フィールド・改変・facts 欠落・旧 version の拒否、replay が元の内部状態を復元することを検査する。消費と lease 更新の実際の操作列から snake_case の facts を検証し、旧 `byInstance` / `until_` を Schema と検査器の両方が拒否することも確認する。フィールド変更のテストだけは射影関数の入力を意図的に変えたもので、変更後の状態の到達可能性を主張しない。
+`bin/test` は全通過。T9 の 3,948 組の比較、T12 の独立した操作生成、v2 Schema・旧 fixture・破損履歴・CLI・標準 JSON parser との交差検査も通過した。主要定理の公理依存を調べ、Lean 標準の `propext` / `Classical.choice` / `Quot.sound` のみであることを確認した。適用範囲は上記の各節に示した前提に従う。

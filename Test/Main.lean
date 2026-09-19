@@ -3,12 +3,26 @@ import Test.Examples
 import Test.Artifacts
 import Test.Work
 import Test.TraceProjection
+import Test.TraceText
 import Test.Determinism
 import Test.OracleConformance
 open Lean Suimon Suimon.Test
 
 -- Keep the unrestricted T9 theorem available through the public library.
 example : ScheduleDeterminism := schedule_determinism
+
+example (s next : State) (op : Op) (safe : Invariants s) (started : s.started = true)
+    (work : op.countsAsWork = true) (accepted : step s op = .ok next) (changed : next ≠ s) : s.hasWork = true :=
+  hasWork_complete s next op safe started work accepted changed
+
+example (g : Graph) (ops : List Op) (txn : String) (time : Nat) (s : State) (events : List Trace.Event)
+    (recorded : Trace.recordTransaction (.initial g) ops 1 txn time = .ok (s, events)) : Trace.check g events = .ok s :=
+  Trace.recordTransaction_roundtrip g ops txn time s events recorded
+
+example (g : Graph) (ops : List Op) (txn : String) (time : Nat) (s : State) (events : List Trace.Event)
+    (recorded : Trace.recordTransaction (.initial g) ops 1 txn time = .ok (s, events)) :
+    Trace.checkText g (events.map Trace.encodeEvent) = .ok s :=
+  Trace.recordTransaction_jsonl_roundtrip g ops txn time s events recorded
 
 private def ensure (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
@@ -556,6 +570,13 @@ private def traceTests : IO Unit := do
   | .ok a, .ok b => ensure (a == b) "recovery included uncommitted suffix"
   | _, _ => throw (IO.userError "recovery failed")
   let initial := State.initial minimal
+  for (ops, txn, time, code) in [
+      ([], "empty", 0, "EMPTY_TRANSACTION"),
+      (minimalOps.take 1, "", 0, "EMPTY_TRANSACTION_ID"),
+      (minimalOps.take 3, "old-clock", 1, "CLOCK_REGRESSION")] do
+    match Trace.recordTransaction initial ops 1 txn time with
+    | .error r => ensure (r.code == code) s!"unexpected recorder rejection: {r.code}"
+    | .ok _ => throw (IO.userError s!"recorder accepted {code}")
   match Trace.recordTransaction initial (minimalOps.take 3) 1 "atomic" 0 with
   | .error r => throw (IO.userError r.code)
   | .ok (state, events) =>
@@ -604,5 +625,6 @@ def main (args : List String) : IO Unit := do
   Artifacts.run
   Work.run
   TraceProjection.run
+  TraceText.run
   Determinism.run
   OracleConformance.run
