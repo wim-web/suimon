@@ -1,0 +1,22 @@
+{
+  "Main.lean": "5cac5b834714b3873d8dbe82232768ca827f2c3efbe12b48811d499893147241",
+  "Suimon/Candidates.lean": "bf825af3f27e34c987d8cd4971cb5fd712ca48f6cf5b5b48ecb13de9fbb1f1d3",
+  "Suimon/Explore.lean": "a540c9a811702456ff70434e51f02a0bc5df0d0247e082da20cc2e20f2bf8d81",
+  "Suimon/Graph.lean": "8aa816c346bee869798e174caace242b513960651754a772a10b67c0b7d708ef",
+  "Suimon/Invariants.lean": "eebac5dda7828138e993ce3e52fa5acdab699e8fb3719c60f8834cd549f04823",
+  "Suimon/Op.lean": "e39ec69ef17b190616b3b37c8c9d0a931a1dd3c09034bacbc61779405974c13d",
+  "Suimon/Oracle.lean": "eb4885573b30bd1c4127417c4981e71cf5b9f458826adde189b8a0c8b67928e3",
+  "Suimon/State.lean": "5e3e0743ba3b1c486b6b599ed44290391781b1ef305547d6c07b4dd648a6dffe",
+  "Suimon/Step.lean": "10bad44679ccb027d32f2744a3c77b2ff9afdbd86afb521db9a9d3084bc20538",
+  "Suimon/Trace/AtomCodec.lean": "0c171baa7613fd39f47a2386d1e1fbd6e2ec94667d92dddcf5c7393be56cec34",
+  "Suimon/Trace/AtomGrammar.lean": "7c095a1cca9d25e32e48a0619a83b466a8d47a5ecb6c776f2021074dfa1d0cff",
+  "Suimon/Trace/Check.lean": "41e2805e9741fa53eb4131996100375d73e54a84cc7769f364da04679df223c9",
+  "Suimon/Trace/Event.lean": "ffb4e952b24daed201d1990b6f1c27b8b3b6b33fdb75f82df04ac9c65aa4af50",
+  "Suimon/Trace/JsonEquality.lean": "483073e31dc23cbfdfbae36cc971b7d57457418512d754402af6df141bae4a3b",
+  "Suimon/Trace/OpAtoms.lean": "fdf552402808a254c98e9ff0d363fa0302da15ede534be8a9c2bf2c89ce7b187",
+  "Suimon/Trace/Projection.lean": "c978910b81a56f09e31b6cab1ced898966a4dfd94bfa903985ded53bfbe5c8b0",
+  "Suimon/Trace/Text.lean": "65d5d42a05af3526d24f2a8ad80c54d28f6762f31e2c60f192dc4f20fb91bb5c",
+  "Suimon/Trace/Wire.lean": "4b29b69f2cb3367cf0fd7c2eaad823690dd7a32531279eda1ad84657414dd806",
+  "Test/Examples.lean": "c1dff721b1d8c982faa24292de0bdcd2f812ac01994481ee58d21389154f3ae0",
+  "lean-toolchain": "8733782dc070a99b312039cda424f601b80f3be6f6f512627da5ba25adc27632"
+}

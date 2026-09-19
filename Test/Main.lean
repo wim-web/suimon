@@ -6,6 +6,7 @@ import Test.TraceProjection
 import Test.TraceText
 import Test.Determinism
 import Test.OracleConformance
+import Test.GoCorpus
 open Lean Suimon Suimon.Test
 
 -- Keep the unrestricted T9 theorem available through the public library.
@@ -28,14 +29,18 @@ private def ensure (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
 
 private def applyOp (s : State) (op : Op) : IO State := do
-  match step s op with
+  let result := step s op
+  GoCorpus.record s op result
+  match result with
   | .error r => throw (IO.userError s!"{repr op}: {r.code}: {r.message}")
   | .ok next =>
     ensure (invariants next) s!"invariant failed after {repr op}"
     return next
 
-private def reject (s : State) (op : Op) (code : String) : IO Unit :=
-  match step s op with
+private def reject (s : State) (op : Op) (code : String) : IO Unit := do
+  let result := step s op
+  GoCorpus.record s op result
+  match result with
   | .error r => ensure (r.code == code) s!"expected {code}, got {r.code}: {repr op}"
   | .ok _ => throw (IO.userError s!"unexpected acceptance: {repr op}")
 

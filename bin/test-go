@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+if [[ -n "${LAKE:-}" ]]; then
+  lake_bin="$LAKE"
+elif command -v lake >/dev/null 2>&1; then
+  lake_bin="$(command -v lake)"
+else
+  lake_bin="$HOME/.elan/bin/lake"
+fi
+go_test_tmp="$(mktemp -d "${TMPDIR:-/tmp}/suimon-go.XXXXXX")"
+trap 'rm -rf "$go_test_tmp"' EXIT
+export SUIMON_GO_CORPUS="$go_test_tmp/corpus.jsonl"
+: > "$SUIMON_GO_CORPUS"
+"$lake_bin" build suimon_go_oracle
+bin/test
+export SUIMON_LEAN_ORACLE="$repo_root/.lake/build/bin/suimon_go_oracle"
+cd go
+go test -count=1 -v ./...
+go vet ./...
