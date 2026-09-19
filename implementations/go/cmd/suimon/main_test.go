@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	suimon "github.com/wim-web/suimon/implementations/go"
+	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
 func TestNatOptionDigitSeparators(t *testing.T) {

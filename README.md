@@ -22,7 +22,7 @@ lake exe suimon check /tmp/suimon.jsonl --graph Test/graphs/streaming.json
 
 ## Go 実装
 
-各言語の実装は `implementations/{language}/` にまとめています。Go 版は `implementations/go/` にあります。
+各言語の実装は `implementations/{language}/` にまとめています。Go 版は `implementations/go/` にあり、ライブラリ本体を `src/`、実行例を `example/` に分けています。
 
 Lean の実行可能な定義から生成した [Go パッケージと CLI](implementations/go/README.md) も利用できます。状態遷移・グラフ検証・履歴検査・探索を Go だけで実行でき、実行時に Lean や cgo は不要です。
 

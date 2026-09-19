@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	suimon "github.com/wim-web/suimon/implementations/go"
+	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
 const usage = `suimon check <trace.jsonl> --graph <graph.json>

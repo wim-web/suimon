@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	suimon "github.com/wim-web/suimon/implementations/go"
+	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
 // leaf creates one node with a plain input and output for this example.

@@ -4,6 +4,8 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 
 グラフ検証、全 23 種類の操作、状態遷移の不変条件検査、候補列挙、探索、履歴生成、v2 JSONL の検査と未コミット末尾の回復を実装しています。ノードの利用者コードや外部副作用を実行する worker は、Lean 版と同様に含みません。
 
+ライブラリ本体とテストは `src/`、実行例は `example/`、CLI は `cmd/suimon/` に置いています。`go.mod` と生成元を記録する `lean-sources.json` はこのディレクトリ直下にあります。
+
 ## 最初の実行例
 
 リポジトリ直下で実行すると、2つのノードを作り、接続して文字列を処理します。
@@ -33,7 +35,7 @@ CLI の数値引数には `--count 1_000` のような区切りを使えます�
 ## パッケージ
 
 ```go
-import suimon "github.com/wim-web/suimon/implementations/go"
+import suimon "github.com/wim-web/suimon/implementations/go/src"
 
 graph, err := suimon.ParseGraph(graphJSON)
 if err != nil {
@@ -60,12 +62,12 @@ state = next
 
 | Lean の原本 | Go |
 | --- | --- |
-| `Graph.lean` | `types.go`, `graph.go` |
-| `State.lean`, `Oracle.lean` | `types.go`, `state.go` |
-| `Op.lean`, `Step.lean` | `types.go`, `step.go` |
-| `Invariants.lean` | `invariants.go` |
-| `Candidates.lean`, `Explore.lean` | `explore.go` |
-| `Trace/` の公開形式・記録・検査 | `trace.go`, `json.go` |
+| `Graph.lean` | `src/types.go`, `src/graph.go` |
+| `State.lean`, `Oracle.lean` | `src/types.go`, `src/state.go` |
+| `Op.lean`, `Step.lean` | `src/types.go`, `src/step.go` |
+| `Invariants.lean` | `src/invariants.go` |
+| `Candidates.lean`, `Explore.lean` | `src/explore.go` |
+| `Trace/` の公開形式・記録・検査 | `src/trace.go`, `src/json.go` |
 | `Main.lean` | `cmd/suimon/main.go` |
 
 Lean との比較を含む検証は、リポジトリ直下で実行します。

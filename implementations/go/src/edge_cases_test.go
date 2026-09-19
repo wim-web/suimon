@@ -9,7 +9,7 @@ import (
 
 func TestLeanGraphValidation(t *testing.T) {
 	o := newOracle(t)
-	paths, err := filepath.Glob("../../Test/graphs/*.json")
+	paths, err := filepath.Glob("../../../Test/graphs/*.json")
 	if err != nil {
 		t.Fatal(err)
 	}

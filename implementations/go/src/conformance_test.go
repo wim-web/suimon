@@ -14,7 +14,7 @@ import (
 
 func readGraph(t *testing.T, name string) Graph {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "Test", "graphs", name+".json"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "Test", "graphs", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestLeanRegressionCorpus(t *testing.T) {
 
 func TestLeanCandidatesAndWalks(t *testing.T) {
 	o := newOracle(t)
-	paths, err := filepath.Glob("../../Test/graphs/*.json")
+	paths, err := filepath.Glob("../../../Test/graphs/*.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestLeanCandidatesAndWalks(t *testing.T) {
 
 func TestLeanGenerationAndSearch(t *testing.T) {
 	o := newOracle(t)
-	paths, _ := filepath.Glob("../../Test/graphs/*.json")
+	paths, _ := filepath.Glob("../../../Test/graphs/*.json")
 	cfg := DefaultConfig()
 	for _, path := range paths {
 		g := readGraph(t, strings.TrimSuffix(filepath.Base(path), ".json"))
@@ -287,7 +287,7 @@ func TestFixturesAndTornTransactions(t *testing.T) {
 	}{{"minimal", "minimal", false}, {"coalesce", "coalesce", false}, {"loop-retry", "loop", false}, {"missing-attempt", "minimal", true}, {"after-eos", "minimal", true}} {
 		t.Run(tc.trace, func(t *testing.T) {
 			g := readGraph(t, tc.graph)
-			b, err := os.ReadFile("../../Test/traces/" + tc.trace + ".jsonl")
+			b, err := os.ReadFile("../../../Test/traces/" + tc.trace + ".jsonl")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -343,7 +343,7 @@ func TestFixturesAndTornTransactions(t *testing.T) {
 func TestLeanMalformedTraces(t *testing.T) {
 	o := newOracle(t)
 	g := readGraph(t, "minimal")
-	b, err := os.ReadFile("../../Test/traces/minimal.jsonl")
+	b, err := os.ReadFile("../../../Test/traces/minimal.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
