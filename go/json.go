@@ -70,6 +70,10 @@ func mapped[A, B any](xs []A, f func(A) B) List[B] {
 	}
 	return out
 }
+
+// find returns a pointer to a shallow copy, never to the slice element.
+// Write record edits back explicitly (for example with setInstance); nested
+// slices and pointers still share storage and must be treated as read-only.
 func find[T any](xs []T, f func(T) bool) *T {
 	for _, x := range xs {
 		if f(x) {
