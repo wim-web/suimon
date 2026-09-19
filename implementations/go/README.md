@@ -14,7 +14,7 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 go -C implementations/go run ./example
 ```
 
-`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。ノードの定義・処理関数・状態遷移は [example/main.go](example/main.go) の1ファイルにあります。[手順と出力](example/README.md)も参照してください。
+`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。[main.go](example/main.go) は `createGraph()` と `graph.run()` を呼ぶ入口です。グラフの組み立ては [graph.go](example/graph.go)、ノードの処理は [nodes.go](example/nodes.go)、状態遷移を進める部分は [runner.go](example/runner.go) に分けています。[手順と出力](example/README.md)も参照してください。
 
 ## CLI
 
