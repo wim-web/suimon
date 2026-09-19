@@ -1,6 +1,8 @@
 package main
 
+import "context"
+
 func main() {
 	graph := createGraph()
-	graph.run()
+	printResult(graph.Run(context.Background()))
 }

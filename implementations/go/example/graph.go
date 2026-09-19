@@ -3,9 +3,9 @@ package main
 import suimon "github.com/wim-web/suimon/implementations/go/src"
 
 // createGraph defines the topology, input, and processing functions.
-func createGraph() runnableGraph {
-	return runnableGraph{
-		definition: suimon.Graph{
+func createGraph() suimon.Workflow {
+	return suimon.Workflow{
+		Graph: suimon.Graph{
 			Nodes: suimon.List[suimon.Node]{leaf("trim"), leaf("uppercase")},
 			Edges: suimon.List[suimon.Edge]{
 				{Src: suimon.PortRef{Node: "trim", Port: "out"}, Dst: suimon.PortRef{Node: "uppercase", Port: "in"}},
@@ -13,10 +13,12 @@ func createGraph() runnableGraph {
 			Entries: suimon.List[suimon.PortRef]{{Node: "trim", Port: "in"}},
 			Exits:   suimon.List[suimon.PortRef]{{Node: "uppercase", Port: "out"}},
 		},
-		input: "  hello suimon  ",
-		handlers: map[string]func(string) string{
-			"trim":      trim,
-			"uppercase": uppercase,
+		Inputs: []suimon.ValueInput{
+			{Entry: suimon.PortRef{Node: "trim", Port: "in"}, Items: []suimon.InputItem{{ID: "input", Value: "  hello suimon  "}}},
+		},
+		Bindings: []suimon.Binding{
+			{Path: suimon.Path{"trim"}, Leaf: trim},
+			{Path: suimon.Path{"uppercase"}, Leaf: uppercase},
 		},
 	}
 }

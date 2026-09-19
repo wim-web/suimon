@@ -2,7 +2,7 @@
 
 Lean の実行可能な定義から生成した、標準ライブラリだけに依存する Go パッケージです。Go 1.23 以降で使えます。実行時に Lean・C ABI・cgo は必要ありません。
 
-グラフ検証、全 23 種類の操作、状態遷移の不変条件検査、候補列挙、探索、履歴生成、v2 JSONL の検査と未コミット末尾の回復を実装しています。ノードの利用者コードや外部副作用を実行する worker は、Lean 版と同様に含みません。
+グラフ検証、全23種類の操作、状態遷移の不変条件検査、候補列挙、探索、履歴生成、v2 JSONL の検査と未コミット末尾の回復を実装しています。`Workflow.Run` は、この制御モデルを使って登録されたノードの処理関数を実行します。全10種類のノード、ストリーム、並列実行、再試行、手動再開、保存と復元を扱います。[実行APIと対応範囲](runtime.md)を参照してください。
 
 ライブラリ本体とテストは `src/`、実行例は `example/`、CLI は `cmd/suimon/` に置いています。`go.mod` と生成元を記録する `lean-sources.json` はこのディレクトリ直下にあります。
 
@@ -14,7 +14,7 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 go -C implementations/go run ./example
 ```
 
-`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。[main.go](example/main.go) は `createGraph()` と `graph.run()` を呼ぶ入口です。グラフの組み立ては [graph.go](example/graph.go)、ノードの処理は [nodes.go](example/nodes.go)、状態遷移を進める部分は [runner.go](example/runner.go) に分けています。[手順と出力](example/README.md)も参照してください。
+`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。[main.go](example/main.go) は `createGraph()` とライブラリの `Run` を呼ぶ入口です。グラフの組み立ては [graph.go](example/graph.go)、ノードの処理は [nodes.go](example/nodes.go)、結果表示は [result.go](example/result.go) に分けています。[手順と出力](example/README.md)も参照してください。
 
 ## CLI
 
@@ -33,6 +33,10 @@ CGO_ENABLED=0 go -C implementations/go build -o /tmp/suimon-go ./cmd/suimon
 CLI の数値引数には `--count 1_000` のような区切りを使えます。Lean と同じく、先頭・末尾の `_` や連続する `__` は拒否します。この表記は CLI の引数用で、`ParseNat` や JSON の数値には適用しません。
 
 ## パッケージ
+
+通常の実行では `Workflow` にグラフ・処理関数・入力を設定して `Run(ctx)` を呼びます。処理関数の登録、途中出力、キャンセル、手動再開、checkpointの使い方は [runtime.md](runtime.md) にあります。
+
+`Step` は、外部workerの操作を明示的に扱う場合やモデルを検査する場合の下位APIです。
 
 ```go
 import suimon "github.com/wim-web/suimon/implementations/go/src"
@@ -68,7 +72,10 @@ state = next
 | `Invariants.lean` | `src/invariants.go` |
 | `Candidates.lean`, `Explore.lean` | `src/explore.go` |
 | `Trace/` の公開形式・記録・検査 | `src/trace.go`, `src/json.go` |
+| `Execution.lean` の実行可能な条件 | `src/execution.go` |
 | `Main.lean` | `cmd/suimon/main.go` |
+
+`src/workflow*.go` はこれらのモデル操作を呼び出すGoの実行器です。ノード処理をgoroutineで動かし、状態と値の確定は単一の制御ループで行います。
 
 Lean との比較を含む検証は、リポジトリ直下で実行します。
 
@@ -79,6 +86,8 @@ bin/test-go
 このコマンドは元の `bin/test` も実行します。既存の回帰テストで用いる操作とその前後の状態・拒否理由・facts を出力して Go で再検査し、全例グラフに対する候補操作と不正操作、履歴生成、探索結果も Lean と比較します。Go が出した JSONL を Lean で読む交差検査、破損履歴と未コミット末尾の検査も含みます。
 
 コンパイルした両 CLI についても、全 fixture の `check`、全例グラフの `explore` と複数 seed の `gen`、既定グラフ、生成 JSONL の双方向検査を実行します。数値引数の区切り・検査順序、余分なキー、数値の小数表記、空行、CRLF、途中で切れた末尾も比較します。終了コードと stdout / stderr の内容を検査し、JSON の表記差と `INVALID_JSON` の parser 依存の説明文だけを比較時に除外します。
+
+実行器のテストでは、Leanから取得した全操作・全ノード種別の一覧と、実処理で作られた履歴の網羅性を照合します。その履歴をLeanで再検査し、worker数や到着順を変えた結果、失効、再試行、復元も確認します。並行処理にはGoのrace検査も実行します。
 
 Go だけの検証は `go -C implementations/go test ./...` です。この場合、Lean が必要な比較テストは明示的に skip します。CI では `bin/test-go` を使って比較を必須にしています。
 

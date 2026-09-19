@@ -1,6 +1,6 @@
 # suimon
 
-逐次・ForEach・Concurrency・Sub に加え、実行中にアイテムを出す yield と、全件の処理完了を待つ AllWait を同じワークフローで扱う、Lean 4 による制御仕様です。ノードのコードを実行する製品ライブラリではなく、実行可能な状態遷移、イベント履歴の検査器、有界探索器を提供します。
+逐次・ForEach・Concurrency・Sub に加え、実行中にアイテムを出す yield と、全件の処理完了を待つ AllWait を同じワークフローで扱う、Lean 4 による制御仕様とGo実装です。Leanには状態遷移、イベント履歴の検査器、有界探索器を置き、Goの `Workflow.Run` がその制御モデルを使ってノードの処理関数を実行します。
 
 [設計理由](docs/suimon-design.md) / [保証の読み方](docs/implementation.md) / [イベント履歴の利用](docs/trace-format.md)
 
@@ -24,7 +24,7 @@ lake exe suimon check /tmp/suimon.jsonl --graph Test/graphs/streaming.json
 
 各言語の実装は `implementations/{language}/` にまとめています。Go 版は `implementations/go/` にあり、ライブラリ本体を `src/`、実行例を `example/` に分けています。
 
-Lean の実行可能な定義から生成した [Go パッケージと CLI](implementations/go/README.md) も利用できます。状態遷移・グラフ検証・履歴検査・探索を Go だけで実行でき、実行時に Lean や cgo は不要です。
+Lean の実行可能な定義から生成した [Go パッケージと CLI](implementations/go/README.md) も利用できます。グラフと処理関数・入力を設定して `Workflow.Run` を呼ぶと、配線に従ってストリームや並列処理を進めます。実行時に Lean や cgo は不要です。[実行APIと対応範囲](implementations/go/runtime.md)を参照してください。
 
 ```sh
 go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl --graph ../../Test/graphs/minimal.json
