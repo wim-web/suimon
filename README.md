@@ -20,15 +20,27 @@ lake exe suimon check /tmp/suimon.jsonl --graph Test/graphs/streaming.json
 
 `check` の結果の読み方は [イベント履歴の利用](docs/trace-format.md) を参照してください。`explore` は指定深さを完走した場合だけ 0 を返し、反例と `--max-states` による打ち切りは 1 です。`gen` は最大 `count` 操作の再現可能な履歴を標準出力へ出します。終端に到達すると早く終了します。全オプションは `lake exe suimon --help` で確認できます。
 
+## Go 実装
+
+Lean の実行可能な定義から生成した [Go パッケージと CLI](go/README.md) も利用できます。状態遷移・グラフ検証・履歴検査・探索を Go だけで実行でき、実行時に Lean や cgo は不要です。
+
+```sh
+go -C go run ./cmd/suimon check ../Test/traces/minimal.jsonl --graph ../Test/graphs/minimal.json
+```
+
+原本は引き続き Lean の定義です。Go 版との一致は `bin/test-go` で比較検証します。
+
 ## 検証
 
-テストも Lean で実装しています。`elan` / `lake` とシェルで実行できます。
+Lean 仕様のテストは `elan` / `lake` とシェルで実行できます。
 
 ```sh
 bin/test
 ```
 
 `bin/test` は未完の証明・独自の未検証公理の検出、Lean のビルド、回帰テスト、Schema 検証、破損履歴の拒否、全例グラフの有界探索を実行します。`LAKE` で実行ファイルを指定できます。同じ検証を GitHub Actions に設定しています。
+
+Go 版との比較も含める場合は、Go を用意して `bin/test-go` を実行してください。GitHub Actions もこのコマンドで両実装を検証します。
 
 決定性の定理は [Adequacy.lean](Suimon/Theorems/Adequacy.lean) の `schedule_determinism` です。同じ oracle に適合する成功・drain 実行を比較します。定理の前提・限界と、有限の回帰検査との違いは [保証の読み方](docs/implementation.md) を参照してください。
 
