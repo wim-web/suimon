@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -202,42 +203,87 @@ func TestUILiveRunFinalFrame(t *testing.T) {
 }
 
 func TestRunStreamCursorSendsEachEventAndValueOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	node := leaf("source")
+	node.Outputs = suimon.List[suimon.Port]{{Name: "items", Kind: "stream"}}
+	ready, finish := make(chan *suimon.Task, 1), make(chan struct{})
+	workflow := suimon.Workflow{
+		Graph:  suimon.Graph{Nodes: suimon.List[suimon.Node]{node}, Entries: suimon.List[suimon.PortRef]{{Node: "source", Port: "in"}}, Exits: suimon.List[suimon.PortRef]{{Node: "source", Port: "items"}}},
+		Inputs: []suimon.ValueInput{{Entry: suimon.PortRef{Node: "source", Port: "in"}, Items: []suimon.InputItem{{ID: "input", Value: "seed"}}}},
+		Bindings: []suimon.Binding{{Path: suimon.Path{"source"}, Leaf: func(ctx context.Context, task *suimon.Task) (suimon.Values, error) {
+			ready <- task
+			select {
+			case <-finish:
+				return suimon.Values{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}}},
+		Options: suimon.RunOptions{Now: func() suimon.Nat { return suimon.N(1000) }},
+	}
+	execution, err := workflow.Start(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer execution.Stop()
+	var task *suimon.Task
+	select {
+	case task = <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
 	cursor := runStreamCursor{}
-	result := suimon.RunResult{Snapshot: suimon.Snapshot{Graph: createGraph().Graph, Values: map[string]json.RawMessage{}}}
+	initial := execution.Observe()
+	first, err := cursor.next(initial, 0)
+	if err != nil || first == nil || first.Graph == nil || first.Offset != 0 || first.Done {
+		t.Fatalf("invalid initial frame: %#v %v", first, err)
+	}
 	const count, valueSize = 80, 1024
 	encodedBytes := 0
+	received := first.Offset + len(first.Events)
 	for i := range count {
-		event := suimon.Event{SchemaVersion: suimon.N(2), Sequence: suimon.N(uint64(i + 1)), Type: "transaction.committed", Data: json.RawMessage(`{}`)}
-		result.Snapshot.Events = append(result.Snapshot.Events, event)
-		id := event.Sequence.String()
-		result.Snapshot.Values[id] = json.RawMessage(`"` + strings.Repeat("x", valueSize) + `"`)
-		frame := cursor.next(result, int64(i), false, nil)
-		if frame == nil || frame.Offset != i || len(frame.Events) != 1 || len(frame.Values) != 1 || frame.Values[id] == nil || frame.Outputs != nil {
-			t.Fatalf("frame %d retransmits history or misses new data: %#v", i, frame)
+		key := fmt.Sprint(i)
+		if err := task.Emit("items", key, strings.Repeat("x", valueSize)); err != nil {
+			t.Fatal(err)
 		}
-		if (frame.Graph != nil) != (i == 0) {
-			t.Fatal("graph must be sent exactly once")
+		update := execution.Observe()
+		frame, err := cursor.next(update, int64(i+1))
+		id := suimon.StreamItemID(nil, "source", "items", key)
+		if err != nil || frame == nil || frame.Offset != received || len(frame.Events) == 0 || len(frame.Values) != 1 || frame.Values[id] == nil || frame.Outputs != nil || frame.Graph != nil {
+			t.Fatalf("frame %d retransmits history or misses new data: %#v %v", i, frame, err)
 		}
+		received += len(frame.Events)
 		encoded, err := json.Marshal(frame)
 		if err != nil {
 			t.Fatal(err)
 		}
 		encodedBytes += len(encoded)
-		if duplicate := cursor.next(result, int64(i), false, nil); duplicate != nil {
-			t.Fatal("unchanged snapshot produced another frame")
+		if duplicate, err := cursor.next(update, int64(i+1)); err != nil || duplicate != nil {
+			t.Fatal("unchanged snapshot produced another frame", err)
 		}
 	}
-	if encodedBytes > 2*count*valueSize {
+	if encodedBytes > count*(valueSize+2048) {
 		t.Fatalf("transport grew beyond one copy of each payload plus metadata: %d bytes", encodedBytes)
 	}
-	// Completion still arrives when no events changed, without another snapshot.
-	final := cursor.next(result, count, true, nil)
-	if final == nil || !final.Done || final.Offset != count || len(final.Events) != 0 || len(final.Values) != 0 || final.Graph != nil || final.Outputs == nil {
-		t.Fatalf("invalid completion frame: %#v", final)
+	close(finish)
+	if _, err := execution.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	completed := execution.Observe()
+	// A status change can follow the last data commit without new events.
+	pending := completed
+	pending.Settled, pending.Stopped = false, false
+	if _, err := cursor.next(pending, count+1); err != nil {
+		t.Fatal(err)
+	}
+	final, err := cursor.next(completed, count+2)
+	if err != nil || final == nil || !final.Done || final.Offset != completed.EventCount() || len(final.Events) != 0 || len(final.Values) != 0 || final.Graph != nil || final.Outputs == nil || len((*final.Outputs)[0].Items) != count {
+		t.Fatalf("invalid completion frame: %#v %v", final, err)
 	}
 	// A new HTTP response starts a fresh cursor.
-	restarted := (&runStreamCursor{}).next(result, 0, true, nil)
-	if restarted.Graph == nil || restarted.Offset != 0 || len(restarted.Events) != count || len(restarted.Values) != count {
-		t.Fatal("new stream inherited the previous stream cursor")
+	restarted, err := (&runStreamCursor{}).next(completed, 0)
+	if err != nil || restarted.Graph == nil || restarted.Offset != 0 || len(restarted.Events) != completed.EventCount() || len(restarted.Values) != count+1 {
+		t.Fatal("new stream inherited the previous stream cursor", err)
 	}
 }

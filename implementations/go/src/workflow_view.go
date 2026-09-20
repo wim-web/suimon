@@ -11,6 +11,7 @@ import (
 type runtimeView struct {
 	state    State
 	snapshot Snapshot
+	valueIDs []string // immutable prefix, in commit order; values themselves are in snapshot
 }
 
 // Internal counters let tests observe actual idle polls and candidate probes.
@@ -85,6 +86,10 @@ func copyValues(values map[string]json.RawMessage) map[string]json.RawMessage {
 func (e *Execution) result(v *runtimeView) RunResult {
 	e.metrics.results.Add(1)
 	snapshot := Snapshot{cloneGraph(v.snapshot.Graph), copyEvents(v.snapshot.Events), copyValues(v.snapshot.Values)}
+	return RunResult{copyPublicState(v.state), copyResultPorts(v), snapshot}
+}
+
+func copyResultPorts(v *runtimeView) List[ResultPort] {
 	ports := List[ResultPort]{}
 	for _, p := range v.snapshot.Graph.Exits {
 		out := ResultPort{Port: p}
@@ -97,7 +102,7 @@ func (e *Execution) result(v *runtimeView) RunResult {
 		}
 		ports = append(ports, out)
 	}
-	return RunResult{copyPublicState(v.state), ports, snapshot}
+	return ports
 }
 
 func (e *Execution) observe() (*runtimeView, bool, error, <-chan struct{}) {

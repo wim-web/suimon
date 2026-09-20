@@ -171,6 +171,34 @@ for {
 
 `Observe` は状態・履歴・値を複製しません。`update.Result()` を呼ぶと、その観測時点の確定データの独立したコピーを取得できます。同じカーソルでもメンテナンスによるデータ更新はあり、新しく `Observe` すると最新の確定データを参照します。モデルの状態変化を述語で待つ `WaitFor` と、最新データを読む `execution.Result()` も引き続き使えます。
 
+### 確定データを差分で読む
+
+UI 配信などで履歴を逐次取得する場合は `ExecutionUpdate.SnapshotSince` を使います。前回返された `SnapshotCursor` より後のイベント・新しい値だけをコピーし、モデルの状態や過去の値を全走査しません。変更がない呼び出しは O(1)・割当なしで、変更時のコストは追加イベント・値のサイズに比例します。最初の呼び出しではグラフと、その時点までの全確定データをコピーします。
+
+```go
+var cursor suimon.SnapshotCursor // 読み手ごとに保持する
+update := execution.Observe()
+delta, err := update.SnapshotSince(cursor)
+if err != nil {
+    return err
+}
+// delta.Graph が非 nil なら初期グラフ。
+// delta.Events を履歴へ追記し、delta.Values を item ID で追加する。
+cursor = delta.Cursor
+```
+
+`update.EventCount()` と `cursor.EventCount()` は確定済みイベントの件数を O(1) で返します。`SnapshotCursor` は実行状態通知用の `ExecutionCursor` とは別で、イベントと値の受信位置を持ちます。任意の読み手が独立したカーソルを持てます。空の差分では `Events` / `Values` が nil になることがあります。
+
+差分は `Observe` が取得した時点の確定境界に固定され、呼び出し後に進んだ実行は含みません。返したグラフ・イベント・値は呼び出し側で変更しても runtime に影響しません。保存処理中または保存に失敗したデータは、イベントにも値にも公開しません。確定した値 ID は同じ値に対応し、同じ値の再確定で `Values` に再登場することはありません。
+
+ゼロ値のカーソルは初回取得用です。他の `Execution` のカーソル、観測時点より未来のカーソル、ゼロ値の `ExecutionUpdate` は `ErrInvalidSnapshotCursor` で拒否します。カーソルは保存・転送せず、`Restore` 後はゼロ値から始めます。復元後の初回差分には回復した履歴と値を含み、未コミット末尾と不確実な値は通常の復元規則に従って除外します。
+
+出力だけ必要な場合は `update.Outputs()` を呼びます。観測時点の出口の値をコピーし、グラフ・全履歴・モデル状態は複製しません。出口のチャネルを調べるコストと出力値のコピーは必要なので、[Go example の配信処理](example/ui.go)では完了時にだけ呼びます。100ms ごとの配信チェックで `Result()` を呼ぶ必要はありません。
+
+この最適化は観測・配信のための読み取りに対するものです。`Result()` の明示的な全量コピーや、モデルの `Step`・永続化など、実行そのもののコストは別です。値の差分を取り出すため、runtime は既存の値ストアに加え、確定した値 ID の追記順の一覧を保持します。
+
+### キャンセルとエラーの扱い
+
 `Execution.Cancel` と実行 context のキャンセルはモデルに `cancel` を記録し、動作中の関数の context をキャンセルします。`Execution.Stop` は実行器を停止して context をキャンセルしますが、モデルを終端にせず、保存した状態からの復元を可能にします。`Wait` にだけ渡した context の終了は待機を止めるだけです。途中状態は `Result()`、特定条件までの待機は `WaitFor(ctx, predicate)` で取得できます。
 
 branch / filter / loop の error・panic・不正な戻り値・oracle 不一致は、node・path・定義パス・操作・入力 ID・反復数を持つ `*DecisionError` として実行器を停止します。`errors.Is` / `errors.As` で元の error や `*Reject` を取得できます。モデルにはこれらの判定自体の fail / retry 操作がないため、最後の確定状態を保持し、関数や外部条件を修正して復元します。leaf の失敗は引き続きモデルの `fail` です。

@@ -44,6 +44,7 @@ type workflowRuntime struct {
 	state       State
 	events      List[Event]
 	values      map[string]json.RawMessage
+	valueIDs    []string
 	startValues map[string]json.RawMessage
 	inputs      List[Input]
 	time        Nat
@@ -70,8 +71,16 @@ func (r *workflowRuntime) publishStatus(settled, stopped bool, err error) {
 	defer r.execution.mu.Unlock()
 	e := r.execution
 	initial := e.view == nil
+	if initial {
+		// A restored snapshot has no per-value commit positions. Seed one
+		// baseline prefix; subsequent commits append only newly stored IDs.
+		r.valueIDs = make([]string, 0, len(r.values))
+		for id := range r.values {
+			r.valueIDs = append(r.valueIDs, id)
+		}
+	}
 	if initial || len(e.view.snapshot.Events) != len(r.events) {
-		e.view = &runtimeView{r.state, Snapshot{r.graph, r.events, r.values}}
+		e.view = &runtimeView{state: r.state, snapshot: Snapshot{r.graph, r.events, r.values}, valueIDs: r.valueIDs}
 		if e.changed != nil {
 			close(e.changed)
 		}
@@ -340,6 +349,11 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	r.state = next
 	r.events = journal
 	r.values = values
+	// Append only after persistence succeeds, before publishing the view. Older
+	// observations retain their prefix, just as they do for r.events.
+	for id := range newValues {
+		r.valueIDs = append(r.valueIDs, id)
+	}
 	r.time = journal[len(journal)-1].RecordedAt
 	r.ids.transaction.used[txn] = true
 	if op.Kind == "claim" && !absorbed {

@@ -113,39 +113,34 @@ type runFrame struct {
 	Error     string                          `json:"error,omitempty"`
 }
 
-// The cursor belongs to one HTTP response. Graphs and item values are immutable
-// during a run, so only the first frame needs the graph and each value is sent
-// once. The offset lets the receiver reject missing or repeated event batches.
+// The runtime cursor belongs to one execution. It returns only the new committed
+// events and immutable values, without copying or scanning the existing history.
 type runStreamCursor struct {
-	started bool
-	events  int
-	values  map[string]struct{}
+	after suimon.SnapshotCursor
 }
 
-func (cursor *runStreamCursor) next(result suimon.RunResult, elapsedMS int64, done bool, runErr error) *runFrame {
-	if cursor.started && len(result.Snapshot.Events) == cursor.events && !done {
-		return nil
+func (cursor *runStreamCursor) next(update suimon.ExecutionUpdate, elapsedMS int64) (*runFrame, error) {
+	delta, err := update.SnapshotSince(cursor.after)
+	if err != nil {
+		return nil, err
 	}
-	frame := &runFrame{Offset: cursor.events, Events: result.Snapshot.Events[cursor.events:], Values: map[string]json.RawMessage{}, ElapsedMS: elapsedMS, Done: done}
-	if !cursor.started {
-		frame.Graph = &result.Snapshot.Graph
-		cursor.values = map[string]struct{}{}
+	done := update.Settled || update.Stopped
+	if delta.Graph == nil && len(delta.Events) == 0 && len(delta.Values) == 0 && !done {
+		return nil, nil
 	}
-	for id, value := range result.Snapshot.Values {
-		if _, sent := cursor.values[id]; !sent {
-			frame.Values[id] = value
-			cursor.values[id] = struct{}{}
-		}
+	frame := &runFrame{Graph: delta.Graph, Offset: cursor.after.EventCount(), Events: delta.Events, Values: delta.Values, ElapsedMS: elapsedMS, Done: done}
+	if frame.Values == nil {
+		frame.Values = map[string]json.RawMessage{}
 	}
 	if done {
-		frame.Outputs = &result.Outputs
+		outputs := update.Outputs()
+		frame.Outputs = &outputs
 	}
-	if runErr != nil {
-		frame.Error = runErr.Error()
+	if update.Err != nil {
+		frame.Error = update.Err.Error()
 	}
-	cursor.started = true
-	cursor.events = len(result.Snapshot.Events)
-	return frame
+	cursor.after = delta.Cursor
+	return frame, nil
 }
 
 func streamRun(w http.ResponseWriter, r *http.Request, workflow suimon.Workflow) {
@@ -170,17 +165,20 @@ func streamRun(w http.ResponseWriter, r *http.Request, workflow suimon.Workflow)
 	cursor := runStreamCursor{}
 	for {
 		// WaitForChange signals settled-state changes, not every model commit.
-		// A small example can poll the committed view to show in-flight values.
+		// Polling an unchanged committed prefix is O(1); changed prefixes copy
+		// only their new events and values through SnapshotSince.
 		update := execution.Observe()
-		result := update.Result()
-		done := update.Settled || update.Stopped
-		if frame := cursor.next(result, time.Since(started).Milliseconds(), done, update.Err); frame != nil {
+		frame, err := cursor.next(update, time.Since(started).Milliseconds())
+		if err != nil {
+			return // A partial response is rejected as truncated by the client.
+		}
+		if frame != nil {
 			if err := encoder.Encode(frame); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
-		if done {
+		if frame != nil && frame.Done {
 			return
 		}
 		select {
