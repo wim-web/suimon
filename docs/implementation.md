@@ -46,6 +46,27 @@ lease が制限するのはモデルへの結果の確定である。失効 work
 
 worker が実行を続けることや公平性は保証していない。たとえば start 後に一切操作を行わなければ、処理は進まない。
 
+## 期限による起床の保証
+
+[Scheduler.lean](../Suimon/Scheduler.lean) は実際の `State` から lease失効・retry・自動renew の期限を取り出し、待機期限、pollの有効性、stall通知、実行するメンテナンス操作を決める。`service` は選んだ操作を既存の `step` に渡す。証明は [Theorems/Scheduler.lean](../Suimon/Theorems/Scheduler.lean) にある。
+
+| 定理 | 保証 |
+| --- | --- |
+| `expiry_covered`, `retry_covered` | 対象instanceの期限が期限一覧から欠落しない |
+| `pending_keeps_poll_enabled` | 期限があれば、stall通知済みでもpollを無効化しない |
+| `stall_keeps_deadlines` | 期限が到来したpollはstall中でも待機を解除する |
+| `no_stall_with_due_work` | 判定に用いた時刻でメンテナンス期限が到来済みならstallを新規通知しない |
+| `mandatory_before_renewals` | 期限到来済みの失効・retry処理を任意の自動renewより先に選ぶ |
+| `message_wakes` | job終了などの通知で待機を解除する |
+| `eventually_wakes` | 下記の前提の下で、期限を持つ待機は有限回の機会のうちに解除される |
+| `eventually_services` | 下記の前提の下で、待機中の状態に期限処理があれば `step` によるメンテナンスを試行し、状態更新の結果または拒否理由を返す |
+
+進行の前提は `PollProgress` に明記する。時計は単調で、任意の有限時刻にいずれ達し、pollはどの時点以降にも実行機会があることを要求する。対象はメッセージや期限を待つ間の状態であり、メッセージが来たら待機を解除して状態と期限を取り直す。Goでこの前提を満たすには、実行器が停止されず、保存コールなどが戻り、実際にpollが行われる必要がある。固定時計、停止済み実行器、戻らない保存コールについて進行を主張しない。
+
+これは待機からメンテナンス試行へ進む条件付きの証明である。各handlerの終了、各instanceの処理完了、ワークフロー全体の成功を証明したものではない。`step` の拒否はエラーとして明示され、黙って待機し続ける結果にはならない。
+
+Go側はこの期限ポリシーを `src/scheduler.go` に翻訳し、実行ループから使用する。3600通りの時刻・所有権・通知状態などでLeanと比較し、実際のGoループにも「stall中のretry」「外部workerのlease失効」「探索と通知の間の時計の変化」の回帰検査を置く。Goの制御フロー、goroutine、永続化との接続全体をLeanが形式検証したわけではなく、この接続は差分・実行・race検査の対象である。
+
 ## replay と外部環境
 
 [Replay.lean](../Suimon/Theorems/Replay.lean) の `replay_append` は、操作列を一括で再生しても途中で分けても同じ結果になることを示す。`replay_durable` は回復した操作列が記録済みのものと等しいという前提を使う。`replay_retains_success` は、再生後の受理操作列でも成功済み instance が保持されることを示す。

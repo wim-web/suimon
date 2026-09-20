@@ -75,6 +75,7 @@ state = next
 | `Candidates.lean`, `Explore.lean` | `src/explore.go` |
 | `Trace/` の公開形式・記録・検査 | `src/trace.go`, `src/json.go` |
 | `Execution.lean` の実行可能な条件 | `src/execution.go` |
+| `Scheduler.lean` の期限・待機・メンテナンス選択 | `src/scheduler.go` |
 | `Main.lean` | `cmd/suimon/main.go` |
 
 `src/workflow*.go` はこれらのモデル操作を呼び出すGoの実行器です。ノード処理をgoroutineで動かし、状態と値の確定は単一の制御ループで行います。
@@ -90,6 +91,8 @@ bin/test-go
 コンパイルした両 CLI についても、全 fixture の `check`、全例グラフの `explore` と複数 seed の `gen`、既定グラフ、生成 JSONL の双方向検査を実行します。数値引数の区切り・検査順序、余分なキー、数値の小数表記、空行、CRLF、途中で切れた末尾も比較します。終了コードと stdout / stderr の内容を検査し、JSON の表記差と `INVALID_JSON` の parser 依存の説明文だけを比較時に除外します。
 
 実行器のテストでは、Leanから取得した全操作・全ノード種別の一覧と、実処理で作られた履歴の網羅性を照合します。その履歴をLeanで再検査し、worker数や到着順を変えた結果、失効、再試行、復元も確認します。並行処理にはGoのrace検査も実行します。
+
+期限ポリシーにはLeanの証明もあります。stall中も期限とpollを維持し、時計とpollの進行を前提としてメンテナンスを試行する性質が対象です。Goとの3600通りの比較と実行ループの回帰検査を併用します。[前提と限界](../../docs/implementation.md#期限による起床の保証)も参照してください。
 
 Go だけの検証は `go -C implementations/go test ./...` です。この場合、Lean が必要な比較テストは明示的に skip します。CI では `bin/test-go` を使って比較を必須にしています。
 

@@ -52,6 +52,8 @@ Go 版との比較も含める場合は、Go を用意して `bin/test-go` を�
 
 決定性の定理は [Adequacy.lean](Suimon/Theorems/Adequacy.lean) の `schedule_determinism` です。同じ oracle に適合する成功・drain 実行を比較します。定理の前提・限界と、有限の回帰検査との違いは [保証の読み方](docs/implementation.md) を参照してください。
 
+期限の保持・起床と条件付きのメンテナンス試行は [Scheduler.lean](Suimon/Theorems/Scheduler.lean) で証明しています。Goの実行器は対応する期限ポリシーを使い、stall中もretryやlease期限を処理します。Goへの翻訳と実行環境との接続は比較・実行テストで検証します。
+
 M2〜M4 の受入条件は達成済みです。停止判定の完全性、JSONL の往復、未コミット末尾の回復を含む証明と検証結果は、[受入状況](docs/implementation.md#受入状況) に記録しています。
 
 例グラフは [Test/Examples.lean](Test/Examples.lean) が原本です。共用する JSON は [Test/graphs/](Test/graphs/)、履歴は [Test/traces/](Test/traces/) に置きます。フィクスチャを更新するときは次を実行します。

@@ -71,6 +71,10 @@ func emit(ctx context.Context, task *suimon.Task) (suimon.Values, error) {
 
 待機中は次の renew・lease 失効・retry・stale 猶予の論理期限を保持し、ticker では時計と期限の比較だけを行います。候補の探索は操作や job 終了の通知、または期限到来後に再開します。状態が変わらない待機中に `Step` を繰り返し試行しません。
 
+stallを通知しても、他instanceのretry・lease期限のpollは維持します。探索後に時計を再確認し、期限到来済みならstall通知より先にメンテナンスへ戻ります。待機に入る直前にも期限を比較します。メンテナンスはworker枠を使わず、失効・retryを任意の自動renewより優先します。
+
+この期限ポリシーの原本は [Scheduler.lean](../../Suimon/Scheduler.lean) です。期限の保持と起床、時計とpollの進行を前提とするメンテナンス試行をLeanで証明し、Goの対応関数を差分テストで照合しています。[証明の範囲と前提](../../docs/implementation.md#期限による起床の保証)を参照してください。
+
 状態公開と `Wait` の通知で全履歴を JSON 化・復号する処理もありません。`Result` / `Wait` が結果を返す時点で、呼び出し側が変更可能な独立したコピーを作ります。`WaitFor` の述語にも状態のコピーを渡します。モデルの `Step` 自体の状態複製・不変条件検査のコストは残ります。
 
 実行器の attempt・lease token・transaction ID は短い接頭辞と連番で採番します。復元時は放棄済みを含む全 attempt と確定済み transaction から使用済み集合を復元し、外部指定の ID との衝突も避けます。探索器の `ClaimCredentials` は Lean と同じ候補生成専用です。
@@ -134,6 +138,8 @@ if errors.Is(err, suimon.ErrBlocked) {
 `Execution.Cancel` と実行 context のキャンセルはモデルに `cancel` を記録し、動作中の関数の context をキャンセルします。`Execution.Stop` は実行器を停止して context をキャンセルしますが、モデルを終端にせず、保存した状態からの復元を可能にします。`Wait` にだけ渡した context の終了は待機を止めるだけです。途中状態は `Result()`、特定条件までの待機は `WaitFor(ctx, predicate)` で取得できます。
 
 branch / filter / loop の error・panic・不正な戻り値・oracle 不一致は、node・path・定義パス・操作・入力 ID・反復数を持つ `*DecisionError` として実行器を停止します。`errors.Is` / `errors.As` で元の error や `*Reject` を取得できます。モデルにはこれらの判定自体の fail / retry 操作がないため、最後の確定状態を保持し、関数や外部条件を修正して復元します。leaf の失敗は引き続きモデルの `fail` です。
+
+判定結果の保存に失敗した場合は、`DecisionError` で包まず `CommitError` を返します。判定関数の失敗とストレージの失敗を外側の型で区別できます。
 
 `WaitFor` が正常終端に到達しても述語を満たさなかった場合は `ErrConditionNotMet` を返します。実行器の明示的な停止を表す `ErrStopped` とは区別します。
 
