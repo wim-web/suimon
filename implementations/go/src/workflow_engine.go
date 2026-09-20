@@ -30,6 +30,7 @@ type runtimeJob struct {
 	cancel   context.CancelFunc
 }
 type workflowRuntime struct {
+	ids         runtimeIDs
 	cursor      int
 	execution   *Execution
 	ctx         context.Context
@@ -220,14 +221,7 @@ func (r *workflowRuntime) slot() bool {
 // apply prepares both model state and payloads, persists one complete snapshot,
 // then publishes it. Workers never mutate State or the payload store directly.
 func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) error {
-	txn := Identity([]string{"run", natLen(r.events).Inc().String()})
-	used := map[string]bool{}
-	for _, e := range r.events {
-		used[e.Txn] = true
-	}
-	for used[txn] {
-		txn += "'"
-	}
+	txn := r.ids.transaction.peek()
 	recordedAt := r.time
 	if opTime(op) == nil {
 		recordedAt = r.now()
@@ -293,6 +287,11 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	r.events = journal
 	r.values = values
 	r.time = journal[len(journal)-1].RecordedAt
+	r.ids.transaction.used[txn] = true
+	if op.Kind == "claim" && !absorbed {
+		r.ids.attempt.used[op.Auth.Attempt] = true
+		r.ids.token.used[op.Auth.Token] = true
+	}
 	for _, j := range r.jobs {
 		if terminal(r.state.Status) {
 			j.obsolete = true
@@ -413,8 +412,7 @@ func (r *workflowRuntime) advance() (bool, error) {
 			candidates = append(candidates, Op{Kind: "finishSubworkflow", Inst: i.ID}, Op{Kind: "loopIterate", Inst: i.ID, Done: true})
 		}
 		if i.Status == "ready" {
-			auth := ClaimCredentials(r.state, i)
-			auth.Now = r.now()
+			auth := r.credentials(i)
 			candidates = append(candidates, Op{Kind: "claim", Auth: auth, Worker: "local"})
 		}
 	}

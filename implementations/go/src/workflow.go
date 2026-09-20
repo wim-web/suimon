@@ -424,6 +424,7 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 			return nil, rejected
 		}
 	}
+	r.ids = newRuntimeIDs(r.state, r.events)
 	r.publish(false, nil)
 	go r.loop()
 	return e, nil
