@@ -7,6 +7,7 @@ import Test.TraceText
 import Test.Determinism
 import Test.OracleConformance
 import Test.GoCorpus
+import Test.Scheduler
 open Lean Suimon Suimon.Test
 
 -- Keep the unrestricted T9 theorem available through the public library.
@@ -633,3 +634,4 @@ def main (args : List String) : IO Unit := do
   TraceText.run
   Determinism.run
   OracleConformance.run
+  SchedulerTests.run

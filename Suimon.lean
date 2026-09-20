@@ -7,6 +7,7 @@ import Suimon.Invariants
 import Suimon.Explore
 import Suimon.Trace.Check
 import Suimon.Execution
+import Suimon.Scheduler
 import Suimon.Theorems.Safety
 import Suimon.Theorems.Replay
 import Suimon.Theorems.Streams
@@ -38,3 +39,4 @@ import Suimon.Theorems.Adequacy
 import Suimon.Theorems.WorkComplete
 import Suimon.Theorems.TraceCodec
 import Suimon.Theorems.TraceTorn
+import Suimon.Theorems.Scheduler
