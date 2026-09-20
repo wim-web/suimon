@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +68,67 @@ func TestCLI(t *testing.T) {
 		if code != tc.code {
 			t.Errorf("%v: exit %d, want %d\n%s\n%s", tc.args, code, tc.code, &out, &stderr)
 		}
+	}
+}
+
+type failingWriter struct {
+	failAfter, writes int
+	err               error
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes > w.failAfter {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
+func TestCLIOutputErrors(t *testing.T) {
+	graph := "../../../../Test/graphs/minimal.json"
+	trace := "../../../../Test/traces/minimal.jsonl"
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	truncated := filepath.Join(t.TempDir(), "truncated.jsonl")
+	if err := os.WriteFile(truncated, []byte(first+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		stderr    bool
+		failAfter int
+	}{
+		{"gen", []string{"gen", "--seed", "1", "--count", "3"}, false, 0},
+		{"gen-partial-output", []string{"gen", "--seed", "1", "--count", "3"}, false, 2},
+		{"check-result", []string{"check", trace, "--graph", graph}, false, 0},
+		{"check-diagnostic", []string{"check", "../../../../Test/traces/after-eos.jsonl", "--graph", graph}, true, 0},
+		{"check-truncated", []string{"check", truncated, "--graph", graph}, true, 0},
+		{"explore-result", []string{"explore", "--graph", graph, "--depth", "1"}, false, 0},
+		{"explore-incomplete", []string{"explore", "--graph", graph, "--max-states", "1"}, false, 0},
+		{"help", []string{"--help"}, false, 0},
+		{"missing-command", nil, true, 0},
+		{"missing-trace", []string{"check"}, true, 0},
+		{"unknown-command", []string{"unknown"}, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := errors.New("output unavailable")
+			writer := &failingWriter{failAfter: tc.failAfter, err: cause}
+			var stdout, stderr io.Writer = writer, io.Discard
+			if tc.stderr {
+				stdout, stderr = stderr, stdout
+			}
+			code, err := run(tc.args, stdout, stderr)
+			if code != 2 || !errors.Is(err, cause) {
+				t.Errorf("exit %d, error %v; want exit 2 and %v", code, err, cause)
+			}
+			if writer.writes != tc.failAfter+1 {
+				t.Errorf("got %d writes; want to stop on write %d", writer.writes, tc.failAfter+1)
+			}
+		})
 	}
 }
 
