@@ -38,6 +38,8 @@ CLI の数値引数には `--count 1_000` のような区切りを使えます�
 
 永続化には transaction と新しい値だけを追記する `JournalFile` / `RunOptions.Append` を使えます。既存の全量 `Commit(Snapshot)` も互換用に残しています。worker枠がstale handlerで埋まった場合は `WorkerStalledError` で通知し、`Start` / `Restore` の実行器はhandlerの終了を受けて自然復帰します。
 
+同じ理由のstallはメンテナンス中も維持します。`Observe` → `WaitForChange(ctx, update.Cursor)` で停止理由や復帰の変化を待てるため、`Wait` を連続して呼ぶ必要はありません。[変更通知の使い方](runtime.md#実行状態の変化を待つ)を参照してください。
+
 `Step` は、外部workerの操作を明示的に扱う場合やモデルを検査する場合の下位APIです。
 
 ```go

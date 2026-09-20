@@ -85,6 +85,8 @@ leaf の `Concurrency` は同じ定義パスの running attempt 数にかかり�
 
 これは実行器の settled 状態であり、モデルの `blocked` ではありません。`Start` / `Restore` の実行器は操作を受け付け続け、handler が返ると自然復帰します。`ManualRetry` などの有効性は通常どおり `Step` が判定します。`Run` / `Resume` はこのエラーを返すと `Stop` しますが、context を無視する handler の goroutine は回収されず残ります。自然復帰を待つ場合は `Start` / `Restore` を使ってください。
 
+メンテナンスや無関係な操作が確定しても、同じhandlerが枠を塞ぎ、実行可能な仕事がその枠を必要としている間は、同じstallを維持します。内部の状態・履歴・値は更新し続けます。枠が空く、仕事が外部workerに引き取られて枠待ちがなくなる、停止理由が変わる、終端に達する、といった変化で実行状態の通知を更新します。
+
 | Op | 実行器での契機 |
 | --- | --- |
 | `start` | 入力の確定 |
@@ -134,6 +136,40 @@ if errors.Is(err, suimon.ErrBlocked) {
 ```
 
 `ManualRetry` は対象の試行回数、または Loop の反復上限を拡張します。成功済みの下流処理や過去の反復を最初からやり直しません。`Start` の実行器は blocked / 終端でも操作を受け付け、`Stop` で終了します。`Run` は `Wait` 後の `Stop` まで行う簡略 API です。
+
+### 実行状態の変化を待つ
+
+`Wait` は現在のsettledな結果を返すため、同じstall中に繰り返すと同じ結果を即時に返します。自然復帰や停止理由の変化を観測する場合は、`Observe` と `WaitForChange` を使います。
+
+```go
+execution, err := workflow.Start(ctx)
+if err != nil {
+    return suimon.RunResult{}, err
+}
+defer execution.Stop()
+
+update := execution.Observe()
+for {
+    paused := errors.Is(update.Err, suimon.ErrWorkerStalled) ||
+        errors.Is(update.Err, suimon.ErrBlocked)
+    if update.Stopped || (update.Settled && !paused) {
+        return update.Result(), update.Err
+    }
+    // ここでstall・blocked・復帰の状態を表示するなど、必要な処理を行う。
+    update, err = execution.WaitForChange(ctx, update.Cursor)
+    if err != nil {
+        return update.Result(), err
+    }
+}
+```
+
+`ExecutionUpdate` の `Settled` は結果・停止理由が利用可能なこと、`Stopped` は実行器が終了して追加操作を受け付けないことを表します。実行結果のエラーは `update.Err` に入ります。`WaitForChange` の戻り値のerrorは、待機contextの終了、不正なカーソル、または終端通知を受領済みであることを表す `io.EOF` です。待機contextをキャンセルしても実行器は停止しません。
+
+`Cursor` は同じ `Execution` 専用です。ゼロ値の `ExecutionCursor{}` は最初に取得可能な通知を返し、他の実行器のカーソルは `ErrInvalidExecutionCursor` で拒否します。停止後も古いカーソルには最後の通知を一度返し、最後のカーソルで待つと `io.EOF` を返します。カーソルはcheckpointへ保存せず、`Restore` 後は新しい実行器を観測してください。
+
+通知の世代はsettled状態、停止理由、実行器の終了が変わった時だけ進みます。複数の変化は最新の通知にまとめられる場合があります。観測と待機の間の変化もカーソル比較で拾い、複数の観測者はそれぞれ独立して待てます。
+
+`Observe` は状態・履歴・値を複製しません。`update.Result()` を呼ぶと、その観測時点の確定データの独立したコピーを取得できます。同じカーソルでもメンテナンスによるデータ更新はあり、新しく `Observe` すると最新の確定データを参照します。モデルの状態変化を述語で待つ `WaitFor` と、最新データを読む `execution.Result()` も引き続き使えます。
 
 `Execution.Cancel` と実行 context のキャンセルはモデルに `cancel` を記録し、動作中の関数の context をキャンセルします。`Execution.Stop` は実行器を停止して context をキャンセルしますが、モデルを終端にせず、保存した状態からの復元を可能にします。`Wait` にだけ渡した context の終了は待機を止めるだけです。途中状態は `Result()`、特定条件までの待機は `WaitFor(ctx, predicate)` で取得できます。
 
@@ -207,6 +243,7 @@ if err := checkpoint.Save(ctx, result.Snapshot); err != nil {
 | 保存と境界 | 未確定状態の非公開、破損の拒否、未コミット末尾、成功済み処理の保持、complete の再送 |
 | 実行器の運用 | 短いIDと復元時の衝突回避、論理時計でのstalled判定・自然復帰、判定エラーの文脈 |
 | 待機負荷 | channelで処理を止め、実際のticker起床数を観測して候補検査・結果コピーが増えないことを確認 |
+| 変更通知 | 同じstallの維持、メンテナンスと通知の分離、自然復帰、枠待ちの解消、独立した複数観測者、待機キャンセル、最終通知とEOF |
 | 追記保存 | 各値・イベントを一度だけ保存、10件・40件で書込量を測定、部分書込・sync結果不明からの復元 |
 | oracle | 条件を Lean と差分比較し、不完全な stream の成功を拒否 |
 | メモリ上の並行処理 | `go test -race` |
