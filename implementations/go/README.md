@@ -1,107 +1,17 @@
 # suimon Go 実装
 
-Lean の実行可能な定義から生成した、標準ライブラリだけに依存する Go パッケージです。Go 1.23 以降で使えます。実行時に Lean・C ABI・cgo は必要ありません。
+suimon の Go 実装です。[実行 API](src/workflow.go)、[利用例](example/README.md)、[共通の設計理由](../../docs/suimon-design.md)を参照してください。
 
-グラフ検証、全23種類の操作、状態遷移の不変条件検査、候補列挙、探索、履歴生成、v2 JSONL の検査と未コミット末尾の回復を実装しています。`Workflow.Run` は、この制御モデルを使って登録されたノードの処理関数を実行します。全10種類のノード、ストリーム、並列実行、再試行、手動再開、保存と復元を扱います。[実行APIと対応範囲](runtime.md)を参照してください。
+## 実行
 
-ライブラリ本体とテストは `src/`、実行例は `example/`、CLI は `cmd/suimon/` に置いています。`go.mod` と生成元を記録する `lean-sources.json` はこのディレクトリ直下にあります。
-
-## 最初の実行例
-
-リポジトリ直下で実行すると、時間差で生成した値を stream で送り、最大2件を並列に処理します。
+リポジトリ直下で実行します。
 
 ```sh
 go -C implementations/go run ./example
 ```
 
-`Source → Filter → ForEach → Collect（AllWait）` の順に処理します。sleep で外部 I/O を模擬し、生成中に下流が動くこと、完了順の入れ替わり、全件待ちを観察できます。`-scenario batch` で全件生成後の一括送信、`-scenario basic` で従来の `trim → uppercase` を実行できます。[scenarios.go](example/scenarios.go) にグラフと処理、[example/ui](example/ui/) に共通 UI kit を利用する画面を置いています。[手順と比較方法](example/README.md)を参照してください。
+CLI の入口は `go -C implementations/go run ./cmd/suimon --help` です。
 
-## CLI
+## 検証
 
-リポジトリ直下で実行します。
-
-```sh
-go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl --graph ../../Test/graphs/minimal.json
-go -C implementations/go run ./cmd/suimon explore --graph ../../Test/graphs/streaming.json --depth 8 --workers 2 --tick 1
-go -C implementations/go run ./cmd/suimon gen --graph ../../Test/graphs/streaming.json --seed 17 --count 30 > /tmp/suimon-go.jsonl
-go -C implementations/go run ./cmd/suimon check /tmp/suimon-go.jsonl --graph ../../Test/graphs/streaming.json
-CGO_ENABLED=0 go -C implementations/go build -o /tmp/suimon-go ./cmd/suimon
-```
-
-ビルドした CLI のオプションと終了コードは Lean 版と共通です。JSON のキー順・空白・数値の表記は異なる場合があります。構造と値を比較してください。JSON 構文エラーの説明文は Go の parser に依存し、診断コードと確定境界は共通です。
-
-CLI の数値引数には `--count 1_000` のような区切りを使えます。Lean と同じく、先頭・末尾の `_` や連続する `__` は拒否します。この表記は CLI の引数用で、`ParseNat` や JSON の数値には適用しません。
-
-## パッケージ
-
-通常の実行では `Workflow` にグラフ・処理関数・入力を設定して `Run(ctx)` を呼びます。処理関数の登録、途中出力、キャンセル、手動再開、checkpointの使い方は [runtime.md](runtime.md) にあります。
-
-永続化には transaction と新しい値だけを追記する `JournalFile` / `RunOptions.Append` を使えます。既存の全量 `Commit(Snapshot)` も互換用に残しています。worker枠がstale handlerで埋まった場合は `WorkerStalledError` で通知し、`Start` / `Restore` の実行器はhandlerの終了を受けて自然復帰します。
-
-同じ理由のstallはメンテナンス中も維持します。`Observe` → `WaitForChange(ctx, update.Cursor)` で停止理由や復帰の変化を待てるため、`Wait` を連続して呼ぶ必要はありません。[変更通知の使い方](runtime.md#実行状態の変化を待つ)を参照してください。
-
-`Step` は、外部workerの操作を明示的に扱う場合やモデルを検査する場合の下位APIです。
-
-```go
-import suimon "github.com/wim-web/suimon/implementations/go/src"
-
-graph, err := suimon.ParseGraph(graphJSON)
-if err != nil {
-    return err
-}
-state := suimon.Initial(graph)
-next, rejected := suimon.Step(state, suimon.Op{
-    Kind: "start",
-    Inputs: suimon.InputValues(graph),
-})
-if rejected != nil {
-    return rejected
-}
-state = next
-```
-
-`Step` と `Transaction` は入力の状態を変更しません。拒否時には入力の状態と `*Reject` を返します。`Initial` を直接呼ぶ場合は、先に `Graph.Validate` を通してください。公開構造体や返されたスライス・ポインタを利用側で直接変更せず、状態更新には `Step` を使います。
-
-`Nat` は Lean の自然数に合わせた多倍長整数です。小さい値は `suimon.N(30)`、大きい値は `suimon.ParseNat("18446744073709551616")` で作れます。数値の加減算は `Add` / `Sub` / `Inc`、比較は `Cmp` を使います。`Sub` はゼロで打ち切ります。
-
-履歴の記録には `RecordTransaction`、逐次検査には `NewCursor` → `CheckTextLine` → `Finish` を使います。`Recover` は読めたイベントをすべて検査したうえで最後の commit 境界を返します。物理的に途中で切れた最終行の扱いは呼び出し側の責務です。
-
-## 対応する原本と検証
-
-| Lean の原本 | Go |
-| --- | --- |
-| `Graph.lean` | `src/types.go`, `src/graph.go` |
-| `State.lean`, `Oracle.lean` | `src/types.go`, `src/state.go` |
-| `Op.lean`, `Step.lean` | `src/types.go`, `src/step.go` |
-| `Invariants.lean` | `src/invariants.go` |
-| `Candidates.lean`, `Explore.lean` | `src/explore.go` |
-| `Trace/` の公開形式・記録・検査 | `src/trace.go`, `src/json.go` |
-| `Execution.lean` の実行可能な条件 | `src/execution.go` |
-| `Scheduler.lean` の期限・待機・メンテナンス選択 | `src/scheduler.go` |
-| `Main.lean` | `cmd/suimon/main.go` |
-
-`src/workflow*.go` はこれらのモデル操作を呼び出すGoの実行器です。ノード処理をgoroutineで動かし、状態と値の確定は単一の制御ループで行います。
-
-Lean との比較を含む検証は、リポジトリ直下で実行します。
-
-```sh
-bin/test-go
-```
-
-このコマンドは元の `bin/test` も実行します。既存の回帰テストで用いる操作とその前後の状態・拒否理由・facts を出力して Go で再検査し、全例グラフに対する候補操作と不正操作、履歴生成、探索結果も Lean と比較します。Go が出した JSONL を Lean で読む交差検査、破損履歴と未コミット末尾の検査も含みます。
-
-コンパイルした両 CLI についても、全 fixture の `check`、全例グラフの `explore` と複数 seed の `gen`、既定グラフ、生成 JSONL の双方向検査を実行します。数値引数の区切り・検査順序、余分なキー、数値の小数表記、空行、CRLF、途中で切れた末尾も比較します。終了コードと stdout / stderr の内容を検査し、JSON の表記差と `INVALID_JSON` の parser 依存の説明文だけを比較時に除外します。
-
-実行器のテストでは、Leanから取得した全操作・全ノード種別の一覧と、実処理で作られた履歴の網羅性を照合します。その履歴をLeanで再検査し、worker数や到着順を変えた結果、失効、再試行、復元も確認します。並行処理にはGoのrace検査も実行します。
-
-期限ポリシーにはLeanの証明もあります。stall中も期限とpollを維持し、時計とpollの進行を前提としてメンテナンスを試行する性質が対象です。Goとの3600通りの比較と実行ループの回帰検査を併用します。[前提と限界](../../docs/implementation.md#期限による起床の保証)も参照してください。
-
-Go だけの検証は `go -C implementations/go test ./...` です。この場合、Lean が必要な比較テストは明示的に skip します。CI では `bin/test-go` を使って比較を必須にしています。
-
-## Lean 定義を変更したとき
-
-この Go 実装は AI による今回の翻訳結果です。任意の Lean を Go に変換する汎用コンパイラや、意味を自動で再生成するコマンドは含みません。
-
-変更した Lean 定義に対応する Go ファイルを再生成・更新し、`bin/test-go` の比較を通してください。生成元は `lean-sources.json` の SHA-256 と toolchain で固定しています。原本が変わると `TestLeanSourceSnapshot` が失敗するため、Go の対応更新を確認してから snapshot を更新します。
-
-上記の比較テストで検証した入力範囲では、Lean との一致を確認しています。Lean 側の形式的な証明が Go に移るわけではなく、変換全体の形式的な証明はありません。
+Lean の定義と Go 実装のずれを検出するため、リポジトリ直下から [bin/test-go](../../bin/test-go) を実行します。この比較は、Go 実装全体の形式的な同値性を証明するものではありません。
