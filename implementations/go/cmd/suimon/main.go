@@ -100,7 +100,7 @@ func getGraph(opts map[string]string, defaultGraph bool) (suimon.Graph, error) {
 	}
 	return g, nil
 }
-func writeJSON(w io.Writer, v any) { _ = json.NewEncoder(w).Encode(v) }
+func writeJSON(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) }
 func checkFile(g suimon.Graph, path string, stdout, stderr io.Writer) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -117,7 +117,9 @@ func checkFile(g suimon.Graph, path string, stdout, stderr io.Writer) (int, erro
 		if line != "" {
 			next, d := suimon.CheckTextLine(c, line)
 			if d != nil {
-				writeJSON(stderr, d)
+				if err := writeJSON(stderr, d); err != nil {
+					return 2, err
+				}
 				return 1, nil
 			}
 			c = next
@@ -128,26 +130,32 @@ func checkFile(g suimon.Graph, path string, stdout, stderr io.Writer) (int, erro
 	}
 	s, d := suimon.Finish(c)
 	if d != nil {
-		writeJSON(stderr, d)
+		if err := writeJSON(stderr, d); err != nil {
+			return 2, err
+		}
 		return 1, nil
 	}
-	writeJSON(stdout, map[string]any{"valid": true, "events": c.Sequence.Sub(suimon.N(1)), "status": s.Status, "transactions": len(c.Completed)})
+	if err := writeJSON(stdout, map[string]any{"valid": true, "events": c.Sequence.Sub(suimon.N(1)), "status": s.Status, "transactions": len(c.Completed)}); err != nil {
+		return 2, err
+	}
 	return 0, nil
 }
 func run(args []string, stdout, stderr io.Writer) (int, error) {
 	if len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
-		fmt.Fprint(stdout, usage)
+		if _, err := fmt.Fprint(stdout, usage); err != nil {
+			return 2, err
+		}
 		return 0, nil
 	}
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
-		return 2, nil
+		_, err := fmt.Fprint(stderr, usage)
+		return 2, err
 	}
 	switch args[0] {
 	case "check":
 		if len(args) < 2 {
-			fmt.Fprint(stderr, usage)
-			return 2, nil
+			_, err := fmt.Fprint(stderr, usage)
+			return 2, err
 		}
 		opts, err := options(args[2:], []string{"--graph"})
 		if err != nil {
@@ -177,7 +185,9 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 				return 2, err
 			}
 			report := suimon.Search(g, cfg)
-			writeJSON(stdout, report)
+			if err := writeJSON(stdout, report); err != nil {
+				return 2, err
+			}
 			if report.Failure != nil || !report.Complete {
 				return 1, nil
 			}
@@ -197,16 +207,20 @@ func run(args []string, stdout, stderr io.Writer) (int, error) {
 		}
 		_, events, reject := suimon.Generate(g, cfg, seed, count)
 		if reject != nil {
-			writeJSON(stderr, reject)
+			if err := writeJSON(stderr, reject); err != nil {
+				return 2, err
+			}
 			return 1, nil
 		}
 		for _, e := range events {
-			fmt.Fprintln(stdout, suimon.EncodeEvent(e))
+			if _, err := fmt.Fprintln(stdout, suimon.EncodeEvent(e)); err != nil {
+				return 2, err
+			}
 		}
 		return 0, nil
 	default:
-		fmt.Fprint(stderr, usage)
-		return 2, nil
+		_, err := fmt.Fprint(stderr, usage)
+		return 2, err
 	}
 }
 func main() {
