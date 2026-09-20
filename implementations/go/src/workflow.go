@@ -207,7 +207,8 @@ type Execution struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	mu       sync.Mutex
-	view     []byte
+	view     *runtimeView
+	metrics  runtimeMetrics
 	settled  bool
 	err      error
 	changed  chan struct{}
@@ -270,16 +271,6 @@ func (e *Execution) ManualRetry(ctx context.Context, instance string) error {
 func (e *Execution) Cancel(ctx context.Context) error { return e.Apply(ctx, Op{Kind: "cancel"}, nil) }
 func (e *Execution) Stop()                            { e.stopOnce.Do(func() { close(e.stop) }); <-e.done }
 
-func (e *Execution) read() (RunResult, bool, error, <-chan struct{}) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	var result RunResult
-	if err := json.Unmarshal(e.view, &result); err != nil {
-		panic(err)
-	}
-	return result, e.settled, e.err, e.changed
-}
-
 // Result returns an independent copy of the latest committed state and values.
 func (e *Execution) Result() RunResult { r, _, _, _ := e.read(); return r }
 
@@ -287,28 +278,28 @@ func (e *Execution) Result() RunResult { r, _, _, _ := e.read(); return r }
 // state. A started execution remains available for ManualRetry while blocked.
 func (e *Execution) Wait(ctx context.Context) (RunResult, error) {
 	for {
-		r, settled, err, changed := e.read()
+		v, settled, err, changed := e.observe()
 		if settled {
-			return r, err
+			return e.result(v), err
 		}
 		select {
 		case <-changed:
 		case <-ctx.Done():
-			return r, ctx.Err()
+			return e.Result(), ctx.Err()
 		}
 	}
 }
 func (e *Execution) WaitFor(ctx context.Context, predicate func(State) bool) (RunResult, error) {
 	for {
-		r, _, err, changed := e.read()
-		if predicate(r.State) {
-			return r, nil
+		v, _, err, changed := e.observe()
+		if predicate(copyPublicState(v.state)) {
+			return e.result(v), nil
 		}
-		if terminal(r.State.Status) {
+		if terminal(v.state.Status) {
 			if err == nil {
-				err = fmt.Errorf("%w: %s", ErrConditionNotMet, r.State.Status)
+				err = fmt.Errorf("%w: %s", ErrConditionNotMet, v.state.Status)
 			}
-			return r, err
+			return e.result(v), err
 		}
 		select {
 		case <-e.done:
@@ -326,7 +317,7 @@ func (e *Execution) WaitFor(ctx context.Context, predicate func(State) bool) (Ru
 			return latest, lastErr
 		case <-changed:
 		case <-ctx.Done():
-			return r, ctx.Err()
+			return e.Result(), ctx.Err()
 		}
 	}
 }

@@ -61,6 +61,7 @@ func TestWorkflowStalled(t *testing.T) {
 			}
 			clock.Store(1004) // Before the logical grace deadline.
 			ready := awaitState(t, ctx, e, func(s State) bool { return s.Instances[0].Status == "ready" })
+			awaitRuntimePolls(t, ctx, e, e.metrics.polls.Load()+3)
 			if _, settled, err, _ := e.read(); settled {
 				t.Fatalf("settled before grace: %v", err)
 			}

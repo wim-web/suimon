@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math/big"
 	"slices"
 	"strings"
 	"time"
@@ -62,29 +61,10 @@ func (r *workflowRuntime) binding(path Path, node string) (Binding, Path) {
 	definition := append(slices.Clone(f.Definition), node)
 	return r.bindings[Identity(definition)], definition
 }
-func (r *workflowRuntime) result() RunResult {
-	ports := List[ResultPort]{}
-	for _, p := range r.graph.Exits {
-		out := ResultPort{Port: p}
-		for _, c := range r.state.Channels {
-			if len(c.Path) == 0 && c.Exit && c.Edge.Src == p {
-				for _, id := range c.Items() {
-					out.Items = append(out.Items, DataItem{id, r.values[id]})
-				}
-			}
-		}
-		ports = append(ports, out)
-	}
-	return RunResult{r.state, ports, Snapshot{r.graph, r.events, r.values}}
-}
 func (r *workflowRuntime) publish(settled bool, err error) {
-	b, e := json.Marshal(r.result())
-	if e != nil {
-		panic(e)
-	}
 	r.execution.mu.Lock()
 	defer r.execution.mu.Unlock()
-	r.execution.view = b
+	r.execution.view = &runtimeView{r.state, Snapshot{r.graph, r.events, r.values}}
 	r.execution.settled = settled
 	r.execution.err = err
 	close(r.execution.changed)
@@ -171,7 +151,7 @@ func (r *workflowRuntime) loop() {
 			waitTick = nil
 		}
 		if !r.hasTimedWork() && (len(r.jobs) == 0 || !r.hasActiveJobs() && !r.state.HasWork()) {
-			next, rejected := Step(r.state, Op{Kind: "idle"})
+			next, rejected := r.probe(Op{Kind: "idle"})
 			if rejected != nil {
 				finalError = rejected
 				return
@@ -191,15 +171,9 @@ func (r *workflowRuntime) loop() {
 				return
 			}
 		}
-		select {
-		case <-r.ctx.Done():
-		case <-r.execution.stop:
-		case <-waitTick:
-		case m := <-r.execution.requests:
-			if err := r.handle(m); err != nil {
-				finalError = err
-				return
-			}
+		if err := r.wait(waitTick); err != nil {
+			finalError = err
+			return
 		}
 	}
 }
@@ -308,7 +282,7 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 			return reject("MISSING_VALUE", id)
 		}
 	}
-	journal := append(slices.Clone(r.events), events...)
+	journal := append(r.events, events...)
 	snapshot := Snapshot{r.graph, journal, values}
 	if r.options.Commit != nil {
 		copy, err := copySnapshot(snapshot)
@@ -339,7 +313,7 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 			continue
 		}
 		if j.kind == "decision" && !j.obsolete {
-			next, rejected := Step(r.state, j.op)
+			next, rejected := r.probe(j.op)
 			if rejected != nil || equal(next, r.state) {
 				r.abandon(j)
 			}
@@ -425,15 +399,10 @@ func (r *workflowRuntime) advance() (bool, error) {
 		if i.Status == "retryWait" && i.RetryAt != nil && i.RetryAt.Cmp(now) <= 0 {
 			return true, r.apply(Op{Kind: "promoteRetry", Inst: i.ID, Now: now}, nil)
 		}
-		if i.Status == "running" && i.Lease != nil && !r.options.DisableAutoRenew {
-			if _, owned := r.jobs[i.Lease.Attempt]; owned {
-				n := r.state.Node(i.Path, i.Node)
-				lease := n.Kind.Retry.LeaseSeconds
-				half := maxNat(N(1), fromBig(new(big.Int).Div(lease.big(), big.NewInt(2))))
-				if now.Cmp(i.Lease.Until.Sub(half)) >= 0 && now.Add(lease).Cmp(i.Lease.Until) > 0 {
-					a := Credentials{i.ID, i.Lease.Attempt, i.Lease.Token, now}
-					return true, r.apply(Op{Kind: "renew", Auth: a}, nil)
-				}
+		if i.Status == "running" {
+			if at := r.renewAt(i); at != nil && now.Cmp(*at) >= 0 {
+				a := Credentials{i.ID, i.Lease.Attempt, i.Lease.Token, now}
+				return true, r.apply(Op{Kind: "renew", Auth: a}, nil)
 			}
 		}
 	}
@@ -459,7 +428,7 @@ func (r *workflowRuntime) advance() (bool, error) {
 	for offset := 0; offset < len(candidates); offset++ {
 		idx := (r.cursor + offset) % len(candidates)
 		op := candidates[idx]
-		next, rejected := Step(r.state, op)
+		next, rejected := r.probe(op)
 		if rejected != nil {
 			if rejected.Code == "INVARIANT" {
 				return false, rejected

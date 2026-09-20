@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkflowIDs(t *testing.T) {
@@ -20,7 +21,11 @@ func TestWorkflowIDs(t *testing.T) {
 				}
 				return Values{}, nil
 			}
-			r, err := w.Run(testContext(t))
+			// The full-model race run is intentionally heavier than tiny fixtures;
+			// the assertion concerns ID growth, not a wall-clock performance bound.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			r, err := w.Run(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}

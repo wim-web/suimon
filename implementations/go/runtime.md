@@ -69,6 +69,10 @@ func emit(ctx context.Context, task *suimon.Task) (suimon.Values, error) {
 
 処理関数は goroutine で動きます。状態更新は単一の制御ループで `RecordTransaction` / `Step` を通し、各操作について不変条件を検査します。グラフのノード記述順に依存せず、実行可能な制御操作と ready な処理を巡回して選びます。
 
+待機中は次の renew・lease 失効・retry・stale 猶予の論理期限を保持し、ticker では時計と期限の比較だけを行います。候補の探索は操作や job 終了の通知、または期限到来後に再開します。状態が変わらない待機中に `Step` を繰り返し試行しません。
+
+状態公開と `Wait` の通知で全履歴を JSON 化・復号する処理もありません。`Result` / `Wait` が結果を返す時点で、呼び出し側が変更可能な独立したコピーを作ります。`WaitFor` の述語にも状態のコピーを渡します。モデルの `Step` 自体の状態複製・不変条件検査のコストは残ります。
+
 実行器の attempt・lease token・transaction ID は短い接頭辞と連番で採番します。復元時は放棄済みを含む全 attempt と確定済み transaction から使用済み集合を復元し、外部指定の ID との衝突も避けます。探索器の `ClaimCredentials` は Lean と同じ候補生成専用です。
 
 leaf の `Concurrency` は同じ定義パスの running attempt 数にかかり、ForEach の body をまたいで共有します。失効した attempt の権限は取り消します。`RunOptions.Workers` は処理・判定関数の同時呼び出し数の追加上限です。既定の `0` は追加上限なしです。失効した処理が終了するまでは、その呼び出しもこの上限に数えます。
