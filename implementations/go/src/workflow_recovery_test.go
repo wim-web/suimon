@@ -288,7 +288,8 @@ func testWorkflowOracleAndFailures(t *testing.T, check runtimeCheck) {
 		w := newFixtureWorkflow(t, "branch")
 		bindingAt(&w, "choose").Branch = func(context.Context, DecisionTask) (string, error) { return "", fmt.Errorf("decision unavailable") }
 		r, err := w.Run(testContext(t))
-		if err == nil || err.Error() != "decision unavailable" {
+		var decision *DecisionError
+		if !errors.As(err, &decision) || decision.Cause.Error() != "decision unavailable" || decision.Node != "choose" {
 			t.Fatalf("decision error lost: %v", err)
 		}
 		check(t, r)

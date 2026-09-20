@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math/big"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type runMessage struct {
 type runtimeJob struct {
 	kind     string
 	obsolete bool
+	staleAt  *Nat
+	scope    DecisionTask
 	op       Op
 	auth     Credentials
 	instance Instance
@@ -31,6 +34,8 @@ type runtimeJob struct {
 }
 type workflowRuntime struct {
 	ids         runtimeIDs
+	needsSlot   bool
+	stall       *WorkerStalledError
 	cursor      int
 	execution   *Execution
 	ctx         context.Context
@@ -108,11 +113,9 @@ func (r *workflowRuntime) loop() {
 				}
 				return
 			}
-			if !terminal(r.state.Status) {
-				if err := r.apply(Op{Kind: "cancel"}, nil); err != nil {
-					finalError = err
-					return
-				}
+			if err := r.apply(Op{Kind: "cancel"}, nil); err != nil {
+				finalError = err
+				return
 			}
 			finalError = errors.Join(ErrCancelled, r.ctx.Err())
 			return
@@ -160,6 +163,13 @@ func (r *workflowRuntime) loop() {
 			continue
 		}
 		waitTick := ticker.C
+		if stalled := r.stalledError(); stalled != nil {
+			if r.stall == nil {
+				r.stall = stalled
+				r.publish(true, stalled)
+			}
+			waitTick = nil
+		}
 		if !r.hasTimedWork() && (len(r.jobs) == 0 || !r.hasActiveJobs() && !r.state.HasWork()) {
 			next, rejected := Step(r.state, Op{Kind: "idle"})
 			if rejected != nil {
@@ -216,6 +226,36 @@ func (r *workflowRuntime) hasActiveJobs() bool {
 }
 func (r *workflowRuntime) slot() bool {
 	return r.options.Workers == 0 || len(r.jobs) < r.options.Workers
+}
+
+func (r *workflowRuntime) abandon(job *runtimeJob) {
+	job.obsolete = true
+	if job.staleAt == nil {
+		now := r.now()
+		job.staleAt = &now
+	}
+	job.cancel()
+}
+
+func (r *workflowRuntime) stalledError() *WorkerStalledError {
+	if !r.needsSlot || r.slot() || r.hasActiveJobs() {
+		return nil
+	}
+	now := r.now()
+	stalled := &WorkerStalledError{Workers: r.options.Workers}
+	for _, job := range r.jobs {
+		if job.staleAt == nil || now.Cmp(job.staleAt.Add(r.options.StaleGraceSeconds)) < 0 {
+			return nil
+		}
+		stalled.Handlers = append(stalled.Handlers, StalledHandler{
+			Node: job.scope.Node, Path: slices.Clone(job.scope.Path), Definition: slices.Clone(job.scope.Definition),
+			Instance: job.auth.Instance, Attempt: job.auth.Attempt, Since: *job.staleAt, Deadline: job.staleAt.Add(r.options.StaleGraceSeconds),
+		})
+	}
+	slices.SortFunc(stalled.Handlers, func(a, b StalledHandler) int {
+		return strings.Compare(Identity(append(slices.Clone(a.Path), a.Node, a.Attempt)), Identity(append(slices.Clone(b.Path), b.Node, b.Attempt)))
+	})
+	return stalled
 }
 
 // apply prepares both model state and payloads, persists one complete snapshot,
@@ -286,6 +326,7 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	r.state = next
 	r.events = journal
 	r.values = values
+	r.stall = nil
 	r.time = journal[len(journal)-1].RecordedAt
 	r.ids.transaction.used[txn] = true
 	if op.Kind == "claim" && !absorbed {
@@ -294,21 +335,19 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	}
 	for _, j := range r.jobs {
 		if terminal(r.state.Status) {
-			j.obsolete = true
-			j.cancel()
+			r.abandon(j)
 			continue
 		}
 		if j.kind == "decision" && !j.obsolete {
 			next, rejected := Step(r.state, j.op)
 			if rejected != nil || equal(next, r.state) {
-				j.obsolete = true
-				j.cancel()
+				r.abandon(j)
 			}
 		}
 		if j.kind == "leaf" {
 			i := r.state.Instance(j.auth.Instance)
 			if i == nil || i.Status != "running" || i.Lease == nil || i.Lease.Attempt != j.auth.Attempt {
-				j.cancel()
+				r.abandon(j)
 			}
 		}
 	}
@@ -374,6 +413,7 @@ func (r *workflowRuntime) materialize(op Op) (map[string]json.RawMessage, error)
 }
 
 func (r *workflowRuntime) advance() (bool, error) {
+	r.needsSlot = false
 	if !r.state.Started {
 		return true, r.apply(Op{Kind: "start", Inputs: r.inputs}, r.startValues)
 	}
@@ -419,9 +459,6 @@ func (r *workflowRuntime) advance() (bool, error) {
 	for offset := 0; offset < len(candidates); offset++ {
 		idx := (r.cursor + offset) % len(candidates)
 		op := candidates[idx]
-		if op.Kind == "claim" && !r.slot() {
-			continue
-		}
 		next, rejected := Step(r.state, op)
 		if rejected != nil {
 			if rejected.Code == "INVARIANT" {
@@ -430,6 +467,10 @@ func (r *workflowRuntime) advance() (bool, error) {
 			continue
 		}
 		if equal(next, r.state) {
+			continue
+		}
+		if (op.Kind == "claim" || op.Kind == "fireBranch" || op.Kind == "fireFilter" || op.Kind == "loopIterate") && !r.slot() {
+			r.needsSlot = true
 			continue
 		}
 		if op.Kind == "fireBranch" || op.Kind == "fireFilter" || op.Kind == "loopIterate" {
@@ -475,7 +516,7 @@ func (r *workflowRuntime) startLeaf(i Instance, auth Credentials) error {
 		inputs[in[0]] = slices.Clone(v)
 	}
 	task := &Task{ID: i.ID, Node: i.Node, Path: slices.Clone(i.Path), Definition: definition, Attempt: i.AttemptCount, Inputs: inputs, auth: auth, node: i.Node, path: slices.Clone(i.Path), execution: r.execution, ctx: ctx}
-	r.jobs[auth.Attempt] = &runtimeJob{kind: "leaf", auth: auth, instance: i, cancel: cancel}
+	r.jobs[auth.Attempt] = &runtimeJob{kind: "leaf", auth: auth, instance: i, cancel: cancel, scope: DecisionTask{Node: i.Node, Path: slices.Clone(i.Path), Definition: slices.Clone(definition)}}
 	go func() {
 		m := runMessage{kind: "finish", job: auth.Attempt}
 		defer func() {
@@ -526,7 +567,9 @@ func (r *workflowRuntime) startDecision(op Op) bool {
 	binding, definition := r.binding(path, node)
 	task := DecisionTask{node, slices.Clone(path), definition, iteration, DataItem{item, slices.Clone(r.values[item])}}
 	ctx, cancel := context.WithCancel(r.ctx)
-	r.jobs[key] = &runtimeJob{kind: "decision", op: op, cancel: cancel}
+	scope := task
+	scope.Path, scope.Definition, scope.Item.Value = slices.Clone(task.Path), slices.Clone(task.Definition), nil
+	r.jobs[key] = &runtimeJob{kind: "decision", op: op, cancel: cancel, scope: scope}
 	go func() {
 		m := runMessage{kind: "decision", job: key}
 		defer func() {
@@ -579,12 +622,23 @@ func (r *workflowRuntime) handle(m runMessage) error {
 	}
 	delete(r.jobs, m.job)
 	defer job.cancel()
+	if r.stall != nil {
+		r.stall = nil
+		r.publish(false, nil)
+	}
 	if job.obsolete || terminal(r.state.Status) {
 		return nil
 	}
 	if m.kind == "decision" {
+		wrap := func(err error) error {
+			if err == nil {
+				return nil
+			}
+			return &DecisionError{Node: job.scope.Node, Path: slices.Clone(job.scope.Path), Definition: slices.Clone(job.scope.Definition),
+				Operation: job.op.Kind, Item: job.scope.Item.ID, Iteration: job.scope.Iteration, Cause: err}
+		}
 		if m.err != nil {
-			return m.err
+			return wrap(m.err)
 		}
 		op := job.op
 		switch op.Kind {
@@ -595,7 +649,7 @@ func (r *workflowRuntime) handle(m runMessage) error {
 		case "loopIterate":
 			op.Done = m.choice
 		}
-		return r.apply(op, nil)
+		return wrap(r.apply(op, nil))
 	}
 	auth := job.auth
 	auth.Now = r.now()

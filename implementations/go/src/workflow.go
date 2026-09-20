@@ -96,6 +96,9 @@ type RunOptions struct {
 	Now              func() Nat
 	PollInterval     time.Duration
 	DisableAutoRenew bool
+	// StaleGraceSeconds is a logical-time grace period after cancelling a stale
+	// handler. Zero selects the default of five logical seconds.
+	StaleGraceSeconds Nat
 	// Commit must atomically persist the complete snapshot before returning nil.
 	// A failure stops execution without publishing the proposed state or payloads.
 	Commit func(context.Context, Snapshot) error
@@ -303,7 +306,7 @@ func (e *Execution) WaitFor(ctx context.Context, predicate func(State) bool) (Ru
 		}
 		if terminal(r.State.Status) {
 			if err == nil {
-				err = ErrStopped
+				err = fmt.Errorf("%w: %s", ErrConditionNotMet, r.State.Status)
 			}
 			return r, err
 		}
@@ -314,7 +317,11 @@ func (e *Execution) WaitFor(ctx context.Context, predicate func(State) bool) (Ru
 				return latest, nil
 			}
 			if lastErr == nil {
-				lastErr = ErrStopped
+				if terminal(latest.State.Status) {
+					lastErr = fmt.Errorf("%w: %s", ErrConditionNotMet, latest.State.Status)
+				} else {
+					lastErr = ErrStopped
+				}
 			}
 			return latest, lastErr
 		case <-changed:
@@ -346,6 +353,9 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 	}
 	if opts.PollInterval == 0 {
 		opts.PollInterval = 25 * time.Millisecond
+	}
+	if opts.StaleGraceSeconds == (Nat{}) {
+		opts.StaleGraceSeconds = N(5)
 	}
 	if opts.Now == nil {
 		start := time.Now()

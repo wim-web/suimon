@@ -73,6 +73,10 @@ func emit(ctx context.Context, task *suimon.Task) (suimon.Values, error) {
 
 leaf の `Concurrency` は同じ定義パスの running attempt 数にかかり、ForEach の body をまたいで共有します。失効した attempt の権限は取り消します。`RunOptions.Workers` は処理・判定関数の同時呼び出し数の追加上限です。既定の `0` は追加上限なしです。失効した処理が終了するまでは、その呼び出しもこの上限に数えます。
 
+実行可能な仕事があるのに失効・無効化された handler だけで全枠が埋まると、終了猶予後に `Wait` が `*WorkerStalledError` を返します。`errors.Is(err, suimon.ErrWorkerStalled)` で判定でき、`Handlers` に node・path・attempt・無効化時刻・猶予期限が入ります。猶予は `RunOptions.StaleGraceSeconds` の論理秒（0は既定の5秒）で測ります。`Now` が進まなければ猶予も進みません。
+
+これは実行器の settled 状態であり、モデルの `blocked` ではありません。`Start` / `Restore` の実行器は操作を受け付け続け、handler が返ると自然復帰します。`ManualRetry` などの有効性は通常どおり `Step` が判定します。`Run` / `Resume` はこのエラーを返すと `Stop` しますが、context を無視する handler の goroutine は回収されず残ります。自然復帰を待つ場合は `Start` / `Restore` を使ってください。
+
 | Op | 実行器での契機 |
 | --- | --- |
 | `start` | 入力の確定 |
@@ -125,7 +129,9 @@ if errors.Is(err, suimon.ErrBlocked) {
 
 `Execution.Cancel` と実行 context のキャンセルはモデルに `cancel` を記録し、動作中の関数の context をキャンセルします。`Execution.Stop` は実行器を停止して context をキャンセルしますが、モデルを終端にせず、保存した状態からの復元を可能にします。`Wait` にだけ渡した context の終了は待機を止めるだけです。途中状態は `Result()`、特定条件までの待機は `WaitFor(ctx, predicate)` で取得できます。
 
-branch / filter / loop の判定エラーは実行器のエラーとして停止します。モデルにはこれらの判定自体の retry 操作がないため、最後の確定状態から、関数や外部条件を修正して復元します。
+branch / filter / loop の error・panic・不正な戻り値・oracle 不一致は、node・path・定義パス・操作・入力 ID・反復数を持つ `*DecisionError` として実行器を停止します。`errors.Is` / `errors.As` で元の error や `*Reject` を取得できます。モデルにはこれらの判定自体の fail / retry 操作がないため、最後の確定状態を保持し、関数や外部条件を修正して復元します。leaf の失敗は引き続きモデルの `fail` です。
+
+`WaitFor` が正常終端に到達しても述語を満たさなかった場合は `ErrConditionNotMet` を返します。実行器の明示的な停止を表す `ErrStopped` とは区別します。
 
 時計は自然数の秒です。既定では起動時の Unix 時刻に単調な経過秒を加え、保存済みの時刻より戻さずに使います。`Now` と `PollInterval` で差し替えられます。lease は期限前に延長できる場合に自動更新し、`DisableAutoRenew` で無効化できます。整数秒で `LeaseSeconds: 1` を指定すると期限前に延長できる時刻がないため、長い処理には余裕のある期限を指定してください。
 
