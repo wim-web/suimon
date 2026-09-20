@@ -232,8 +232,8 @@ func (r *workflowRuntime) stalledError() *WorkerStalledError {
 	return stalled
 }
 
-// apply prepares both model state and payloads, persists one complete snapshot,
-// then publishes it. Workers never mutate State or the payload store directly.
+// apply prepares state and payloads, persists the transaction, then publishes.
+// Workers never mutate State or the payload store directly.
 func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) error {
 	txn := r.ids.transaction.peek()
 	recordedAt := r.time
@@ -251,12 +251,19 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	if absorbed {
 		provided = nil
 	}
-	values := maps.Clone(r.values)
+	newValues := map[string]json.RawMessage{}
 	put := func(id string, data json.RawMessage) error {
-		if old, ok := values[id]; ok && !sameValues(old, data) {
-			return reject("NONDETERMINISTIC_VALUE", id)
+		old, ok := r.values[id]
+		if !ok {
+			old, ok = newValues[id]
 		}
-		values[id] = slices.Clone(data)
+		if ok {
+			if !sameValues(old, data) {
+				return reject("NONDETERMINISTIC_VALUE", id)
+			}
+			return nil
+		}
+		newValues[id] = slices.Clone(data)
 		return nil
 	}
 	for id, data := range provided {
@@ -278,20 +285,31 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 		}
 	}
 	for _, id := range stateItemIDs(next) {
-		if _, ok := values[id]; !ok {
+		_, existing := r.values[id]
+		if _, added := newValues[id]; !existing && !added {
 			return reject("MISSING_VALUE", id)
 		}
 	}
+	values := r.values
+	if len(newValues) > 0 {
+		values = maps.Clone(r.values)
+		maps.Copy(values, newValues)
+	}
 	journal := append(r.events, events...)
 	snapshot := Snapshot{r.graph, journal, values}
+	ctx := r.ctx
+	if op.Kind == "cancel" {
+		ctx = context.WithoutCancel(ctx)
+	}
+	if r.options.Append != nil {
+		if err := r.options.Append(ctx, CommitBatch{copyEvents(events), copyValues(newValues)}); err != nil {
+			return &CommitError{err}
+		}
+	}
 	if r.options.Commit != nil {
 		copy, err := copySnapshot(snapshot)
 		if err != nil {
 			return err
-		}
-		ctx := r.ctx
-		if op.Kind == "cancel" {
-			ctx = context.WithoutCancel(ctx)
 		}
 		if err := r.options.Commit(ctx, copy); err != nil {
 			return &CommitError{err}

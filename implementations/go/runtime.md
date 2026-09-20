@@ -143,27 +143,44 @@ branch / filter / loop の error・panic・不正な戻り値・oracle 不一致
 
 ## 保存と復元
 
-`RunOptions.Commit` を指定すると、新しい状態・イベント・値を公開する前に、完全な `Snapshot` を渡します。保存処理は snapshot 全体を原子的に確定してから `nil` を返す契約です。エラー時は `CommitError` で停止し、提案した状態と値をメモリ上で公開しません。保存結果が不確かなエラーの場合は、保存先を読み直して復元します。
+通常の永続化には `RunOptions.Append` を使います。今回の transaction のイベントと新しい値だけを `CommitBatch` として渡し、保存が確定してから状態を公開します。同じ値の再送では値を書き直しません。イベントと値は同じ確定単位で保存し、永続化が完了してから `nil` を返す契約です。
+
+`JournalFile` は transaction ごとの追記ストアです。初回起動も再起動も次の形で使えます。親ディレクトリはあらかじめ作ってください。
 
 ```go
-store := suimon.SnapshotFile{Path: "checkpoint.json"}
-workflow.Options.Commit = store.Save
-result, err := workflow.Run(ctx)
-```
-
-プロセス再起動後は次のように再開します。
-
-```go
-snapshot, err := store.Load(ctx)
+store, snapshot, err := suimon.OpenJournalFile(ctx, "run.journal", workflow.Graph)
 if err != nil {
     return err
 }
+defer store.Close()
+workflow.Options.Append = store.Append
 result, err := workflow.Resume(ctx, snapshot)
+```
+
+同じパスの writer は1つにします。`Start` / `Restore` を使う場合は、実行器を `Stop` してからストアを `Close` してください。
+
+ファイルはバージョン付きヘッダーにグラフを記録し、その後に長さ・長さの検査用情報・SHA-256を付けた transaction を追記します。値とイベントを含むレコードを書き、sync に成功すると保存完了です。この保存形式はGo側の形式で、含まれるイベントは既存の v2 イベントです。
+
+`OpenJournalFile` は全イベントの `Recover` による検査と値の再読込を行い、確定済みの `Snapshot` を返します。物理的に途中で切れた最終レコードや、検査を通る未コミット末尾は切り詰めます。完全なレコードのchecksum不一致、壊れたイベント、値の欠落・矛盾は拒否し、ファイルを書き換えません。
+
+保存エラーは `CommitError` になり、提案した状態と値をメモリ上で公開せず実行器を停止します。書込やsyncが失敗した `JournalFile` は追加書込を拒否します。ファイルを閉じて開き直し、実際に保存された確定境界から再開してください。エラーでもレコード全体が保存されていた場合、そのレコードを復元するため、同じ処理を無条件に再送しません。
+
+全量 `Snapshot` が必要な場合は、結果から明示的に書き出せます。
+
+```go
+checkpoint := suimon.SnapshotFile{Path: "checkpoint.json"}
+if err := checkpoint.Save(ctx, result.Snapshot); err != nil {
+    return err
+}
 ```
 
 `Restore(ctx, snapshot)` は `Resume` の実行ハンドル版です。復元時はグラフの一致、履歴、必要な値を検査し、最後の commit まで復元します。検査を通る未コミット末尾は捨てます。不正なイベントや必要な値の欠落は拒否します。成功済み処理は再実行せず、中断された running attempt は lease 失効と retry 規則に従って再開します。
 
-`SnapshotFile` は同じディレクトリの一時ファイルに書き、sync・rename・ディレクトリの sync で置き換えます。親ディレクトリをあらかじめ作り、同じパスの writer は1つにしてください。標準の実行器は1プロセス内で動きます。snapshot には全履歴と値を保持するため、stream のサイズに応じたメモリ削減や履歴の圧縮を行う実装ではありません。
+未コミット末尾を含む単独の `Snapshot` には値ごとの確定情報がないため、復元状態が参照しない追加値は引き継ぎません。`JournalFile` は値と transaction の対応を保存するので、まだ処理で参照されていない値も含め、確定済みの全値を復元します。
+
+既存の `RunOptions.Commit(Snapshot)` と `SnapshotFile.Save` による毎操作の全量保存も互換用に残しています。これは過去の履歴と値を毎回書き直すため、累計書込量の問題が残ります。`Commit` と `Append` の両方を設定すると、起動時に拒否します。`SnapshotFile` は一時ファイルのsync・rename・ディレクトリのsyncで全量を置き換えます。`SnapshotFile.Load` で読んだ既存checkpointも引き続き復元できます。
+
+実行器は1プロセス内で動きます。追記保存でも全履歴と、`NONDETERMINISTIC_VALUE` の検査に使う確定済みの全値をメモリに保持します。無制限streamを一定メモリで処理する仕組みや、履歴の圧縮・間引きは含みません。保存先を変えても、モデルの状態サイズに伴う `Step` の計算コストは残ります。
 
 ## Lean との対応と検証
 
@@ -182,6 +199,9 @@ result, err := workflow.Resume(ctx, snapshot)
 | 実行順の変化 | worker 数・アイテム到着順・定義順を変え、結果を比較 |
 | 失敗と復旧 | retry 待機、renew、失効結果の拒否、手動再開、キャンセル、処理中の停止と復元 |
 | 保存と境界 | 未確定状態の非公開、破損の拒否、未コミット末尾、成功済み処理の保持、complete の再送 |
+| 実行器の運用 | 短いIDと復元時の衝突回避、論理時計でのstalled判定・自然復帰、判定エラーの文脈 |
+| 待機負荷 | channelで処理を止め、実際のticker起床数を観測して候補検査・結果コピーが増えないことを確認 |
+| 追記保存 | 各値・イベントを一度だけ保存、10件・40件で書込量を測定、部分書込・sync結果不明からの復元 |
 | oracle | 条件を Lean と差分比較し、不完全な stream の成功を拒否 |
 | メモリ上の並行処理 | `go test -race` |
 

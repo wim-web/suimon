@@ -102,6 +102,9 @@ type RunOptions struct {
 	// Commit must atomically persist the complete snapshot before returning nil.
 	// A failure stops execution without publishing the proposed state or payloads.
 	Commit func(context.Context, Snapshot) error
+	// Append persists only this transaction's events and newly introduced values.
+	// It is mutually exclusive with Commit. Return nil only after durable commit.
+	Append func(context.Context, CommitBatch) error
 }
 
 // Workflow binds the verified control model to application processing functions.
@@ -326,6 +329,9 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 	if ctx == nil {
 		return nil, fmt.Errorf("nil execution context")
 	}
+	if w.Options.Commit != nil && w.Options.Append != nil {
+		return nil, fmt.Errorf("Commit and Append cannot both be configured")
+	}
 	if err := w.Graph.Validate(); err != nil {
 		return nil, err
 	}
@@ -400,6 +406,21 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 				return nil, err
 			}
 			r.values[id] = data
+		}
+		// Complete snapshots (including JournalFile recovery) identify every
+		// committed value, even values supplied ahead of their first use.
+		// A raw torn snapshot has no per-value commit metadata, so its uncertain
+		// extra values are excluded along with the uncommitted event suffix.
+		if boundary == len(copy.Events) {
+			for id, v := range copy.Values {
+				if _, present := r.values[id]; !present {
+					data, err := encodeData(v)
+					if err != nil {
+						return nil, err
+					}
+					r.values[id] = data
+				}
+			}
 		}
 	}
 	if !r.state.Started && !terminal(r.state.Status) {
