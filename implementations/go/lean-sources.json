@@ -7,6 +7,7 @@
   "Suimon/Invariants.lean": "eebac5dda7828138e993ce3e52fa5acdab699e8fb3719c60f8834cd549f04823",
   "Suimon/Op.lean": "e39ec69ef17b190616b3b37c8c9d0a931a1dd3c09034bacbc61779405974c13d",
   "Suimon/Oracle.lean": "eb4885573b30bd1c4127417c4981e71cf5b9f458826adde189b8a0c8b67928e3",
+  "Suimon/Scheduler.lean": "482f944f733d3df2d4aca1866f6b174670ea73610273028be517eb01e1d48378",
   "Suimon/State.lean": "5e3e0743ba3b1c486b6b599ed44290391781b1ef305547d6c07b4dd648a6dffe",
   "Suimon/Step.lean": "10bad44679ccb027d32f2744a3c77b2ff9afdbd86afb521db9a9d3084bc20538",
   "Suimon/Trace/AtomCodec.lean": "0c171baa7613fd39f47a2386d1e1fbd6e2ec94667d92dddcf5c7393be56cec34",

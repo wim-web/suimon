@@ -34,6 +34,22 @@ private def respond (s : State) (request : Json) : Except String (State × Json)
       filter := fun _ _ => keep
       loop := fun _ _ _ => done }
     return (s, toJson (oracleConforms oracle state op))
+  | "scheduler" =>
+    let state : State ← request.getObjValAs? _ "state"
+    let owned : List AttemptId ← request.getObjValAs? _ "owned"
+    let autoRenew : Bool ← request.getObjValAs? _ "autoRenew"
+    let now : Nat ← request.getObjValAs? _ "now"
+    let stale : Option Nat ← request.getObjValAs? _ "stale"
+    let announced : Bool ← request.getObjValAs? _ "announced"
+    let message : Bool ← request.getObjValAs? _ "message"
+    let timers := Scheduler.timers state owned autoRenew
+    let deadline := Scheduler.waitDeadline timers stale announced
+    return (s, Json.mkObj [("timers", toJson timers),
+      ("maintenance", toJson (Scheduler.maintenance state owned autoRenew now)),
+      ("deadline", toJson deadline),
+      ("enabled", toJson (Scheduler.pollEnabled deadline)),
+      ("announce", toJson (Scheduler.announceStall timers stale announced now)),
+      ("wake", toJson (Scheduler.wake deadline now message))])
   | "step" =>
     let op : Op ← request.getObjValAs? _ "op"
     match step s op with

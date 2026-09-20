@@ -134,7 +134,7 @@ func (r *workflowRuntime) loop() {
 			}
 			continue
 		}
-		progress, err := r.advance()
+		progress, err := r.advance(r.now())
 		if err != nil {
 			finalError = err
 			return
@@ -142,13 +142,17 @@ func (r *workflowRuntime) loop() {
 		if progress {
 			continue
 		}
-		waitTick := ticker.C
-		if stalled := r.stalledError(); stalled != nil {
-			if r.stall == nil {
+		// Resample before reporting a stall: time may have moved during probing.
+		now := r.now()
+		ts := r.timers()
+		if schedulerDue(schedulerEarliest(ts), now) {
+			continue
+		}
+		if schedulerAnnounceStall(ts, r.staleDeadline(), r.stall != nil, now) {
+			if stalled := r.stalledError(now); stalled != nil {
 				r.stall = stalled
 				r.publish(true, stalled)
 			}
-			waitTick = nil
 		}
 		if !r.hasTimedWork() && (len(r.jobs) == 0 || !r.hasActiveJobs() && !r.state.HasWork()) {
 			next, rejected := r.probe(Op{Kind: "idle"})
@@ -165,13 +169,12 @@ func (r *workflowRuntime) loop() {
 			}
 			if r.state.Status == "blocked" {
 				r.publish(true, fmt.Errorf("%w: %s", ErrBlocked, value(r.state.Reason, "DEPENDENCIES_UNRESOLVED")))
-				waitTick = nil
 			} else {
 				finalError = fmt.Errorf("no executable operation for nonterminal state")
 				return
 			}
 		}
-		if err := r.wait(waitTick); err != nil {
+		if err := r.wait(ticker.C); err != nil {
 			finalError = err
 			return
 		}
@@ -211,11 +214,10 @@ func (r *workflowRuntime) abandon(job *runtimeJob) {
 	job.cancel()
 }
 
-func (r *workflowRuntime) stalledError() *WorkerStalledError {
+func (r *workflowRuntime) stalledError(now Nat) *WorkerStalledError {
 	if !r.needsSlot || r.slot() || r.hasActiveJobs() {
 		return nil
 	}
-	now := r.now()
 	stalled := &WorkerStalledError{Workers: r.options.Workers}
 	for _, job := range r.jobs {
 		if job.staleAt == nil || now.Cmp(job.staleAt.Add(r.options.StaleGraceSeconds)) < 0 {
@@ -404,25 +406,13 @@ func (r *workflowRuntime) materialize(op Op) (map[string]json.RawMessage, error)
 	return result, nil
 }
 
-func (r *workflowRuntime) advance() (bool, error) {
+func (r *workflowRuntime) advance(now Nat) (bool, error) {
 	r.needsSlot = false
 	if !r.state.Started {
 		return true, r.apply(Op{Kind: "start", Inputs: r.inputs}, r.startValues)
 	}
-	now := r.now()
-	for _, i := range r.state.Instances {
-		if i.Status == "running" && i.Lease != nil && i.Lease.Until.Cmp(now) <= 0 {
-			return true, r.apply(Op{Kind: "expireLease", Inst: i.ID, Now: now}, nil)
-		}
-		if i.Status == "retryWait" && i.RetryAt != nil && i.RetryAt.Cmp(now) <= 0 {
-			return true, r.apply(Op{Kind: "promoteRetry", Inst: i.ID, Now: now}, nil)
-		}
-		if i.Status == "running" {
-			if at := r.renewAt(i); at != nil && now.Cmp(*at) >= 0 {
-				a := Credentials{i.ID, i.Lease.Attempt, i.Lease.Token, now}
-				return true, r.apply(Op{Kind: "renew", Auth: a}, nil)
-			}
-		}
+	if op := schedulerFirstDue(r.timers(), now); op != nil {
+		return true, r.apply(*op, nil)
 	}
 	// Rotate through eligible controls and claims so a fast producer cannot
 	// keep spawning at the expense of already-ready downstream work.
@@ -636,7 +626,11 @@ func (r *workflowRuntime) handle(m runMessage) error {
 		case "loopIterate":
 			op.Done = m.choice
 		}
-		return wrap(r.apply(op, nil))
+		err := r.apply(op, nil)
+		if _, rejected := err.(*Reject); rejected {
+			return wrap(err)
+		}
+		return err
 	}
 	auth := job.auth
 	auth.Now = r.now()
