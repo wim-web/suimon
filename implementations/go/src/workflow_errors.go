@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrWorkerStalled   = errors.New("worker slots occupied by stale handlers")
-	ErrConditionNotMet = errors.New("workflow ended without satisfying the condition")
+	ErrWorkerStalled          = errors.New("worker slots occupied by stale handlers")
+	ErrConditionNotMet        = errors.New("workflow ended without satisfying the condition")
+	ErrInvalidExecutionCursor = errors.New("cursor does not identify an observed execution status")
 )
 
 type StalledHandler struct {
@@ -23,6 +24,8 @@ type StalledHandler struct {
 // WorkerStalledError settles Wait without stopping a Start/Restore execution.
 // Returning handlers release their slots and wake the scheduler automatically.
 // Run/Resume stop on return; they cannot reclaim handlers that ignore context.
+// Same-cause maintenance retains this assessment. Use Observe/WaitForChange
+// to await recovery without repeatedly reading the same settled result.
 type WorkerStalledError struct {
 	Workers  int
 	Handlers []StalledHandler

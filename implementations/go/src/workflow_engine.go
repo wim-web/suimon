@@ -62,13 +62,31 @@ func (r *workflowRuntime) binding(path Path, node string) (Binding, Path) {
 	return r.bindings[Identity(definition)], definition
 }
 func (r *workflowRuntime) publish(settled bool, err error) {
+	r.publishStatus(settled, false, err)
+}
+
+func (r *workflowRuntime) publishStatus(settled, stopped bool, err error) {
 	r.execution.mu.Lock()
 	defer r.execution.mu.Unlock()
-	r.execution.view = &runtimeView{r.state, Snapshot{r.graph, r.events, r.values}}
-	r.execution.settled = settled
-	r.execution.err = err
-	close(r.execution.changed)
-	r.execution.changed = make(chan struct{})
+	e := r.execution
+	initial := e.view == nil
+	if initial || len(e.view.snapshot.Events) != len(r.events) {
+		e.view = &runtimeView{r.state, Snapshot{r.graph, r.events, r.values}}
+		if e.changed != nil {
+			close(e.changed)
+		}
+		e.changed = make(chan struct{})
+	}
+	key := executionErrorKey(err)
+	if initial || e.settled != settled || e.stopped != stopped || e.reasonKey != key {
+		e.settled, e.stopped, e.err, e.reasonKey = settled, stopped, err, key
+		e.revision = e.revision.Inc()
+		if e.statusChanged != nil {
+			close(e.statusChanged)
+		}
+		e.statusChanged = make(chan struct{})
+		e.metrics.notifications.Add(1)
+	}
 }
 func (r *workflowRuntime) loop() {
 	var finalError error
@@ -81,16 +99,14 @@ func (r *workflowRuntime) loop() {
 		for _, job := range r.jobs {
 			job.cancel()
 		}
-		r.publish(true, finalError)
+		r.publishStatus(true, true, finalError)
 		close(r.execution.done)
 	}()
 	for {
 		select {
 		case <-r.ctx.Done():
 			if terminal(r.state.Status) {
-				if r.state.Status == "cancelled" {
-					finalError = ErrCancelled
-				}
+				finalError = r.terminalError()
 				return
 			}
 			if err := r.apply(Op{Kind: "cancel"}, nil); err != nil {
@@ -102,8 +118,8 @@ func (r *workflowRuntime) loop() {
 		case <-r.execution.stop:
 			if !terminal(r.state.Status) {
 				finalError = ErrStopped
-			} else if r.state.Status == "cancelled" {
-				finalError = ErrCancelled
+			} else {
+				finalError = r.terminalError()
 			}
 			return
 		default:
@@ -118,11 +134,7 @@ func (r *workflowRuntime) loop() {
 		default:
 		}
 		if terminal(r.state.Status) {
-			var err error
-			if r.state.Status == "cancelled" {
-				err = ErrCancelled
-			}
-			r.publish(true, err)
+			r.publishProgress()
 			select {
 			case <-r.ctx.Done():
 			case <-r.execution.stop:
@@ -148,6 +160,14 @@ func (r *workflowRuntime) loop() {
 		if schedulerDue(schedulerEarliest(ts), now) {
 			continue
 		}
+		if r.stall != nil {
+			r.stall = r.stalledError(now)
+			if r.stall != nil {
+				r.publish(true, r.stall)
+			} else {
+				r.publishProgress()
+			}
+		}
 		if schedulerAnnounceStall(ts, r.staleDeadline(), r.stall != nil, now) {
 			if stalled := r.stalledError(now); stalled != nil {
 				r.stall = stalled
@@ -168,7 +188,7 @@ func (r *workflowRuntime) loop() {
 				continue
 			}
 			if r.state.Status == "blocked" {
-				r.publish(true, fmt.Errorf("%w: %s", ErrBlocked, value(r.state.Reason, "DEPENDENCIES_UNRESOLVED")))
+				r.publish(true, r.blockedError())
 			} else {
 				finalError = fmt.Errorf("no executable operation for nonterminal state")
 				return
@@ -320,7 +340,6 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 	r.state = next
 	r.events = journal
 	r.values = values
-	r.stall = nil
 	r.time = journal[len(journal)-1].RecordedAt
 	r.ids.transaction.used[txn] = true
 	if op.Kind == "claim" && !absorbed {
@@ -345,7 +364,7 @@ func (r *workflowRuntime) apply(op Op, provided map[string]json.RawMessage) erro
 			}
 		}
 	}
-	r.publish(false, nil)
+	r.publishProgress()
 	return nil
 }
 
@@ -600,8 +619,7 @@ func (r *workflowRuntime) handle(m runMessage) error {
 	delete(r.jobs, m.job)
 	defer job.cancel()
 	if r.stall != nil {
-		r.stall = nil
-		r.publish(false, nil)
+		r.publishProgress()
 	}
 	if job.obsolete || terminal(r.state.Status) {
 		return nil

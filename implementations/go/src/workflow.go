@@ -205,16 +205,20 @@ func (e *TaskError) Unwrap() error { return e.Cause }
 // Execution owns a single state writer while handlers run concurrently.
 // Stop suspends the driver; Cancel records a terminal cancellation.
 type Execution struct {
-	requests chan runMessage
-	done     chan struct{}
-	stop     chan struct{}
-	stopOnce sync.Once
-	mu       sync.Mutex
-	view     *runtimeView
-	metrics  runtimeMetrics
-	settled  bool
-	err      error
-	changed  chan struct{}
+	requests      chan runMessage
+	done          chan struct{}
+	stop          chan struct{}
+	stopOnce      sync.Once
+	mu            sync.Mutex
+	view          *runtimeView
+	metrics       runtimeMetrics
+	settled       bool
+	err           error
+	changed       chan struct{}
+	statusChanged chan struct{}
+	revision      Nat
+	reasonKey     string
+	stopped       bool
 }
 
 func (e *Execution) request(ctx context.Context, m runMessage) error {
@@ -277,13 +281,15 @@ func (e *Execution) Stop()                            { e.stopOnce.Do(func() { c
 // Result returns an independent copy of the latest committed state and values.
 func (e *Execution) Result() RunResult { r, _, _, _ := e.read(); return r }
 
-// Wait returns on success, cancellation, a runtime error, or quiescent blocked
-// state. A started execution remains available for ManualRetry while blocked.
+// Wait returns the current settled outcome: success, cancellation, runtime
+// error, blocked, or worker-stalled. Repeated calls may return the same outcome.
+// Observe/WaitForChange waits for changes; a started execution remains available
+// for ManualRetry and natural recovery from stale handlers.
 func (e *Execution) Wait(ctx context.Context) (RunResult, error) {
 	for {
-		v, settled, err, changed := e.observe()
-		if settled {
-			return e.result(v), err
+		update, changed := e.observeUpdate()
+		if update.Settled {
+			return update.Result(), update.Err
 		}
 		select {
 		case <-changed:
@@ -302,7 +308,7 @@ func (e *Execution) WaitFor(ctx context.Context, predicate func(State) bool) (Ru
 			if err == nil {
 				err = fmt.Errorf("%w: %s", ErrConditionNotMet, v.state.Status)
 			}
-			return e.result(v), err
+			return e.result(v), copyExecutionError(err)
 		}
 		select {
 		case <-e.done:
@@ -447,7 +453,7 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 		}
 	}
 	r.ids = newRuntimeIDs(r.state, r.events)
-	r.publish(false, nil)
+	r.publishProgress()
 	go r.loop()
 	return e, nil
 }

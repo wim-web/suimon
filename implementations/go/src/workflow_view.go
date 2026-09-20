@@ -15,10 +15,12 @@ type runtimeView struct {
 
 // Internal counters let tests observe actual idle polls and candidate probes.
 type runtimeMetrics struct {
-	candidates atomic.Uint64
-	polls      atomic.Uint64
-	waits      atomic.Uint64
-	results    atomic.Uint64
+	candidates    atomic.Uint64
+	polls         atomic.Uint64
+	waits         atomic.Uint64
+	results       atomic.Uint64
+	notifications atomic.Uint64
+	changeWaits   atomic.Uint64
 }
 
 func copyPointer[T any](p *T) *T {
@@ -106,5 +108,5 @@ func (e *Execution) observe() (*runtimeView, bool, error, <-chan struct{}) {
 
 func (e *Execution) read() (RunResult, bool, error, <-chan struct{}) {
 	v, settled, err, changed := e.observe()
-	return e.result(v), settled, err, changed
+	return e.result(v), settled, copyExecutionError(err), changed
 }
