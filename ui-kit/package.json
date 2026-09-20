@@ -1,0 +1,30 @@
+{
+  "name": "@suimon/ui-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": ["dist"],
+  "sideEffects": ["**/*.css"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./styles.css": "./dist/styles.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "pnpm typecheck && vite build && tsc -p tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
+  "dependencies": { "@xyflow/react": "12.11.6", "lucide-react": "1.47.0" },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "~5.9.3",
+    "vite": "8.3.0",
+    "vitest": "^4.0.0"
+  },
+  "packageManager": "pnpm@10.30.1"
+}

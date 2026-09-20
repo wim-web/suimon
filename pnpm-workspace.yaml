@@ -1,0 +1,3 @@
+packages:
+  - ui-kit
+  - implementations/go/example/ui

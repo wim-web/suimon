@@ -1,0 +1,59 @@
+/* Public semantic tokens. Override on .suimon-ui in an unlayered stylesheet. */
+:where(.suimon-ui) {
+  --sui-bg: #1d1d21;
+  --sui-panel: #29272f;
+  --sui-sunken: #222027;
+  --sui-raised: #35313c;
+  --sui-hover: #443c4e;
+  --sui-selected: #473452;
+  --sui-border: #4b4255;
+  --sui-border-strong: #756282;
+  --sui-text: #f0eaf5;
+  --sui-text-secondary: #d3c5df;
+  --sui-muted: #b7a6c5;
+  --sui-accent: #bd91ee;
+  --sui-accent-strong: #8d45ca;
+  --sui-accent-soft: #a46aff26;
+  --sui-on-accent: #ffffff;
+  --sui-focus: #d6afff;
+  --sui-success: #b3dbbf;
+  --sui-success-bg: #283c31;
+  --sui-warning: #efc38c;
+  --sui-warning-bg: #493727;
+  --sui-danger: #f0b5c2;
+  --sui-danger-bg: #50303b;
+  --sui-shadow: #00000028;
+  --sui-shadow-strong: #00000070;
+  --sui-highlight: #ffffff20;
+  --sui-grid: #49414f;
+  --sui-edge: #a28fae;
+  color-scheme: dark;
+}
+:where(.suimon-ui[data-theme='light']) {
+  --sui-bg: #f5f3f8;
+  --sui-panel: #ffffff;
+  --sui-sunken: #f4f0f7;
+  --sui-raised: #ece6f2;
+  --sui-hover: #e2d8ed;
+  --sui-selected: #e7d8f4;
+  --sui-border: #d2c6de;
+  --sui-border-strong: #9983ad;
+  --sui-text: #2c2136;
+  --sui-text-secondary: #493657;
+  --sui-muted: #695475;
+  --sui-accent: #793eb0;
+  --sui-accent-strong: #7132a9;
+  --sui-accent-soft: #8d45ca18;
+  --sui-focus: #7132a9;
+  --sui-success: #23613b;
+  --sui-success-bg: #e0f0e5;
+  --sui-warning: #775022;
+  --sui-warning-bg: #f6ead8;
+  --sui-danger: #963349;
+  --sui-danger-bg: #f9e4e9;
+  --sui-shadow: #29173514;
+  --sui-shadow-strong: #29173530;
+  --sui-grid: #d3c5de;
+  --sui-edge: #856494;
+  color-scheme: light;
+}

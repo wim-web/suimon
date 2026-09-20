@@ -32,11 +32,13 @@ go -C implementations/go run ./cmd/suimon check ../../Test/traces/minimal.jsonl 
 
 原本は引き続き Lean の定義です。Go 版との一致は `bin/test-go` で比較検証します。
 
-[簡単な実行例](implementations/go/example/README.md)では、2つのノードをGoで作って接続し、文字列を処理して完了するまでを確認できます。
+[Go の実行例](implementations/go/example/README.md)では、時間差の Emit、Filter、ForEach の並列処理、Collect（AllWait）による全件待ちを確認できます。`-scenario batch` で全件生成後に送る方式と比較し、`-scenario basic` で2ノードの基本例を実行できます。
 
 ```sh
 go -C implementations/go run ./example
 ```
+
+`pnpm install` と `pnpm build` で画面をビルドし、`-ui` を付けて example を起動すると、ブラウザでサンプルを切り替え、途中の入出力や並列実行数を確認できます。共通部品は [ui-kit](ui-kit/README.md)、Go 専用の画面は [implementations/go/example/ui](implementations/go/example/ui/) にあります。
 
 ## 検証
 

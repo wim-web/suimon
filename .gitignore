@@ -1,2 +1,5 @@
 .lake/
 .DS_Store
+ui-kit/dist/
+node_modules/
+implementations/go/example/ui/dist/

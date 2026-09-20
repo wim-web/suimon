@@ -8,13 +8,13 @@ Lean の実行可能な定義から生成した、標準ライブラリだけに
 
 ## 最初の実行例
 
-リポジトリ直下で実行すると、2つのノードを作り、接続して文字列を処理します。
+リポジトリ直下で実行すると、時間差で生成した値を stream で送り、最大2件を並列に処理します。
 
 ```sh
 go -C implementations/go run ./example
 ```
 
-`trim` → `uppercase` の順に処理し、`HELLO SUIMON` と `status: succeeded` を表示します。[main.go](example/main.go) は `createGraph()` とライブラリの `Run` を呼ぶ入口です。グラフの組み立ては [graph.go](example/graph.go)、ノードの処理は [nodes.go](example/nodes.go)、結果表示は [result.go](example/result.go) に分けています。[手順と出力](example/README.md)も参照してください。
+`Source → Filter → ForEach → Collect（AllWait）` の順に処理します。sleep で外部 I/O を模擬し、生成中に下流が動くこと、完了順の入れ替わり、全件待ちを観察できます。`-scenario batch` で全件生成後の一括送信、`-scenario basic` で従来の `trim → uppercase` を実行できます。[scenarios.go](example/scenarios.go) にグラフと処理、[example/ui](example/ui/) に共通 UI kit を利用する画面を置いています。[手順と比較方法](example/README.md)を参照してください。
 
 ## CLI
 

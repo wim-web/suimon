@@ -9,7 +9,7 @@ func main() {
 }
 ```
 
-この形で動く例が [example/](example/) にあります。[graph.go](example/graph.go) が組み立て、[nodes.go](example/nodes.go) が利用者の処理です。実行順や状態遷移を example に書く必要はありません。
+この基本形が [example/graph.go](example/graph.go) と [example/nodes.go](example/nodes.go) にあります。[scenarios.go](example/scenarios.go) は stream・Filter・ForEach・Collect（AllWait）を使う例です。実行順や状態遷移を example に書く必要はありません。
 
 ## 処理関数と値
 

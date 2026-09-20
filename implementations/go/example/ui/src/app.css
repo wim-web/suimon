@@ -1,0 +1,33 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: #1d1d21; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+html, body, #root { width: 100%; height: 100%; }
+.app-loading { height: 100%; display: flex; flex-direction: column; gap: 18px; align-items: center; justify-content: center; color: var(--sui-text-secondary); font-size: 13px; }
+.app-loading button { padding: 10px 20px; background: var(--sui-accent-strong); color: var(--sui-on-accent); border: 0; border-radius: 5px; cursor: pointer; }
+.app-run-input { padding: 17px 15px; }
+.app-section-label { display: flex; gap: 8px; align-items: center; color: var(--sui-muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
+.app-run-input textarea { display: block; width: 100%; min-height: 76px; resize: vertical; max-height: 220px; margin: 12px 0 9px; padding: 10px; background: var(--sui-sunken); color: var(--sui-text); border: 1px solid var(--sui-border); border-radius: 5px; font: 11px/1.7 ui-monospace, monospace; }
+.app-run-input textarea:focus { outline: 1px solid var(--sui-focus); border-color: var(--sui-border); }
+.app-input-hint { display: block; color: var(--sui-muted); font-size: 11px; line-height: 1.8; }
+.app-runtime { display: flex; align-items: center; gap: 7px; margin-top: 22px; font-size: 11px; color: var(--sui-muted); }
+.app-local { margin-left: auto; font-size: 11px; color: var(--sui-muted); padding: 2px 5px; border: 1px solid var(--sui-border); border-radius: 3px; }
+.app-output { margin-top: 20px; padding: 11px; border-radius: 5px; background: var(--sui-success-bg); border: 1px solid var(--sui-border); }
+.app-output > div:first-child { display: flex; align-items: center; gap: 5px; font-size: 11px; letter-spacing: .07em; color: var(--sui-success); }
+.app-output pre { margin: 8px 0 0; color: var(--sui-success); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; max-height: 200px; overflow-y: auto; }
+.app-error { background: var(--sui-danger-bg); color: var(--sui-danger); padding: 12px 20px; font-size: 12px; }
+.app-spin { animation: app-spin 1s linear infinite; }
+.app-sample-select { max-width: 170px; padding: 7px 9px; color: var(--sui-text); background: var(--sui-raised); border: 1px solid var(--sui-border); border-radius: 5px; font-size: 11px; }
+.app-sample-description { color: var(--sui-text-secondary); font-size: 11px; line-height: 1.8; margin-bottom: 18px; }
+.app-delay { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0; font-size: 11px; color: var(--sui-text-secondary); }
+.app-delay select { background: var(--sui-raised); color: var(--sui-text); border: 1px solid var(--sui-border); border-radius: 4px; padding: 5px; font-size: 11px; }
+.app-live-progress { display: flex; align-items: center; gap: 0; flex-shrink: 0; background: var(--sui-panel); border-bottom: 1px solid var(--sui-border); min-height: 86px; padding: 12px 20px; overflow-x: auto; }
+.app-live-title { display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--sui-text-secondary); font-size: 11px; min-width: 60px; margin-right: 15px; }.app-live-title > span { color: var(--sui-text); font: 11px ui-monospace, monospace; }
+.app-progress-stage { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 130px; padding: 0 16px; border-left: 1px solid var(--sui-border); }.app-progress-stage > small { color: var(--sui-text-secondary); font-size: 11px; }.app-progress-stage > strong { display: flex; align-items: center; gap: 5px; font: 12px ui-monospace, monospace; color: var(--sui-text); }.app-progress-stage > span { color: var(--sui-muted); font-size: 11px; }.app-progress-stage .app-active { color: var(--sui-text); }
+.app-progress-timings { display: flex; flex-direction: column; gap: 10px; padding-left: 20px; min-width: 160px; font-size: 11px; color: var(--sui-text-secondary); }.app-progress-timings > span { display: flex; align-items: center; gap: 5px; }.app-progress-timings b { margin-left: auto; color: var(--sui-text); font: 11px ui-monospace, monospace; }
+.app-comparison { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--sui-border); }.app-comparison > strong { font-size: 11px; font-weight: 500; color: var(--sui-text-secondary); }.app-comparison table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 11px; color: var(--sui-text-secondary); }.app-comparison th { font-weight: 400; text-align: left; padding: 5px 0; }.app-comparison td { font: 11px ui-monospace, monospace; }.app-comparison thead { color: var(--sui-muted); border-bottom: 1px solid var(--sui-border); }.app-comparison small { color: var(--sui-muted); font-size: 11px; }
+@media (max-width: 1000px) { .app-progress-timings { display: none; }.app-live-title { min-width: 45px; margin-right: 5px; }.app-progress-stage { padding: 0 10px; }.app-sample-select { max-width: 135px; } }
+@media (max-width: 640px) { .app-sample-select { max-width: 105px; font-size: 11px; }.sui-toolbar .sui-workflow-title { display: none; }.sui-toolbar-actions { margin-right: auto; }.app-live-progress { padding: 8px; min-height: 78px; }.app-progress-stage { min-width: 128px; } }
+@keyframes app-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .app-spin { animation: none; } }
+
+.app-output-port h3 { margin: 14px 0 0; font: 12px ui-monospace, monospace; color: var(--sui-success); overflow-wrap: anywhere; }
+.app-output p { margin-top: 8px; font-size: 11px; color: var(--sui-muted); }

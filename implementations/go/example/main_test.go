@@ -1,10 +1,12 @@
 package main
 
+import "context"
+
 func Example() {
-	main()
+	printResult(createGraph().Run(context.Background()))
 	// Output:
 	// trim: "  hello suimon  " -> "hello suimon"
 	// uppercase: "hello suimon" -> "HELLO SUIMON"
-	// result: HELLO SUIMON
+	// result uppercase.out: "HELLO SUIMON"
 	// status: succeeded
 }
