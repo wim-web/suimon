@@ -1,4 +1,5 @@
-import Suimon
+import Suimon.Explore
+import Suimon.Trace.Wire
 import Test.Examples
 open Lean Suimon
 

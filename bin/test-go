@@ -2,6 +2,27 @@
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+suite="${1:-all}"
+if [[ $# -gt 1 || ! "$suite" =~ ^(all|unit|conformance)$ ]]; then
+  echo 'Usage: bin/test-go [all|unit|conformance]' >&2
+  exit 2
+fi
+if [[ "$suite" == all ]]; then
+  bin/test
+  bin/test-go unit
+  bin/test-go conformance
+  exit
+fi
+# Keep oracle-dependent test names distinguishable from the standalone Go suite.
+comparison_tests='^(TestLean|TestCLICompatibility)|AgainstLean$'
+if [[ "$suite" == unit ]]; then
+  unset SUIMON_LEAN_ORACLE SUIMON_LEAN_CLI SUIMON_GO_CLI SUIMON_GO_CORPUS
+  cd implementations/go
+  go test -count=1 -v -skip "$comparison_tests" ./...
+  go test -race -count=1 -run '^TestWorkflow' ./src
+  go vet ./...
+  exit
+fi
 if [[ -n "${LAKE:-}" ]]; then
   lake_bin="$LAKE"
 elif command -v lake >/dev/null 2>&1; then
@@ -9,17 +30,20 @@ elif command -v lake >/dev/null 2>&1; then
 else
   lake_bin="$HOME/.elan/bin/lake"
 fi
+if rg -n '\b(sorry|admit|axiom)\b' Suimon Test Main.lean Suimon.lean lakefile.lean --glob '*.lean'; then
+  echo 'Unfinished proofs or unchecked axioms found.' >&2
+  exit 1
+fi
 go_test_tmp="$(mktemp -d "${TMPDIR:-/tmp}/suimon-go.XXXXXX")"
 trap 'rm -rf "$go_test_tmp"' EXIT
 export SUIMON_GO_CORPUS="$go_test_tmp/corpus.jsonl"
 : > "$SUIMON_GO_CORPUS"
-"$lake_bin" build suimon_go_oracle
-bin/test
+"$lake_bin" build suimon suimon_go_oracle suimon_go_corpus
+.lake/build/bin/suimon_go_corpus
 export SUIMON_LEAN_ORACLE="$repo_root/.lake/build/bin/suimon_go_oracle"
 export SUIMON_LEAN_CLI="$repo_root/.lake/build/bin/suimon"
 export SUIMON_GO_CLI="$go_test_tmp/suimon"
 cd implementations/go
 go build -o "$SUIMON_GO_CLI" ./cmd/suimon
-go test -count=1 -v ./...
-go test -race -count=1 -run 'TestWorkflow' ./src
-go vet ./...
+# Workflow tests also compare their recorded traces with the Lean oracle.
+go test -count=1 -v -run "$comparison_tests|^TestWorkflow" ./src ./cmd/suimon
