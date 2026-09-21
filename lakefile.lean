@@ -9,5 +9,10 @@ lean_lib Test
 lean_exe suimon_test where
   root := `Test.Main
   needs := #[`@/suimon]
+lean_exe suimon_schema_test where
+  root := `Test.SchemaMain
+  needs := #[`@/suimon]
 lean_exe suimon_go_oracle where
   root := `Test.GoOracle
+lean_exe suimon_go_corpus where
+  root := `Test.GoCorpusMain

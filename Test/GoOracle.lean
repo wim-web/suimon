@@ -1,4 +1,7 @@
-import Suimon
+import Suimon.Execution
+import Suimon.Explore
+import Suimon.Scheduler
+import Suimon.Trace.Wire
 open Lean Suimon
 
 /- A persistent, test-only JSON-lines oracle. All expected states, rejections,

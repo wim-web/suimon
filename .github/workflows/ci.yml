@@ -1,11 +1,98 @@
 name: specification
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ui-kit: ${{ steps.filter.outputs.ui-kit }}
+      lean: ${{ steps.filter.outputs.lean }}
+      schema: ${{ steps.filter.outputs.schema }}
+      go: ${{ steps.filter.outputs.go }}
+      conformance: ${{ steps.filter.outputs.conformance }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            ui-kit:
+              - '.github/workflows/ci.yml'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
+              - 'ui-kit/**'
+              - 'implementations/go/example/ui/**'
+              - 'Test/graphs/**'
+              - 'Test/traces/**'
+              - '!**/*.md'
+            lean:
+              - '.github/workflows/ci.yml'
+              - '**/*.lean'
+              - 'lean-toolchain'
+              - 'lake-manifest.json'
+              - 'bin/test'
+              - 'Test/graphs/**'
+              - 'Test/traces/**'
+              - '!Test/{Artifacts,Schema,SchemaMain,TraceProjection,TraceText,GoOracle,GoCorpusMain}.lean'
+              - '!**/*.md'
+            schema:
+              - '.github/workflows/ci.yml'
+              - 'Main.lean'
+              - 'Suimon/**'
+              - '!Suimon/Theorems/**'
+              - '!Suimon/{Axioms,Semantics,Execution,Scheduler}.lean'
+              - 'Test/{Artifacts,Schema,SchemaMain,TraceProjection,TraceText,Examples}.lean'
+              - 'Test/graphs/**'
+              - 'Test/traces/**'
+              - 'schema/**'
+              - 'lakefile.lean'
+              - 'lake-manifest.json'
+              - 'lean-toolchain'
+              - 'bin/test'
+              - '!**/*.md'
+            go:
+              - '.github/workflows/ci.yml'
+              - 'implementations/go/**/*.go'
+              - 'implementations/go/go.mod'
+              - 'implementations/go/go.sum'
+              - 'Test/graphs/**'
+              - 'Test/traces/**'
+              - 'Suimon/{Op,Graph}.lean'
+              - 'bin/test-go'
+              - '!**/*.md'
+            conformance:
+              - '.github/workflows/ci.yml'
+              - 'Main.lean'
+              - 'Suimon/**'
+              - '!Suimon/Theorems/**'
+              - '!Suimon/{Axioms,Semantics}.lean'
+              - 'Test/{Examples,Regression,GoCorpus,GoCorpusMain,GoOracle}.lean'
+              - 'Test/graphs/**'
+              - 'Test/traces/**'
+              - 'lakefile.lean'
+              - 'lake-manifest.json'
+              - 'lean-toolchain'
+              - 'implementations/go/src/**'
+              - 'implementations/go/cmd/**'
+              - 'implementations/go/go.mod'
+              - 'implementations/go/go.sum'
+              - 'implementations/go/lean-sources.json'
+              - 'bin/test-go'
+              - '!**/*.md'
   ui-kit:
+    needs: changes
+    if: needs.changes.outputs.ui-kit == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +105,50 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
-  verify:
+  lean:
+    needs: changes
+    if: needs.changes.outputs.lean == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean toolchain manager
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Prove and test Lean
+        run: bin/test lean
+  schema:
+    needs: changes
+    if: needs.changes.outputs.schema == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean toolchain manager
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Validate schemas and serialized artifacts
+        run: bin/test schema
+  go:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: implementations/go/go.mod
+          cache: false
+      - name: Test, race-check, and vet Go
+        run: bin/test-go unit
+  conformance:
+    needs: changes
+    if: needs.changes.outputs.conformance == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,5 +162,5 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
           sh /tmp/elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Build, prove, replay, explore, and compare Go
-        run: bin/test-go
+      - name: Compare Go with the Lean reference
+        run: bin/test-go conformance

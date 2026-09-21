@@ -133,7 +133,7 @@ func TestLeanLargeNumbersAndUnicode(t *testing.T) {
 	assertJSON(t, "transaction rollback", rolledBack, Initial(g))
 }
 
-func TestStrictFactNumberScale(t *testing.T) {
+func TestLeanStrictFactNumberScale(t *testing.T) {
 	o := newOracle(t)
 	g := readGraph(t, "minimal")
 	_, events, r := RecordTransaction(Initial(g), []Op{{Kind: "start", Inputs: InputValues(g)}, {Kind: "activate", Node: "work"}}, N(1), "txn", Nat{})

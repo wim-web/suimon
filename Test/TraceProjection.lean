@@ -1,4 +1,4 @@
-import Suimon
+import Suimon.Explore
 import Test.Examples
 import Test.Schema
 
