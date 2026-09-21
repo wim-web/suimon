@@ -686,8 +686,9 @@ func (r *workflowRuntime) handle(m runMessage) error {
 		if err == nil {
 			return nil
 		}
-		var rejected *Reject
-		if !errors.As(err, &rejected) {
+		// Persistence errors can wrap Reject and must stop execution.
+		rejected, ok := err.(*Reject)
+		if !ok {
 			return err
 		}
 		m.err = &TaskError{Code: rejected.Code, Cause: rejected}
