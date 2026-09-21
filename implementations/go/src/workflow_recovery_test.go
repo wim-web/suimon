@@ -11,6 +11,65 @@ import (
 	"testing"
 )
 
+func TestWorkflowCompletionCommitError(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, tc := range []struct {
+			name  string
+			cause error
+		}{
+			{"io", errors.New("storage unavailable")},
+			{"reject", reject("STORAGE_REJECT")},
+			{"wrapped-reject", fmt.Errorf("storage validation: %w", reject("STORAGE_REJECT"))},
+		} {
+			t.Run(fmt.Sprintf("legacy=%v/%s", legacy, tc.name), func(t *testing.T) {
+				w := newFixtureWorkflow(t, "minimal")
+				failed := false
+				writesAfterFailure, durableEvents := 0, 0
+				persist := func(events List[Event]) error {
+					if failed {
+						writesAfterFailure++
+						return nil
+					}
+					for n := len(events) - 1; n >= 0; n-- {
+						if op := events[n].Op; op != nil {
+							if op.Kind == "complete" {
+								failed = true
+								return tc.cause
+							}
+							break
+						}
+					}
+					if legacy {
+						durableEvents = len(events)
+					} else {
+						durableEvents += len(events)
+					}
+					return nil
+				}
+				if legacy {
+					w.Options.Commit = func(_ context.Context, s Snapshot) error { return persist(s.Events) }
+				} else {
+					w.Options.Append = func(_ context.Context, b CommitBatch) error { return persist(b.Events) }
+				}
+				r, err := w.Run(testContext(t))
+				if _, ok := err.(*CommitError); !ok || !errors.Is(err, tc.cause) {
+					t.Errorf("completion persistence error was lost: %T %v", err, err)
+				}
+				if !failed || writesAfterFailure != 0 || len(r.Snapshot.Events) != durableEvents {
+					t.Errorf("execution continued after persistence failure: failed=%v writes=%d events=%d durable=%d", failed, writesAfterFailure, len(r.Snapshot.Events), durableEvents)
+				}
+				if i := r.State.NodeInstance(nil, "work"); i == nil || i.Status != "running" {
+					t.Errorf("uncommitted completion changed the instance: %+v", i)
+				}
+				if _, ok := r.Snapshot.Values[PlainItemID(nil, "work", "out")]; ok {
+					t.Error("uncommitted output was published")
+				}
+				assertRuntimeTrace(t, r)
+			})
+		}
+	}
+}
+
 func testWorkflowPersistence(t *testing.T, check runtimeCheck) {
 	t.Run("lease-expires-during-claim-commit", func(t *testing.T) {
 		w := newFixtureWorkflow(t, "minimal")
