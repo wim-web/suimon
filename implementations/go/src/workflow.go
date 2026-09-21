@@ -22,6 +22,7 @@ var (
 // Values maps plain output ports to JSON-serializable application values.
 type Values map[string]any
 
+// InputItem pairs a JSON-serializable value with a valid UTF-8 ID.
 type InputItem struct {
 	ID    string
 	Value any
@@ -439,6 +440,9 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 		for _, in := range w.Inputs {
 			entry := Input{Entry: in.Entry}
 			for _, item := range in.Items {
+				if !utf8.ValidString(item.ID) {
+					return nil, errors.New("input item ID must be valid UTF-8")
+				}
 				data, err := encodeData(item.Value)
 				if err != nil {
 					return nil, err
