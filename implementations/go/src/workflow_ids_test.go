@@ -9,6 +9,56 @@ import (
 	"time"
 )
 
+func TestWorkflowEmitKeys(t *testing.T) {
+	w := newFixtureWorkflow(t, "streaming")
+	keys := []string{"", "item-01", "日本語", "😀", "\ufffd"}
+	bindingAt(&w, "emit").Leaf = func(_ context.Context, task *Task) (Values, error) {
+		for _, key := range []string{"\xff", "\xfe", "あ"[:1], "item-\x80"} {
+			if err := task.Emit("out", key, "value"); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+				t.Errorf("Emit(%q): expected UTF-8 error, got %v", key, err)
+			}
+		}
+		for _, key := range keys {
+			for range 2 {
+				if err := task.Emit("out", key, "value"); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return Values{}, nil
+	}
+	r, err := w.Run(testContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emits := 0
+	for _, event := range r.Snapshot.Events {
+		if event.Op != nil && event.Op.Kind == "emit" {
+			emits++
+		}
+	}
+	if emits != 2*len(keys) {
+		t.Fatalf("invalid keys reached the journal: got %d emits, want %d", emits, 2*len(keys))
+	}
+	for _, key := range keys {
+		if _, ok := r.Snapshot.Values[StreamItemID(nil, "emit", "out", key)]; !ok {
+			t.Errorf("missing value for key %q", key)
+		}
+	}
+	outputs := r.Output("collect", "out")
+	if len(outputs) != 1 {
+		t.Fatalf("expected one collected output, got %d", len(outputs))
+	}
+	var items []string
+	if err := outputs[0].Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(keys) {
+		t.Fatalf("distinct keys or redeliveries mishandled: got %d items, want %d", len(items), len(keys))
+	}
+	assertRuntimeTrace(t, r)
+}
+
 func TestWorkflowIDs(t *testing.T) {
 	for _, count := range []int{10, 40} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -161,9 +162,14 @@ func (t *Task) DecodeInput(port string, out any) error {
 	}
 	return json.Unmarshal(v, out)
 }
+
+// Emit commits a stream item using a stable, valid UTF-8 occurrence key.
 func (t *Task) Emit(port, key string, v any) error {
 	if t.closed.Load() {
 		return ErrTaskClosed
+	}
+	if !utf8.ValidString(key) {
+		return errors.New("emit key must be valid UTF-8")
 	}
 	data, err := encodeData(v)
 	if err != nil {
