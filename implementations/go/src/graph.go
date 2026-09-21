@@ -1,6 +1,10 @@
 package suimon
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+	"unicode/utf8"
+)
 
 func (g Graph) Node(id string) *Node { return find(g.Nodes, func(n Node) bool { return n.ID == id }) }
 func (g Graph) input(r PortRef) *Port {
@@ -35,7 +39,7 @@ func (n Node) shapeOK() bool {
 	case "coalesce":
 		return pi && po && len(n.Inputs) > 0 && len(n.Outputs) == 1
 	case "branch":
-		return pi && po && len(n.Inputs) == 1 && len(k.Arms) > 0 && unique(k.Arms) && equal(k.Arms, mapped(n.Outputs, func(p Port) string { return p.Name }))
+		return pi && po && len(n.Inputs) == 1 && len(k.Arms) > 0 && unique(k.Arms) && slices.Equal(k.Arms, mapped(n.Outputs, func(p Port) string { return p.Name }))
 	case "loop":
 		return pi && po && len(n.Inputs) == 1 && len(n.Outputs) == 1 && !k.MaxIterations.IsZero() && b != nil && len(b.Entries) == 1 && len(b.Exits) == 1 && bodyPlain()
 	case "subworkflow":
@@ -202,6 +206,7 @@ func (g Graph) outputConditions(fuel int, src PortRef) ([]condition, bool) {
 
 // Validate is the translation of Graph.validate, including the restrictions
 // on exclusive Coalesce inputs and branches inside nested workflow bodies.
+// Names supplied by Go callers must be valid UTF-8.
 func (g Graph) Validate() error { return g.validate(false) }
 func (g Graph) validate(body bool) error {
 	if !unique(mapped(g.Nodes, func(n Node) string { return n.ID })) {
@@ -217,7 +222,9 @@ func (g Graph) validate(body bool) error {
 		return fmt.Errorf("body Branch must rejoin through Coalesce")
 	}
 	for _, n := range g.Nodes {
-		if n.ID == "" || !unique(mapped(n.Inputs, func(p Port) string { return p.Name })) || !unique(mapped(n.Outputs, func(p Port) string { return p.Name })) || !all(append(append([]Port{}, n.Inputs...), n.Outputs...), func(p Port) bool { return p.Name != "" && (p.Kind == "plain" || p.Kind == "stream") }) {
+		if n.ID == "" || !utf8.ValidString(n.ID) || !unique(mapped(n.Inputs, func(p Port) string { return p.Name })) || !unique(mapped(n.Outputs, func(p Port) string { return p.Name })) || !all(append(append([]Port{}, n.Inputs...), n.Outputs...), func(p Port) bool {
+			return p.Name != "" && utf8.ValidString(p.Name) && (p.Kind == "plain" || p.Kind == "stream")
+		}) {
 			return fmt.Errorf("invalid port or node name")
 		}
 		if !n.shapeOK() {

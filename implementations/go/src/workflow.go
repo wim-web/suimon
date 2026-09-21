@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -21,6 +22,7 @@ var (
 // Values maps plain output ports to JSON-serializable application values.
 type Values map[string]any
 
+// InputItem pairs a JSON-serializable value with a valid UTF-8 ID.
 type InputItem struct {
 	ID    string
 	Value any
@@ -161,9 +163,14 @@ func (t *Task) DecodeInput(port string, out any) error {
 	}
 	return json.Unmarshal(v, out)
 }
+
+// Emit commits a stream item using a stable, valid UTF-8 occurrence key.
 func (t *Task) Emit(port, key string, v any) error {
 	if t.closed.Load() {
 		return ErrTaskClosed
+	}
+	if !utf8.ValidString(key) {
+		return errors.New("emit key must be valid UTF-8")
 	}
 	data, err := encodeData(v)
 	if err != nil {
@@ -433,6 +440,9 @@ func (w Workflow) start(ctx context.Context, from *Snapshot) (*Execution, error)
 		for _, in := range w.Inputs {
 			entry := Input{Entry: in.Entry}
 			for _, item := range in.Items {
+				if !utf8.ValidString(item.ID) {
+					return nil, errors.New("input item ID must be valid UTF-8")
+				}
 				data, err := encodeData(item.Value)
 				if err != nil {
 					return nil, err

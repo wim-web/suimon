@@ -9,6 +9,124 @@ import (
 	"time"
 )
 
+type inputIDMarshalProbe struct{ called *bool }
+
+func (p inputIDMarshalProbe) MarshalJSON() ([]byte, error) {
+	*p.called = true
+	return []byte(`7`), nil
+}
+
+func TestWorkflowInputIDs(t *testing.T) {
+	for _, id := range []string{"\xff", "\xfe", "あ"[:1], "input-\x80"} {
+		t.Run(fmt.Sprintf("invalid-%x", id), func(t *testing.T) {
+			w := newFixtureWorkflow(t, "minimal")
+			encoded, persisted := false, false
+			w.Inputs[0].Items = []InputItem{{ID: id, Value: inputIDMarshalProbe{&encoded}}}
+			w.Options.Append = func(context.Context, CommitBatch) error { persisted = true; return nil }
+			e, err := w.Start(testContext(t))
+			if e != nil {
+				e.Stop()
+			}
+			if err == nil || !strings.Contains(err.Error(), "UTF-8") {
+				t.Errorf("Start: expected UTF-8 error, got %v", err)
+			}
+			if encoded || persisted {
+				t.Fatalf("invalid input reached serialization or persistence: encoded=%v persisted=%v", encoded, persisted)
+			}
+		})
+	}
+	t.Run("unicode-json-roundtrip", func(t *testing.T) {
+		w := newFixtureWorkflow(t, "minimal")
+		w.Graph.Nodes[0] = Node{ID: "処理😀", Kind: NodeKind{Type: "collect"},
+			Inputs: List[Port]{{"入力\ufffd", "stream"}}, Outputs: List[Port]{{"出力😀", "plain"}}}
+		w.Graph.Entries = List[PortRef]{{"処理😀", "入力\ufffd"}}
+		w.Graph.Exits = List[PortRef]{{"処理😀", "出力😀"}}
+		w.Bindings = nil
+		w.Inputs = []ValueInput{{Entry: w.Graph.Entries[0]}}
+		for i, id := range []string{"", "input-01", "入力😀", "\ufffd"} {
+			w.Inputs[0].Items = append(w.Inputs[0].Items, InputItem{ID: id, Value: i})
+		}
+		r, err := w.Run(testContext(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs := r.Output("処理😀", "出力😀")
+		if len(outputs) != 1 {
+			t.Fatalf("expected one collected output, got %d", len(outputs))
+		}
+		var items []int
+		if err := outputs[0].Decode(&items); err != nil {
+			t.Fatal(err)
+		}
+		assertJSON(t, "input values", items, []int{0, 1, 2, 3})
+		data, err := json.Marshal(r.Snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var snapshot Snapshot
+		if err := json.Unmarshal(data, &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := w.Resume(testContext(t), snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertJSON(t, "restored snapshot", restored.Snapshot, r.Snapshot)
+		assertJSON(t, "restored outputs", restored.Outputs, r.Outputs)
+		assertRuntimeTrace(t, restored)
+	})
+}
+
+func TestWorkflowEmitKeys(t *testing.T) {
+	w := newFixtureWorkflow(t, "streaming")
+	keys := []string{"", "item-01", "日本語", "😀", "\ufffd"}
+	bindingAt(&w, "emit").Leaf = func(_ context.Context, task *Task) (Values, error) {
+		for _, key := range []string{"\xff", "\xfe", "あ"[:1], "item-\x80"} {
+			if err := task.Emit("out", key, "value"); err == nil || !strings.Contains(err.Error(), "UTF-8") {
+				t.Errorf("Emit(%q): expected UTF-8 error, got %v", key, err)
+			}
+		}
+		for _, key := range keys {
+			for range 2 {
+				if err := task.Emit("out", key, "value"); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return Values{}, nil
+	}
+	r, err := w.Run(testContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emits := 0
+	for _, event := range r.Snapshot.Events {
+		if event.Op != nil && event.Op.Kind == "emit" {
+			emits++
+		}
+	}
+	if emits != 2*len(keys) {
+		t.Fatalf("invalid keys reached the journal: got %d emits, want %d", emits, 2*len(keys))
+	}
+	for _, key := range keys {
+		if _, ok := r.Snapshot.Values[StreamItemID(nil, "emit", "out", key)]; !ok {
+			t.Errorf("missing value for key %q", key)
+		}
+	}
+	outputs := r.Output("collect", "out")
+	if len(outputs) != 1 {
+		t.Fatalf("expected one collected output, got %d", len(outputs))
+	}
+	var items []string
+	if err := outputs[0].Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(keys) {
+		t.Fatalf("distinct keys or redeliveries mishandled: got %d items, want %d", len(items), len(keys))
+	}
+	assertRuntimeTrace(t, r)
+}
+
 func TestWorkflowIDs(t *testing.T) {
 	for _, count := range []int{10, 40} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
