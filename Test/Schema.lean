@@ -34,12 +34,12 @@ private def checkSchema (root : Json) : Nat → Json → Except String Unit
       | "type" => require (types.contains (← value.getStr?)) "unsupported schema type"
       | "properties" | "$defs" =>
         for (_, child) in (← value.getObj?).toList do checkSchema root fuel child
-      | "items" => checkSchema root fuel value
+      | "items" | "additionalProperties" => checkSchema root fuel value
       | "prefixItems" | "oneOf" | "anyOf" =>
         let children ← value.getArr?
         require (!children.isEmpty) s!"{key} must not be empty"
         for child in children do checkSchema root fuel child
-      | "additionalProperties" | "uniqueItems" => let _ ← value.getBool?; pure ()
+      | "uniqueItems" => let _ ← value.getBool?; pure ()
       | "minLength" | "minItems" | "maxItems" => let _ ← value.getNat?; pure ()
       | "minimum" => let _ ← value.getNum?; pure ()
       | "const" => pure ()
@@ -93,8 +93,10 @@ private def checkValue (root : Json) : Nat → Json → Json → Except String U
         | some childRule =>
           (checkValue root fuel childRule child).mapError (fun e => s!"{key}: {e}")
         | none =>
-          if let some additional := field rule "additionalProperties" then
-            require (← additional.getBool?) s!"unexpected property {key}"
+          match field rule "additionalProperties" with
+          | some (.bool accept) => require accept s!"unexpected property {key}"
+          | some additional => (checkValue root fuel additional child).mapError (fun e => s!"{key}: {e}")
+          | none => pure ()
     | .arr values =>
       if let some minimum := field rule "minItems" then
         require (values.size ≥ (← minimum.getNat?)) "array is too short"

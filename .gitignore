@@ -3,3 +3,5 @@
 ui-kit/dist/
 node_modules/
 implementations/go/example/ui/dist/
+*.test
+/implementations/go/suimon

@@ -1,0 +1,32 @@
+{
+  "main": "branch",
+  "functions": [
+    {"id": "review", "input": "Order", "output": {"single": "Decision"}},
+    {"id": "approve", "input": "Order", "output": {"single": "Decision"}}
+  ],
+  "judges": [
+    {"id": "orderSize", "input": "Order"}
+  ],
+  "transforms": [
+    {"id": "order", "input": "Order", "output": "Order"},
+    {"id": "decision", "input": "Decision", "output": "Decision"}
+  ],
+  "workflows": [
+    {
+      "id": "branch",
+      "input": {"type": "Order", "placement": "route"},
+      "placements": [
+        {"name": "route", "node": {"type": "branch", "judge": "orderSize", "arms": ["review", "auto"]}, "policy": "stop"},
+        {"name": "review", "node": {"type": "function", "function": "review"}, "policy": "stop"},
+        {"name": "approve", "node": {"type": "function", "function": "approve"}, "policy": "stop"},
+        {"name": "decide", "node": {"type": "merge", "element": "Decision"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "route", "arm": "review", "target": "review", "transform": "order"},
+        {"source": "route", "arm": "auto", "target": "approve", "transform": "order"},
+        {"source": "review", "target": "decide", "transform": "decision"},
+        {"source": "approve", "target": "decide", "transform": "decision"}
+      ]
+    }
+  ]
+}

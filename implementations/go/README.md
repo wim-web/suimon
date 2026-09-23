@@ -1,17 +1,18 @@
 # suimon Go 実装
 
-suimon の Go 実装です。[実行 API](src/workflow.go)、[利用例](example/README.md)、[共通の設計理由](../../docs/suimon-design.md)を参照してください。
+[Lean の定義](../../Suimon/)を Go に移した実装と、それを使ってプログラムを Go の関数で実行するランタイムです。ランタイムは移した状態遷移だけで実行を進め、[実行記録](../../schema/trace.schema.json)から再開します。
 
-## 実行
+入口は [Engine](src/engine.go) と [Registry](src/registry.go) です。動く例として [playground](example/README.md) と [ランタイムのテスト](src/runtime_test.go) を参照してください。
+
+## 検証
 
 リポジトリ直下で実行します。
 
 ```sh
-go -C implementations/go run ./example
+bin/test-go unit
+bin/test-go conformance
 ```
 
-CLI の入口は `go -C implementations/go run ./cmd/suimon --help` です。
+`conformance` は Lean CLI と比べますが、Lean CLI をビルドしません。先に `lake build suimon` を実行するか、`SUIMON_LEAN_CLI` で Lean CLI を指定してください。記録で確かめる範囲は[設計理由](../../docs/suimon-design.md#他言語の実装を記録で確かめる理由)を参照してください。
 
-## 検証
-
-Lean の定義と Go 実装のずれを検出するため、リポジトリ直下から [bin/test-go](../../bin/test-go) を実行します。この比較は、Go 実装全体の形式的な同値性を証明するものではありません。
+CLI のオプションは `go -C implementations/go run ./cmd/suimon --help` で確認できます。

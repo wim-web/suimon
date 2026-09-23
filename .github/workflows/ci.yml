@@ -33,8 +33,7 @@ jobs:
               - '.npmrc'
               - 'ui-kit/**'
               - 'implementations/go/example/ui/**'
-              - 'Test/graphs/**'
-              - 'Test/traces/**'
+              - 'Test/programs/**'
               - '!**/*.md'
             lean:
               - '.github/workflows/ci.yml'
@@ -42,19 +41,16 @@ jobs:
               - 'lean-toolchain'
               - 'lake-manifest.json'
               - 'bin/test'
-              - 'Test/graphs/**'
-              - 'Test/traces/**'
-              - '!Test/{Artifacts,Schema,SchemaMain,TraceProjection,TraceText,GoOracle,GoCorpusMain}.lean'
+              - 'Test/programs/**'
+              - '!Test/{Schema,SchemaMain}.lean'
               - '!**/*.md'
             schema:
               - '.github/workflows/ci.yml'
               - 'Main.lean'
               - 'Suimon/**'
               - '!Suimon/Theorems/**'
-              - '!Suimon/{Axioms,Semantics,Execution,Scheduler}.lean'
-              - 'Test/{Artifacts,Schema,SchemaMain,TraceProjection,TraceText,Examples}.lean'
-              - 'Test/graphs/**'
-              - 'Test/traces/**'
+              - 'Test/{Schema,SchemaMain,Validate,Trace}.lean'
+              - 'Test/programs/**'
               - 'schema/**'
               - 'lakefile.lean'
               - 'lake-manifest.json'
@@ -64,11 +60,10 @@ jobs:
             go:
               - '.github/workflows/ci.yml'
               - 'implementations/go/**/*.go'
+              - 'implementations/go/src/testdata/**'
               - 'implementations/go/go.mod'
               - 'implementations/go/go.sum'
-              - 'Test/graphs/**'
-              - 'Test/traces/**'
-              - 'Suimon/{Op,Graph}.lean'
+              - 'Test/programs/**'
               - 'bin/test-go'
               - '!**/*.md'
             conformance:
@@ -76,10 +71,7 @@ jobs:
               - 'Main.lean'
               - 'Suimon/**'
               - '!Suimon/Theorems/**'
-              - '!Suimon/{Axioms,Semantics}.lean'
-              - 'Test/{Examples,Regression,GoCorpus,GoCorpusMain,GoOracle}.lean'
-              - 'Test/graphs/**'
-              - 'Test/traces/**'
+              - 'Test/programs/**'
               - 'lakefile.lean'
               - 'lake-manifest.json'
               - 'lean-toolchain'
@@ -87,7 +79,6 @@ jobs:
               - 'implementations/go/cmd/**'
               - 'implementations/go/go.mod'
               - 'implementations/go/go.sum'
-              - 'implementations/go/lean-sources.json'
               - 'bin/test-go'
               - '!**/*.md'
   ui-kit:
@@ -162,5 +153,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
           sh /tmp/elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Build the Lean CLI
+        run: lake build suimon
       - name: Compare Go with the Lean reference
         run: bin/test-go conformance

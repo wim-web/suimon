@@ -1,0 +1,420 @@
+package suimon
+
+import (
+	"reflect"
+	"testing"
+)
+
+// Ported from Test/Validate.lean.
+
+func accepted(t *testing.T, label string, p *Program) {
+	t.Helper()
+	if err := p.Validate(); err != nil {
+		t.Errorf("%s: expected a valid program, got: %v", label, err)
+	}
+}
+
+func rejected(t *testing.T, label, fragment string, p *Program) {
+	t.Helper()
+	err := p.Validate()
+	if err == nil {
+		t.Errorf("%s: accepted, expected an error with %q", label, fragment)
+	} else if !hasFragment(err.Error(), fragment) {
+		t.Errorf("%s: expected %q, got: %v", label, fragment, err)
+	}
+}
+
+func decodeRejected(t *testing.T, label, fragment, text string) {
+	t.Helper()
+	_, err := ParseProgram([]byte(text))
+	if err == nil {
+		t.Errorf("%s: decoded, expected an error with %q", label, fragment)
+	} else if !hasFragment(err.Error(), fragment) {
+		t.Errorf("%s: expected %q, got: %v", label, fragment, err)
+	}
+}
+
+type placementKind struct {
+	name string
+	kind string
+}
+
+// kinds lists the derived kind of each placement, "none" where it cannot be derived.
+func kinds(p *Program, id string) []placementKind {
+	w, ok := p.workflow(id)
+	if !ok {
+		return nil
+	}
+	var out []placementKind
+	for _, pl := range w.Placements {
+		kind := "none"
+		if k, ok := w.outputKind(p, pl.Name); ok {
+			kind = k.String()
+		}
+		out = append(out, placementKind{pl.Name, kind})
+	}
+	return out
+}
+
+func cycleProgram() *Program {
+	return &Program{
+		Main:       "loop",
+		Functions:  []FunctionDecl{{ID: "step", Input: ptr(Named("A")), Output: Contract{KindSingle, Named("A")}}},
+		Transforms: []TransformDecl{{ID: "a", Input: Named("A"), Output: Named("A")}},
+		Workflows: []Workflow{{
+			ID: "loop",
+			Placements: []Placement{
+				{Name: "x", Control: CallControl{FunctionBody("step")}, Policy: PolicyStop},
+				{Name: "y", Control: CallControl{FunctionBody("step")}, Policy: PolicyStop},
+			},
+			Connections: []Connection{
+				{Source: "x", Target: "y", Transform: Declared("a")},
+				{Source: "y", Target: "x", Transform: Declared("a")},
+			},
+		}},
+	}
+}
+
+// standalone is a concurrency without input, whose only task takes no input either.
+func standalone(input *TransformRef) *Program {
+	return &Program{
+		Main:       "w",
+		Functions:  []FunctionDecl{{ID: "loadConfig", Output: Contract{KindSingle, Named("Config")}}},
+		Transforms: []TransformDecl{{ID: "config", Input: Named("Config"), Output: Named("Config")}},
+		Workflows: []Workflow{{
+			ID: "w",
+			Placements: []Placement{{
+				Name:   "c",
+				Policy: PolicyStop,
+				Control: ConcurrencyControl{Concurrency{
+					Limit:   1,
+					Output:  CollectList,
+					Element: Named("Config"),
+					Tasks: []TaskSpec{{Name: "config", Body: FunctionBody("loadConfig"), Input: input,
+						Output: ptr("config"), Policy: PolicyStop}},
+				}},
+			}},
+		}},
+	}
+}
+
+func TestValidatePrograms(t *testing.T) {
+	for _, name := range append(programNames, extraPrograms...) {
+		p := load(t, name)
+		accepted(t, name, p)
+		data, err := p.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		q, err := ParseProgram(data)
+		if err != nil {
+			t.Fatalf("%s: JSON round trip failed: %v", name, err)
+		}
+		if !reflect.DeepEqual(p, q) {
+			t.Errorf("%s: JSON round trip changed the program", name)
+		}
+	}
+}
+
+func TestDerivedKinds(t *testing.T) {
+	check := func(label string, got, want []placementKind) {
+		t.Helper()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: got %v, want %v", label, got, want)
+		}
+	}
+	check("users: Stream input to a List concurrency is a Stream of lists", kinds(load(t, "users"), "users"),
+		[]placementKind{{"fetchAllUsers", "stream"}, {"perUser", "stream"}, {"all", "single"}})
+	check("branch: a branch keeps its input kind", kinds(load(t, "branch"), "shipping"),
+		[]placementKind{{"list", "stream"}, {"paid", "stream"}, {"ship", "stream"}, {"receipts", "single"}})
+	check("merge: Merge of Singles is Single, and a discard connection from a Single is Single",
+		kinds(load(t, "merge"), "dashboard"),
+		[]placementKind{{"sales", "single"}, {"stock", "single"}, {"widgets", "single"}, {"page", "single"},
+			{"archive", "single"}, {"notify", "single"}})
+	users := load(t, "users")
+	got, ok := users.resultType(ConcurrencyControl{Concurrency{Limit: 1, Output: CollectList, Element: Named("T")}})
+	if !ok || got != ListOf(Named("T")) {
+		t.Errorf("a List concurrency produces List<T>, got %v", got)
+	}
+}
+
+func TestValidateNamesAndReferences(t *testing.T) {
+	rejected(t, "duplicate placement", "duplicate placement name", mapWorkflow(load(t, "merge"), "dashboard",
+		func(w *Workflow) { w.Placements = append(w.Placements, w.Placements[0]) }))
+	merge := load(t, "merge")
+	merge.Main = "nope"
+	rejected(t, "unknown main", "unknown main workflow nope", merge)
+	rejected(t, "unknown transform", "unknown transform nope", mapWorkflow(load(t, "merge"), "dashboard",
+		mapConnection("sales", "archive", func(c *Connection) { c.Transform = Declared("nope") })))
+	rejected(t, "unknown output endpoint", "fetch is not an endpoint of workflow profileFlow",
+		mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(mapTask("profile",
+			func(task *TaskSpec) { task.Body = WorkflowBody("profileFlow", "fetch") })))))
+}
+
+func TestValidateTypes(t *testing.T) {
+	rejected(t, "transform input", "takes Stock, but sales produces Sales", mapWorkflow(load(t, "merge"), "dashboard",
+		mapConnection("sales", "archive", func(c *Connection) { c.Transform = Declared("stockWidget") })))
+	rejected(t, "transform output", "returns Widget, but archive takes Sales", mapWorkflow(load(t, "merge"), "dashboard",
+		mapConnection("sales", "archive", func(c *Connection) { c.Transform = Declared("salesWidget") })))
+	rejected(t, "entry type", "the input type Org does not match", mapWorkflow(load(t, "users"), "users",
+		func(w *Workflow) { w.Input = &Entry{Type: Named("Org"), Placement: "fetchAllUsers"} }))
+	rejected(t, "task input transform", "an input transform is required", mapWorkflow(load(t, "users"), "users",
+		mapPlacement("perUser", mapConcurrency(mapTask("orders", func(task *TaskSpec) { task.Input = nil })))))
+	rejected(t, "task output transform", "takes Profile, but the body produces Orders",
+		mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(mapTask("orders",
+			func(task *TaskSpec) { task.Output = ptr("profileSummary") })))))
+}
+
+func TestValidateInputs(t *testing.T) {
+	rejected(t, "two inputs", "archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
+		func(w *Workflow) {
+			for _, c := range w.Connections {
+				if c.Target == "archive" {
+					w.Connections = append(w.Connections, c)
+				}
+			}
+		}))
+	rejected(t, "missing input", "archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
+		func(w *Workflow) { dropConnection(w, "sales", "archive") }))
+	rejected(t, "input to a node without input", "stock takes no input", mapWorkflow(load(t, "merge"), "dashboard",
+		func(w *Workflow) {
+			w.Connections = append(w.Connections, Connection{Source: "sales", Target: "stock", Transform: Declared("sales")})
+		}))
+	rejected(t, "Merge entry", "Merge cannot be the entry", mapWorkflow(load(t, "merge"), "dashboard",
+		func(w *Workflow) { w.Input = &Entry{Type: Named("Widget"), Placement: "widgets"} }))
+}
+
+// discard: a target without input runs once per value it receives, without the value.
+func TestValidateDiscard(t *testing.T) {
+	ticks := mapWorkflow(load(t, "branch"), "shipping", func(w *Workflow) {
+		w.Placements = append(w.Placements,
+			Placement{Name: "tick", Control: CallControl{FunctionBody("tick")}, Policy: PolicyContinue},
+			Placement{Name: "ticks", Control: WaitStreamControl{Named("Tick")}, Policy: PolicyStop})
+		w.Connections = append(w.Connections,
+			Connection{Source: "ship", Target: "tick", Transform: Discard},
+			Connection{Source: "tick", Target: "ticks", Transform: Declared("tick")})
+	})
+	ticks.Functions = append(ticks.Functions, FunctionDecl{ID: "tick", Output: Contract{KindSingle, Named("Tick")}})
+	ticks.Transforms = append(ticks.Transforms, TransformDecl{ID: "tick", Input: Named("Tick"), Output: Named("Tick")})
+	accepted(t, "discard from a Stream", ticks)
+	if k, ok := ticks.OutputKind("shipping", "tick"); !ok || k != KindStream {
+		t.Error("discard keeps the Stream kind")
+	}
+	rejected(t, "discard to a node with input", "discard passes no value, but archive takes Sales",
+		mapWorkflow(load(t, "merge"), "dashboard",
+			mapConnection("sales", "archive", func(c *Connection) { c.Transform = Discard })))
+	rejected(t, "two discard connections", "notify: accepts at most one connection",
+		mapWorkflow(load(t, "merge"), "dashboard", func(w *Workflow) {
+			w.Connections = append(w.Connections, Connection{Source: "stock", Target: "notify", Transform: Discard})
+		}))
+	configTask := func(input *TransformRef) *Program {
+		p := mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(func(c *Concurrency) {
+			c.Tasks = append(c.Tasks, TaskSpec{Name: "config", Body: FunctionBody("loadConfig"), Input: input,
+				Policy: PolicyContinue})
+		})))
+		p.Functions = append(p.Functions, FunctionDecl{ID: "loadConfig", Output: Contract{KindSingle, Named("Config")}})
+		return p
+	}
+	accepted(t, "task without input discards the concurrency input", configTask(&Discard))
+	rejected(t, "task without input and without discard", "the input transform must be discard", configTask(nil))
+	accepted(t, "task without input in a concurrency without input", standalone(nil))
+	rejected(t, "discard without concurrency input", "the concurrency has no input to discard", standalone(&Discard))
+	merge := load(t, "merge")
+	merge.Transforms = append(merge.Transforms, TransformDecl{ID: "discard", Input: Named("A"), Output: Named("A")})
+	rejected(t, "declared discard", "discard is provided by the library and cannot be declared", merge)
+}
+
+func TestValidateGraph(t *testing.T) {
+	rejected(t, "cycle", "connections contain a cycle", cycleProgram())
+	rejected(t, "recursive call", "workflows call each other in a cycle", mapWorkflow(load(t, "users"), "profileFlow",
+		mapPlacement("format", func(pl *Placement) { pl.Control = CallControl{WorkflowBody("profileFlow", "format")} })))
+	rejected(t, "waitStream on Single", "waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
+		mapPlacement("page", func(pl *Placement) { pl.Control = WaitStreamControl{ListOf(Named("Widget"))} })))
+	rejected(t, "Merge of Stream", "Merge accepts only Single inputs (ship)", mapWorkflow(load(t, "branch"), "shipping",
+		mapPlacement("receipts", func(pl *Placement) { pl.Control = MergeControl{Named("Receipt")} })))
+	rejected(t, "Stream endpoint", "endpoint ship must be Single", mapWorkflow(load(t, "branch"), "shipping",
+		func(w *Workflow) {
+			dropConnection(w, "ship", "receipts")
+			var kept []Placement
+			for _, pl := range w.Placements {
+				if pl.Name != "receipts" {
+					kept = append(kept, pl)
+				}
+			}
+			w.Placements = kept
+		}))
+}
+
+func TestValidateBranchArms(t *testing.T) {
+	rejected(t, "no connected arm", "at least one arm needs a connection", mapWorkflow(load(t, "branch"), "shipping",
+		func(w *Workflow) { dropConnection(w, "paid", "ship") }))
+	rejected(t, "unknown arm", "unknown arm refunded", mapWorkflow(load(t, "branch"), "shipping",
+		mapConnection("paid", "ship", func(c *Connection) { c.Arm = ptr("refunded") })))
+	rejected(t, "missing arm", "a connection from a branch needs an arm", mapWorkflow(load(t, "branch"), "shipping",
+		mapConnection("paid", "ship", func(c *Connection) { c.Arm = nil })))
+	rejected(t, "arm outside a branch", "only a connection from a branch has an arm",
+		mapWorkflow(load(t, "merge"), "dashboard",
+			mapConnection("sales", "archive", func(c *Connection) { c.Arm = ptr("x") })))
+}
+
+func TestValidateSettings(t *testing.T) {
+	rejected(t, "zero limit", "limit must be positive", mapWorkflow(load(t, "users"), "users",
+		mapPlacement("perUser", mapConcurrency(func(c *Concurrency) { c.Limit = 0 }))))
+	rejected(t, "no task in the output", "at least one task must be in the output",
+		mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(func(c *Concurrency) {
+			for i := range c.Tasks {
+				c.Tasks[i].Output = nil
+			}
+		}))))
+	accepted(t, "Merge with one input", mapWorkflow(load(t, "merge"), "dashboard", func(w *Workflow) {
+		var placements []Placement
+		for _, pl := range w.Placements {
+			if pl.Name != "stock" {
+				placements = append(placements, pl)
+			}
+		}
+		var connections []Connection
+		for _, c := range w.Connections {
+			if c.Source != "stock" {
+				connections = append(connections, c)
+			}
+		}
+		w.Placements, w.Connections = placements, connections
+	}))
+	rejected(t, "timeout on waitStream", "a timeout is only for a function call or a branch judge",
+		mapWorkflow(load(t, "users"), "users",
+			mapPlacement("all", func(pl *Placement) { pl.Timeout = Timeout{CallMs: ptr[uint64](10)} })))
+	rejected(t, "element timeout on Single", "an element timeout is only for a Stream function",
+		mapWorkflow(load(t, "merge"), "dashboard",
+			mapPlacement("sales", func(pl *Placement) { pl.Timeout = Timeout{ElementMs: ptr[uint64](10)} })))
+	rejected(t, "zero timeout", "a timeout must be positive", mapWorkflow(load(t, "branch"), "shipping",
+		mapPlacement("paid", func(pl *Placement) { pl.Timeout = Timeout{CallMs: ptr[uint64](0)} })))
+}
+
+func TestDecodeRejections(t *testing.T) {
+	base := `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"}`
+	decodeRejected(t, "unknown field", "unknown field retries", base+`,"policy":"stop","retries":1}]}]}`)
+	decodeRejected(t, "missing policy", "missing field policy", base+`}]}]}`)
+	decodeRejected(t, "unknown policy", "policy is stop or continue", base+`,"policy":"retry"}]}]}`)
+}
+
+// Exact messages, where the Lean tests above only look for a fragment.
+func TestValidateMessages(t *testing.T) {
+	cases := []struct {
+		label, want string
+		p           *Program
+	}{
+		{"two inputs", "dashboard.archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
+			func(w *Workflow) { dropConnection(w, "sales", "archive") })},
+		{"unknown arm", "shipping: connection paid -> ship: unknown arm refunded", mapWorkflow(load(t, "branch"), "shipping",
+			mapConnection("paid", "ship", func(c *Connection) { c.Arm = ptr("refunded") }))},
+		{"task output", "users.perUser task orders: transform profileSummary takes Profile, but the body produces Orders",
+			mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(mapTask("orders",
+				func(task *TaskSpec) { task.Output = ptr("profileSummary") }))))},
+		{"list type", "dashboard.page: waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
+			mapPlacement("page", func(pl *Placement) { pl.Control = WaitStreamControl{ListOf(Named("Widget"))} }))},
+		{"entry", "users: entry fetchAllUsers: the input type List<List<Org>> does not match the placement",
+			mapWorkflow(load(t, "users"), "users", func(w *Workflow) {
+				w.Input = &Entry{Type: ListOf(ListOf(Named("Org"))), Placement: "fetchAllUsers"}
+			})},
+	}
+	for _, c := range cases {
+		err := c.p.Validate()
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: got %v, want %q", c.label, err, c.want)
+		}
+	}
+}
+
+func TestDecodeMessages(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{``, "offset 0: unexpected end of input"},
+		{`[1,]`, "offset 3: unexpected input"},
+		{`{"a":1,}`, `offset 7: expected "`},
+		{`"\x"`, `offset 3: illegal \u escape`},
+		{`tru`, "offset 0: expected: true"},
+		{`-a`, "offset 1: expected 1-9"},
+		{`01`, "offset 1: expected end of input"},
+		{`1.`, "offset 2: unexpected end of input"},
+		{`[1 2]`, "offset 4: unexpected character in array"},
+		{`{"a" 1}`, "offset 5: expected :"},
+		{`"é\u00zz"`, "offset 8: invalid hex character"},
+		{"\"a\u0001\"", "offset 3: unexpected character in string"},
+		{`1e99999999999999999999`, "offset 22: exp too large"},
+		{`[]`, "program: expected an object"},
+		{`{"main":"w","workflows":[],"b":1,"a":2}`, "program: unknown field a"},
+		{`{"main":""}`, "program.main: empty string"},
+		{`{"main":"w","workflows":{}}`, "program.workflows: expected an array"},
+		{`{"main":"w","functions":[{"id":"f","output":{"single":"A","stream":"B"}}]}`,
+			"functions.f.output: an output contract is either single or stream"},
+		{`{"main":"w","functions":[{"id":"f","output":{"single":{"list":{"lst":"A"}}}}]}`,
+			"functions.f.output.single: unknown field lst"},
+		{`{"main":"w","functions":[{"id":"f","output":{"single":7}}]}`,
+			`functions.f.output.single: a type is a name or {"list": type}`},
+		{`{"main":"w","judges":[{"id":"j"}]}`, "judges: missing field input"},
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":5}]}]}`,
+			"workflows.w.placements.a.node: missing field type"},
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"loop"}}]}]}`,
+			"workflows.w.placements.a.node: unknown node type loop"},
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","node":{"type":"concurrency","limit":2.0}}]}]}`,
+			"workflows.w.placements.a.node.limit: expected a natural number"},
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","node":{"type":"concurrency","tasks":[]}}]}]}`,
+			"workflows.w.placements.a.node: missing field limit"},
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","timeout":{"callMs":-1},"node":{"type":"merge","element":"T"}}]}]}`,
+			"workflows.w.placements.a.timeout.callMs: expected a natural number"},
+		{`{"main":"w","workflows":[{"id":"w","input":{"type":"T"},"placements":[]}]}`,
+			"workflows.w.input: missing field placement"},
+		{`{"main":"w","workflows":[{"id":"w","connections":[{"source":"a","target":"b","transform":"t","arm":null}]}]}`,
+			"workflows.w.connections.arm: expected a string"},
+	}
+	for _, c := range cases {
+		_, err := ParseProgram([]byte(c.text))
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: got %v, want %q", c.text, err, c.want)
+		}
+	}
+}
+
+func TestDecodeNumbers(t *testing.T) {
+	// Lean's JsonNumber: a natural number needs exponent 0 after the shifts.
+	cases := map[string]uint64{"2": 2, "2e0": 2, "-0": 0, "0.2e1": 2, "1E+1": 10, "1e20": ^uint64(0), "0e999": 0}
+	for text, want := range cases {
+		v, err := parseLeanJSON(text)
+		if err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+		if n, ok := v.num.nat(); !ok || n != want {
+			t.Errorf("%s: got %d %v, want %d", text, n, ok, want)
+		}
+	}
+	for _, text := range []string{"2.0", "20e-1", "1.50e1", "-1", "0.5"} {
+		v, err := parseLeanJSON(text)
+		if err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+		if _, ok := v.num.nat(); ok {
+			t.Errorf("%s: accepted as a natural number", text)
+		}
+	}
+}
+
+func TestLeanJSONStrings(t *testing.T) {
+	cases := map[string]string{
+		`"\ud83d\ude00"`: "\U0001F600",
+		`"\ud83dx"`:      "\uFFFDx",
+		`"\ude00"`:       "\uFFFD",
+		`"\ud83d\u0041"`: "\uFFFDA",
+		`"a\/b\n"`:       "a/b\n",
+	}
+	for text, want := range cases {
+		v, err := parseLeanJSON(text)
+		if err != nil || v.str != want {
+			t.Errorf("%s: got %q %v, want %q", text, v.str, err, want)
+		}
+	}
+	// Objects keep the last field of a key, in key order.
+	v, err := parseLeanJSON(`{"b":1,"a":2,"b":"x"}`)
+	if err != nil || len(v.fields) != 2 || v.fields[0].key != "a" || v.fields[1].value.str != "x" {
+		t.Errorf("tree map: %+v %v", v.fields, err)
+	}
+}

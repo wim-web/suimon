@@ -1,404 +1,480 @@
 package suimon
 
 import (
-	"slices"
 	"strconv"
 )
 
-func Identity(parts []string) string { return compact(List[string](parts)) }
-func InstanceID(path Path, node string, trigger *string) string {
-	return compact([]any{path, []any{node, trigger}})
+// The execution state of Suimon/State.lean. Values stay opaque: the model moves their identities,
+// which are strings. Step never modifies a state in place; every step builds a new one. Only an
+// owner that holds the one reference to a state, the runtime driver and Check, changes it in place
+// (machine, step.go).
+
+// Path identifies a run: nil for the root run, and each sub-workflow call appends the identity of
+// its owner.
+type Path []string
+
+// Identities of the records the engine creates (Lean namespace Key). Each kind starts with its own
+// tag, so identities of different kinds never coincide, and each is a function of where the record
+// comes from, never of the schedule.
+
+// keyInvocation identifies the invocation of a placement in a run by its trigger, nil for none.
+func keyInvocation(path Path, placement string, trigger *string) string {
+	parts := []string{"invocation", Identity(path...), placement}
+	if trigger != nil {
+		parts = append(parts, *trigger)
+	}
+	return Identity(parts...)
 }
-func DerivedItem(tag string, path Path, node string, items []string) string {
-	return Identity(append([]string{tag, Identity(path), node}, items...))
+
+// keyTask identifies the call or run of a task in an execution.
+func keyTask(execution, task string) string { return Identity("task", execution, task) }
+
+// keyCallResult identifies the index-th value a call returned or yielded.
+func keyCallResult(call string, index int) string {
+	return Identity("result", call, strconv.Itoa(index))
 }
-func terminal(status string) bool {
-	return status == "succeeded" || status == "failed" || status == "cancelled"
+
+// keyAggregate identifies the list of a waitStream or Merge placement in a run.
+func keyAggregate(path Path, placement string) string {
+	return Identity("aggregate", Identity(path...), placement)
 }
-func (c Channel) Items() List[string] {
-	out := List[string]{}
-	for _, t := range c.Placed {
-		if !t.EOS {
-			out = append(out, t.Item)
+
+// keyTaskOutput identifies a result of a Stream concurrency output: the output transform of the
+// index-th result of a task.
+func keyTaskOutput(execution, task string, index int) string {
+	return Identity("output", execution, task, strconv.Itoa(index))
+}
+
+// keyList identifies the list of a List concurrency output.
+func keyList(execution string) string { return Identity("list", execution) }
+
+// keyReturned identifies the result a sub-workflow call returned.
+func keyReturned(invocation string) string { return Identity("return", invocation) }
+
+// Cause is why a failure was recorded.
+type Cause int
+
+const (
+	CauseError Cause = iota
+	CauseTimeout
+	CauseLost
+	CauseTransform
+)
+
+var causeNames = []string{"error", "timeout", "lost", "transform"}
+
+func (c Cause) String() string { return causeNames[c] }
+
+// Outcome is how a placement ended in one run. A Single output has a value (normal) or the reason
+// it has none; a Stream output ends normal or skipped, and failures stay in the failure records.
+type Outcome int
+
+const (
+	OutcomeNormal Outcome = iota
+	OutcomeSkipped
+	OutcomeFailed
+	OutcomeUpstreamFailed
+)
+
+var outcomeNames = []string{"normal", "skipped", "failed", "upstreamFailed"}
+
+func (o Outcome) String() string { return outcomeNames[o] }
+
+// Status is the status of the workflow execution.
+type Status int
+
+const (
+	StatusRunning Status = iota
+	StatusStopping
+	StatusSucceeded
+	StatusFailed
+	StatusCancelled
+	StatusSkipped
+)
+
+var statusNames = []string{"running", "stopping", "succeeded", "failed", "cancelled", "skipped"}
+
+func (s Status) String() string { return statusNames[s] }
+
+// Terminal reports whether the status is final.
+func (s Status) Terminal() bool { return s != StatusRunning && s != StatusStopping }
+
+// CallStatus is the status of a call of a user process.
+type CallStatus int
+
+const (
+	CallRunning CallStatus = iota
+	CallFetching
+	CallCancelling
+	CallReturned
+	CallFailed
+	CallLost
+	CallCancelled
+)
+
+var callStatusNames = []string{"running", "fetching", "cancelling", "returned", "failed", "lost", "cancelled"}
+
+func (s CallStatus) String() string { return callStatusNames[s] }
+
+// ended: a cancelled call keeps running until it terminates (§8.2, §11.5).
+func (s CallStatus) ended() bool {
+	return s != CallRunning && s != CallFetching && s != CallCancelling
+}
+
+// InvocationStatus is the status of one application of a placement.
+type InvocationStatus int
+
+const (
+	InvocationActive InvocationStatus = iota
+	InvocationSucceeded
+	InvocationSkipped
+	InvocationFailed
+	InvocationUpstreamFailed
+	InvocationCancelled
+)
+
+var invocationStatusNames = []string{"active", "succeeded", "skipped", "failed", "upstreamFailed", "cancelled"}
+
+func (s InvocationStatus) String() string { return invocationStatusNames[s] }
+
+// TaskStatus is the status of one task in one execution of a concurrency.
+type TaskStatus int
+
+const (
+	TaskPending TaskStatus = iota
+	TaskReady
+	TaskActive
+	TaskSucceeded
+	TaskSkipped
+	TaskFailed
+	TaskUpstreamFailed
+	TaskNotStarted
+	TaskCancelled
+)
+
+var taskStatusNames = []string{"pending", "ready", "active", "succeeded", "skipped", "failed",
+	"upstreamFailed", "notStarted", "cancelled"}
+
+func (s TaskStatus) String() string { return taskStatusNames[s] }
+
+func (s TaskStatus) ended() bool { return s != TaskPending && s != TaskReady && s != TaskActive }
+
+// Run is a workflow executed as the root or as one sub-workflow call.
+type Run struct {
+	Path     Path
+	Workflow string
+	Input    *string
+	// Owner is the invocation, or the execution of the task, that called this workflow; nil for
+	// the root.
+	Owner    *string
+	Task     *string
+	Complete bool
+}
+
+// Invocation is one application of a placement: once for a Single input, once per element of a
+// Stream.
+type Invocation struct {
+	ID        string
+	Run       Path
+	Placement string
+	Trigger   *string
+	Input     *string
+	Status    InvocationStatus
+	// Arm is the arm a branch judge selected.
+	Arm *string
+}
+
+// CallTarget is the user process a call runs: a function, or a judge.
+type CallTarget struct {
+	Judge bool
+	ID    string
+}
+
+// Call is a call of a user process. Its owner is an invocation, or the execution of a task.
+type Call struct {
+	ID      string
+	Owner   string
+	Task    *string
+	Target  CallTarget
+	Input   *string
+	Stream  bool
+	Status  CallStatus
+	Yields  int
+	Timeout Timeout
+	Policy  Policy
+}
+
+// TaskState is one task of an execution.
+type TaskState struct {
+	Name   string
+	Input  *string
+	Status TaskStatus
+}
+
+// Execution is one execution of a concurrency placement for one input.
+type Execution struct {
+	ID        string
+	Run       Path
+	Placement string
+	Input     *string
+	Tasks     []TaskState
+	Complete  bool
+}
+
+// TaskOutputKind is what the output transform of a task made of one task result.
+type TaskOutputKind int
+
+const (
+	TaskOutputPending TaskOutputKind = iota
+	TaskOutputValue
+	TaskOutputFailed
+)
+
+// TaskOutput is the output transform of a task applied to one task result: pending, a value, or
+// failed.
+type TaskOutput struct {
+	Kind TaskOutputKind
+	// Value is the transformed value of TaskOutputValue.
+	Value string
+}
+
+// value is Lean's TaskOutput.value?.
+func (o TaskOutput) value() (string, bool) { return o.Value, o.Kind == TaskOutputValue }
+
+// TaskResult is a result of a task body, before the task's output transform.
+type TaskResult struct {
+	Execution string
+	Task      string
+	Index     int
+	Value     string
+	Output    TaskOutput
+}
+
+// Result is an accepted result of a placement in a run. A branch result carries its selected arm.
+type Result struct {
+	ID        string
+	Run       Path
+	Placement string
+	// Producer is what produced the result: the call for a call result, the execution for a
+	// concurrency result, the invocation for a sub-workflow call result, and
+	// keyAggregate(run, placement) for the list of a waitStream or Merge.
+	Producer string
+	Arm      *string
+	Value    string
+}
+
+// DeliveredKind is what a connection transform made of one result.
+type DeliveredKind int
+
+const (
+	DeliveredValue DeliveredKind = iota
+	DeliveredTrigger
+	DeliveredFailed
+)
+
+// Delivered is a transformed value, a trigger from discard, or a failed transform.
+type Delivered struct {
+	Kind DeliveredKind
+	// Value is the transformed value of DeliveredValue.
+	Value string
+}
+
+// Delivery is the transform of one connection applied to one result.
+type Delivery struct {
+	Run        Path
+	Connection int
+	Source     string
+	Outcome    Delivered
+}
+
+// ArmOutcome is how one arm of a branch settled.
+type ArmOutcome struct {
+	Arm     string
+	Outcome Outcome
+}
+
+// Settled records how a placement ended in a run. A branch settles each arm separately.
+type Settled struct {
+	Run       Path
+	Placement string
+	Outcome   Outcome
+	Arms      []ArmOutcome
+}
+
+// Failure is a recorded failure.
+type Failure struct {
+	Run       Path
+	Placement string
+	Task      *string
+	Cause     Cause
+}
+
+// State is the state of one workflow execution. The zero value is the state before the start.
+type State struct {
+	Status  Status
+	Started bool
+	// Cancelled records that the caller cancelled the workflow.
+	Cancelled   bool
+	Runs        []Run
+	Invocations []Invocation
+	Calls       []Call
+	Executions  []Execution
+	Results     []Result
+	TaskResults []TaskResult
+	Deliveries  []Delivery
+	Settled     []Settled
+	Failures    []Failure
+}
+
+// Input connections with their indices, which identify connections in a run.
+type indexedConnection struct {
+	index      int
+	connection Connection
+}
+
+func (w *Workflow) inputs(name string) []indexedConnection {
+	var out []indexedConnection
+	for i, c := range w.Connections {
+		if c.Target == name {
+			out = append(out, indexedConnection{i, c})
 		}
 	}
 	return out
 }
-func (c Channel) Closed() bool         { return anyOf(c.Placed, func(t Token) bool { return t.EOS }) }
-func (c Channel) Pending() List[Token] { return c.Placed[c.Consumed.index(len(c.Placed)):] }
-func (c Channel) PendingItems() List[string] {
-	return mapped(filter(c.Pending(), func(t Token) bool { return !t.EOS }), func(t Token) string { return t.Item })
-}
-func (s State) Instance(id string) *Instance {
-	return find(s.Instances, func(i Instance) bool { return i.ID == id })
-}
-func (s State) NodeInstance(path Path, node string) *Instance {
-	return find(s.Instances, func(i Instance) bool { return slices.Equal(i.Path, path) && i.Node == node && i.Trigger == nil })
-}
-func (s State) Frame(path Path) *Frame {
-	return find(s.Frames, func(f Frame) bool { return slices.Equal(f.Path, path) })
-}
-func (s State) Node(path Path, node string) *Node {
-	f := s.Frame(path)
-	if f == nil {
-		return nil
-	}
-	return f.Graph.Node(node)
-}
-func (s State) Incoming(path Path, node string) List[Channel] {
-	return filter(s.Channels, func(c Channel) bool { return slices.Equal(c.Path, path) && !c.Exit && c.Edge.Dst.Node == node })
-}
-func (s State) Outgoing(path Path, node, port string) List[Channel] {
-	return filter(s.Channels, func(c Channel) bool {
-		return slices.Equal(c.Path, path) && !c.Entry && c.Edge.Src == (PortRef{node, port})
-	})
-}
-func (f Frame) channels() List[Channel] {
-	cs := List[Channel]{}
-	id := func(tag string, i int) string {
-		return Identity(append(append([]string{}, f.Path...), tag, strconv.Itoa(i)))
-	}
-	for i, e := range f.Graph.Edges {
-		kind := "plain"
-		if p := f.Graph.output(e.Src); p != nil {
-			kind = p.Kind
-		}
-		cs = append(cs, Channel{ID: id("edge", i), Edge: e, Path: f.Path, Kind: kind})
-	}
-	for i, r := range f.Graph.Entries {
-		kind := "plain"
-		if p := f.Graph.input(r); p != nil {
-			kind = p.Kind
-		}
-		cs = append(cs, Channel{ID: id("entry", i), Edge: Edge{PortRef{"$input", strconv.Itoa(i)}, r}, Path: f.Path, Kind: kind, Entry: true})
-	}
-	for i, r := range f.Graph.Exits {
-		kind := "plain"
-		if p := f.Graph.output(r); p != nil {
-			kind = p.Kind
-		}
-		cs = append(cs, Channel{ID: id("exit", i), Edge: Edge{r, PortRef{"$output", strconv.Itoa(i)}}, Path: f.Path, Kind: kind, Exit: true})
-	}
-	return cs
+
+// shapeKind says where one placement gets its input from.
+type shapeKind int
+
+const (
+	shapeNone shapeKind = iota
+	shapeEntry
+	shapeSingle
+	shapeStream
+	shapeMerge
+)
+
+type shape struct {
+	kind shapeKind
+	// index and connection are the input of shapeSingle and shapeStream.
+	index      int
+	connection Connection
+	// merged are the inputs of shapeMerge.
+	merged []indexedConnection
 }
 
-// Initial constructs the initial state. Validate the graph before executing it.
-func Initial(g Graph) State {
-	f := Frame{Graph: cloneGraph(g)}
-	return State{Status: "running", Frames: List[Frame]{f}, Channels: f.channels()}
+func (w *Workflow) shape(p *Program, name string) (shape, bool) {
+	pl, ok := w.placement(name)
+	if !ok {
+		return shape{}, false
+	}
+	if _, isMerge := pl.Control.(MergeControl); isMerge {
+		return shape{kind: shapeMerge, merged: w.inputs(name)}, true
+	}
+	if w.isEntry(name) {
+		return shape{kind: shapeEntry}, true
+	}
+	inputs := w.inputs(name)
+	switch len(inputs) {
+	case 0:
+		return shape{kind: shapeNone}, true
+	case 1:
+		k, ok := w.outputKind(p, inputs[0].connection.Source)
+		if !ok {
+			return shape{}, false
+		}
+		kind := shapeSingle
+		if k == KindStream {
+			kind = shapeStream
+		}
+		return shape{kind: kind, index: inputs[0].index, connection: inputs[0].connection}, true
+	}
+	return shape{}, false
 }
-func cloneGraph(g Graph) Graph {
-	g.Nodes = slices.Clone(g.Nodes)
-	g.Edges = slices.Clone(g.Edges)
-	g.Entries = slices.Clone(g.Entries)
-	g.Exits = slices.Clone(g.Exits)
-	for j := range g.Nodes {
-		n := &g.Nodes[j]
-		n.Inputs = slices.Clone(n.Inputs)
-		n.Outputs = slices.Clone(n.Outputs)
-		n.Kind.Arms = slices.Clone(n.Kind.Arms)
-		if n.Kind.Body != nil {
-			n.Kind.Body = ptr(cloneGraph(*n.Kind.Body))
+
+func armOutcome(x *Settled, arm *string) Outcome {
+	if arm == nil {
+		return x.Outcome
+	}
+	for _, a := range x.Arms {
+		if a.Arm == *arm {
+			return a.Outcome
 		}
 	}
-	return g
+	return x.Outcome
 }
-func cloneState(s State) State {
-	s.Channels = slices.Clone(s.Channels)
-	for j := range s.Channels {
-		s.Channels[j].Placed = slices.Clone(s.Channels[j].Placed)
-	}
-	s.Instances = slices.Clone(s.Instances)
-	s.Attempts = slices.Clone(s.Attempts)
-	s.Frames = slices.Clone(s.Frames)
-	s.Consumed = slices.Clone(s.Consumed)
-	s.Receipts = slices.Clone(s.Receipts)
-	s.Decisions = slices.Clone(s.Decisions)
-	return s
+
+type resolutionKind int
+
+const (
+	resolutionPending resolutionKind = iota
+	resolutionValue
+	resolutionTransformFailed
+	resolutionSkipped
+	resolutionFailure
+)
+
+// resolution is what a Single connection resolves to: its delivered value (source and input), or
+// why no value will come.
+type resolution struct {
+	kind   resolutionKind
+	source string
+	input  *string
 }
-func (s *State) setInstance(i Instance) {
-	for j := range s.Instances {
-		if s.Instances[j].ID == i.ID {
-			s.Instances[j] = i
+
+func taskID(execution, task string) string { return keyTask(execution, task) }
+
+// Lookups of the state by scanning its lists; view.go reads through an index when there is one.
+
+func (s *State) view() view { return view{s: s} }
+
+func (s *State) run(path Path) (*Run, bool) { return s.view().run(path) }
+
+func (s *State) workflow(p *Program, path Path) (*Workflow, bool) { return s.view().workflow(p, path) }
+
+func (s *State) invocation(id string) (*Invocation, bool) { return s.view().invocation(id) }
+
+func (s *State) call(id string) (*Call, bool) { return s.view().call(id) }
+
+func (s *State) settledOf(path Path, name string) (*Settled, bool) {
+	return s.view().settledOf(path, name)
+}
+
+// Values are every value the state mentions, with repeats, in the order of Lean's State.values.
+func (s *State) Values() []string {
+	var values []string
+	add := func(v *string) {
+		if v != nil {
+			values = append(values, *v)
 		}
 	}
-}
-func (s *State) setAttempt(id, status string) {
-	for j := range s.Attempts {
-		if s.Attempts[j].ID == id {
-			s.Attempts[j].Status = status
+	for _, r := range s.Runs {
+		add(r.Input)
+	}
+	for _, i := range s.Invocations {
+		add(i.Input)
+	}
+	for _, c := range s.Calls {
+		add(c.Input)
+	}
+	for _, e := range s.Executions {
+		add(e.Input)
+		for _, t := range e.Tasks {
+			add(t.Input)
 		}
 	}
-}
-func (s State) validLease(c Credentials) bool {
-	i := s.Instance(c.Instance)
-	return !terminal(s.Status) && c.Now.Cmp(s.Now) >= 0 && i != nil && i.Status == "running" && i.Lease != nil && i.Lease.Attempt == c.Attempt && i.Lease.Token == c.Token && c.Now.Cmp(i.Lease.Until) < 0
-}
-func (s State) getInstance(id string) (Instance, *Reject) {
-	i := s.Instance(id)
-	if i == nil {
-		return Instance{}, reject("UNKNOWN_INSTANCE", id)
+	for _, r := range s.Results {
+		values = append(values, r.Value)
 	}
-	return *i, nil
-}
-func (s State) getNode(path Path, id string) (Node, *Reject) {
-	f := s.Frame(path)
-	if f == nil {
-		return Node{}, reject("UNKNOWN_FRAME", Identity(path))
-	}
-	if f.Closed {
-		return Node{}, reject("CLOSED_FRAME")
-	}
-	n := f.Graph.Node(id)
-	if n == nil {
-		return Node{}, reject("UNKNOWN_NODE", id)
-	}
-	return *n, nil
-}
-func (s *State) freshInstance(i Instance) *Reject {
-	if anyOf(s.Instances, func(j Instance) bool { return j.ID == i.ID || instanceKey(j) == instanceKey(i) }) {
-		return reject("DUPLICATE_INSTANCE")
-	}
-	s.Instances = append(s.Instances, i)
-	return nil
-}
-func instanceKey(i Instance) string { return compact([]any{i.Node, i.Trigger, i.Path}) }
-func makeInstance(path Path, n Node, status string, inputs List[[2]string], trigger *string) Instance {
-	return Instance{ID: InstanceID(path, n.ID, trigger), Node: n.ID, Path: slices.Clone(path), Status: status, Inputs: slices.Clone(inputs), Trigger: trigger}
-}
-func (s *State) putOutput(path Path, node, port string, t Token) *Reject {
-	ids := mapped(s.Outgoing(path, node, port), func(c Channel) string { return c.ID })
-	return s.place(ids, t)
-}
-func (s *State) place(ids []string, t Token) *Reject {
-	for j := range s.Channels {
-		c := &s.Channels[j]
-		if !contains(ids, c.ID) {
-			continue
-		}
-		if c.Closed() {
-			return reject("AFTER_EOS", c.ID)
-		}
-		if contains(c.Placed, t) {
-			continue
-		}
-		if c.Kind == "plain" && !t.EOS && len(c.Items()) > 0 {
-			return reject("PLAIN_CARDINALITY")
-		}
-		c.Placed = append(c.Placed, t)
-	}
-	return nil
-}
-func (s *State) closeOutputs(path Path, n Node) *Reject {
-	for _, p := range n.Outputs {
-		if r := s.putOutput(path, n.ID, p.Name, Token{EOS: true}); r != nil {
-			return r
+	for _, d := range s.Deliveries {
+		if d.Outcome.Kind == DeliveredValue {
+			values = append(values, d.Outcome.Value)
 		}
 	}
-	return nil
-}
-func (s *State) consume(channel, who string, expected *string) *Reject {
-	for j := range s.Channels {
-		c := &s.Channels[j]
-		if c.ID != channel {
-			continue
-		}
-		pending := c.Pending()
-		if len(pending) == 0 {
-			return reject("NO_TOKEN", channel)
-		}
-		t := pending[0]
-		if expected != nil {
-			if t.EOS {
-				return reject("EXPECTED_ITEM")
-			}
-			if t.Item != *expected {
-				return reject("WRONG_ITEM")
-			}
-		}
-		if !t.EOS {
-			s.Consumed = append(s.Consumed, Consumption{channel, c.Consumed, t.Item, who})
-		}
-		c.Consumed = c.Consumed.Inc()
-		return nil
-	}
-	return reject("UNKNOWN_CHANNEL", channel)
-}
-func (s *State) consumeChannels(cs []Channel, who string) *Reject {
-	for _, c := range cs {
-		for range c.Pending() {
-			if r := s.consume(c.ID, who, nil); r != nil {
-				return r
-			}
+	for _, r := range s.TaskResults {
+		values = append(values, r.Value)
+		if v, ok := r.Output.value(); ok {
+			values = append(values, v)
 		}
 	}
-	return nil
-}
-func (s *State) consumeInputs(path Path, node, who string) *Reject {
-	return s.consumeChannels(s.Incoming(path, node), who)
-}
-func (s *State) decision(key, val string) *Reject {
-	d := find(s.Decisions, func(d Decision) bool { return d.Key == key })
-	if d != nil {
-		if d.Value != val {
-			return reject("NONDETERMINISTIC_ORACLE")
-		}
-		return nil
-	}
-	s.Decisions = append(s.Decisions, Decision{key, val})
-	return nil
-}
-func leafPolicy(n Node) (RetryPolicy, Nat, *Reject) {
-	if n.Kind.Type != "leaf" {
-		return RetryPolicy{}, Nat{}, reject("NOT_LEAF", n.ID)
-	}
-	return n.Kind.Retry, n.Kind.Concurrency, nil
-}
-func (s State) plainInputs(path Path, n Node) (List[[2]string], *Reject) {
-	if !allKind(n.Inputs, "plain") {
-		return nil, reject("NOT_PLAIN")
-	}
-	inputs := List[[2]string]{}
-	for _, p := range n.Inputs {
-		c := find(s.Incoming(path, n.ID), func(c Channel) bool { return c.Edge.Dst.Port == p.Name })
-		if c == nil {
-			return nil, reject("MISSING_INPUT", p.Name)
-		}
-		if !c.Closed() {
-			return nil, reject("UPSTREAM_NOT_FINISHED")
-		}
-		producer := s.NodeInstance(path, c.Edge.Src.Node)
-		if !c.Entry && (producer == nil || producer.Status != "succeeded") {
-			return nil, reject("UPSTREAM_NOT_SUCCEEDED")
-		}
-		ts := c.Pending()
-		if len(ts) == 0 || ts[0].EOS {
-			return nil, reject("INPUT_NOT_READY", c.ID)
-		}
-		inputs = append(inputs, [2]string{p.Name, ts[0].Item})
-	}
-	return inputs, nil
-}
-func (s *State) streamController(path Path, n Node) *Reject {
-	i := s.NodeInstance(path, n.ID)
-	if i != nil {
-		if i.Status != "waitingInputs" {
-			return reject("CONTROL_FINISHED")
-		}
-		return nil
-	}
-	return s.freshInstance(makeInstance(path, n, "waitingInputs", nil, nil))
-}
-func (s *State) addFrame(owner Instance, body Graph, items []string) *Reject {
-	path := append(slices.Clone(owner.Path), Identity([]string{owner.ID, owner.Iteration.String()}))
-	if s.Frame(path) != nil {
-		return reject("DUPLICATE_FRAME")
-	}
-	if len(items) != len(body.Entries) {
-		return reject("BODY_INPUT_ARITY")
-	}
-	definition := List[string]{}
-	if f := s.Frame(owner.Path); f != nil {
-		definition = slices.Clone(f.Definition)
-	}
-	definition = append(definition, owner.Node)
-	f := Frame{Path: path, Graph: body, Definition: definition, Owner: ptr(owner.ID)}
-	s.Frames = append(s.Frames, f)
-	s.Channels = append(s.Channels, f.channels()...)
-	for i, p := range body.Entries {
-		ids := mapped(filter(s.Incoming(path, p.Node), func(c Channel) bool { return c.Entry && c.Edge.Dst == p }), func(c Channel) string { return c.ID })
-		if r := s.place(ids, Token{Item: items[i]}); r != nil {
-			return r
-		}
-		if r := s.place(ids, Token{EOS: true}); r != nil {
-			return r
-		}
-	}
-	return nil
-}
-func (s State) CurrentFrame(i Instance) (Frame, *Reject) {
-	f := s.Frame(append(slices.Clone(i.Path), Identity([]string{i.ID, i.Iteration.String()})))
-	if f == nil {
-		return Frame{}, reject("MISSING_BODY", i.ID)
-	}
-	return *f, nil
-}
-func (s State) FrameDone(f Frame) bool {
-	return !f.Closed && all(filter(s.Channels, func(c Channel) bool { return slices.Equal(c.Path, f.Path) && c.Exit }), func(c Channel) bool { return c.Closed() }) && all(filter(s.Channels, func(c Channel) bool { return slices.Equal(c.Path, f.Path) && !c.Exit }), func(c Channel) bool { return c.Closed() && len(c.PendingItems()) == 0 }) && all(filter(s.Instances, func(i Instance) bool { return slices.Equal(i.Path, f.Path) }), func(i Instance) bool { return i.Status == "succeeded" || i.Status == "cancelled" }) && all(f.Graph.Nodes, func(n Node) bool {
-		i := s.NodeInstance(f.Path, n.ID)
-		return i != nil && (i.Status == "succeeded" || i.Status == "cancelled")
-	})
-}
-func (s State) frameOutputItems(f Frame) (List[string], *Reject) {
-	items := List[string]{}
-	for _, p := range f.Graph.Exits {
-		c := find(s.Channels, func(c Channel) bool { return slices.Equal(c.Path, f.Path) && c.Exit && c.Edge.Src == p })
-		if c == nil {
-			return nil, reject("MISSING_EXIT", p.Port)
-		}
-		xs := c.Items()
-		if len(xs) != 1 {
-			return nil, reject("BODY_RESULT_ARITY", p.Port)
-		}
-		items = append(items, xs[0])
-	}
-	return items, nil
-}
-func (s State) bodyResults(f Frame) (List[string], *Reject) {
-	if !s.FrameDone(f) {
-		return nil, reject("BODY_NOT_FINISHED")
-	}
-	return s.frameOutputItems(f)
-}
-func (s *State) closeFrame(f Frame, who string) *Reject {
-	if r := s.consumeChannels(filter(s.Channels, func(c Channel) bool { return slices.Equal(c.Path, f.Path) && c.Exit }), who); r != nil {
-		return r
-	}
-	for j := range s.Frames {
-		if slices.Equal(s.Frames[j].Path, f.Path) {
-			s.Frames[j].Closed = true
-		}
-	}
-	return nil
-}
-func (s *State) finishControl(path Path, n Node, inputs List[[2]string], output, arm *string) *Reject {
-	i := makeInstance(path, n, "succeeded", inputs, nil)
-	if r := s.freshInstance(i); r != nil {
-		return r
-	}
-	if r := s.consumeInputs(path, n.ID, i.ID); r != nil {
-		return r
-	}
-	for _, p := range n.Outputs {
-		if output != nil && (arm == nil || *arm == p.Name) {
-			if r := s.putOutput(path, n.ID, p.Name, Token{Item: *output}); r != nil {
-				return r
-			}
-		}
-	}
-	return s.closeOutputs(path, n)
-}
-func (s *State) expireOrFail(i Instance, n Node, now Nat, outcome string, retryable bool, code string) *Reject {
-	policy, _, r := leafPolicy(n)
-	if r != nil {
-		return r
-	}
-	if i.Lease == nil {
-		return reject("NO_LEASE", i.ID)
-	}
-	retry := retryable && i.AttemptCount.Cmp(policy.MaxAttempts.Add(i.ExtraAttempts)) < 0
-	s.setAttempt(i.Lease.Attempt, outcome)
-	i.Lease = nil
-	i.RetryAt = nil
-	i.Status = "failed"
-	if retry {
-		i.Status = "retryWait"
-		i.RetryAt = ptr(now.Add(policy.RetrySeconds))
-	} else {
-		s.Status = "blocked"
-		s.Reason = ptr(code)
-	}
-	s.setInstance(i)
-	s.Now = now
-	return nil
+	return values
 }

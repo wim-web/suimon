@@ -3,8 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,177 +12,191 @@ import (
 	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
-func TestNatOptionDigitSeparators(t *testing.T) {
-	for _, key := range []string{"--depth", "--workers", "--tick", "--max-states", "--seed", "--count"} {
-		t.Run(key, func(t *testing.T) {
-			for _, tc := range []struct{ input, want string }{
-				{"0", "0"}, {"00", "0"}, {"0_0", "0"}, {"1_0", "10"},
-				{"01_0", "10"}, {"1_2_3", "123"},
-				{"18_446_744_073_709_551_616", "18446744073709551616"},
-			} {
-				got, err := natOpt(map[string]string{key: tc.input}, key, suimon.N(7))
-				if err != nil || got.String() != tc.want {
-					t.Errorf("%s: got %s, %v; want %s", tc.input, got, err, tc.want)
-				}
-			}
-			for _, input := range []string{"", "_", "_10", "10_", "1__0", "1_0_", "+10", "-1", " 10", "10 ", "1 0", "1.0", "1e1", "0x10", "１_０", "١_٠"} {
-				_, err := natOpt(map[string]string{key: input}, key, suimon.N(7))
-				if err == nil || err.Error() != "invalid nonnegative integer for "+key {
-					t.Errorf("%q: expected option error, got %v", input, err)
-				}
-			}
-			got, err := natOpt(nil, key, suimon.N(7))
-			if err != nil || got != suimon.N(7) {
-				t.Fatalf("missing option: %s, %v", got, err)
-			}
-		})
-	}
-	if _, err := suimon.ParseNat("1_0"); err == nil {
-		t.Fatal("CLI syntax leaked into the decimal Nat parser")
-	}
-	var n suimon.Nat
-	if err := json.Unmarshal([]byte("1_0"), &n); err == nil {
-		t.Fatal("CLI syntax leaked into the JSON codec")
-	}
+// Ported from Test/Cli.lean, run in process.
+
+type result struct {
+	code           int
+	stdout, stderr string
 }
 
-func TestCLI(t *testing.T) {
-	graph := "../../../../Test/graphs/minimal.json"
-	for _, tc := range []struct {
-		args []string
-		code int
-	}{
-		{[]string{"--help"}, 0}, {nil, 2}, {[]string{"check"}, 2},
-		{[]string{"check", "../../../../Test/traces/minimal.jsonl", "--graph", graph}, 0},
-		{[]string{"check", "../../../../Test/traces/after-eos.jsonl", "--graph", graph}, 1},
-		{[]string{"explore", "--graph", graph, "--max-states", "1"}, 1},
-		{[]string{"explore", "--graph", graph, "--depth", "-1"}, 2},
-		{[]string{"explore", "--graph", graph, "--workers", "0"}, 2},
-		{[]string{"gen", "--seed", "1", "--seed", "2"}, 2},
-		{[]string{"gen", "--typo", "1"}, 2},
-		{[]string{"gen", "--seed"}, 2},
-	} {
-		var out, stderr bytes.Buffer
-		code, _ := run(tc.args, &out, &stderr)
-		if code != tc.code {
-			t.Errorf("%v: exit %d, want %d\n%s\n%s", tc.args, code, tc.code, &out, &stderr)
-		}
-	}
+func runGo(args ...string) result {
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	return result{code, stdout.String(), stderr.String()}
 }
 
-type failingWriter struct {
-	failAfter, writes int
-	err               error
-}
-
-func (w *failingWriter) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes > w.failAfter {
-		return 0, w.err
-	}
-	return len(p), nil
-}
-
-func TestCLIOutputErrors(t *testing.T) {
-	graph := "../../../../Test/graphs/minimal.json"
-	trace := "../../../../Test/traces/minimal.jsonl"
-	data, err := os.ReadFile(trace)
+func repoRoot(t testing.TB) string {
+	t.Helper()
+	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, _, _ := strings.Cut(string(data), "\n")
-	truncated := filepath.Join(t.TempDir(), "truncated.jsonl")
-	if err := os.WriteFile(truncated, []byte(first+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name      string
-		args      []string
-		stderr    bool
-		failAfter int
-	}{
-		{"gen", []string{"gen", "--seed", "1", "--count", "3"}, false, 0},
-		{"gen-partial-output", []string{"gen", "--seed", "1", "--count", "3"}, false, 2},
-		{"check-result", []string{"check", trace, "--graph", graph}, false, 0},
-		{"check-diagnostic", []string{"check", "../../../../Test/traces/after-eos.jsonl", "--graph", graph}, true, 0},
-		{"check-truncated", []string{"check", truncated, "--graph", graph}, true, 0},
-		{"explore-result", []string{"explore", "--graph", graph, "--depth", "1"}, false, 0},
-		{"explore-incomplete", []string{"explore", "--graph", graph, "--max-states", "1"}, false, 0},
-		{"help", []string{"--help"}, false, 0},
-		{"missing-command", nil, true, 0},
-		{"missing-trace", []string{"check"}, true, 0},
-		{"unknown-command", []string{"unknown"}, true, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cause := errors.New("output unavailable")
-			writer := &failingWriter{failAfter: tc.failAfter, err: cause}
-			var stdout, stderr io.Writer = writer, io.Discard
-			if tc.stderr {
-				stdout, stderr = stderr, stdout
-			}
-			code, err := run(tc.args, stdout, stderr)
-			if code != 2 || !errors.Is(err, cause) {
-				t.Errorf("exit %d, error %v; want exit 2 and %v", code, err, cause)
-			}
-			if writer.writes != tc.failAfter+1 {
-				t.Errorf("got %d writes; want to stop on write %d", writer.writes, tc.failAfter+1)
-			}
-		})
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "lakefile.lean")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("repository root not found")
+		}
+		dir = parent
 	}
 }
 
-func TestGenArgumentErrorOrder(t *testing.T) {
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"--seed", "bad", "--workers", "0"}, "invalid nonnegative integer for --seed"},
-		{[]string{"--count", "bad", "--tick", "0"}, "invalid nonnegative integer for --count"},
-		{[]string{"--count", "bad", "--seed", "bad"}, "invalid nonnegative integer for --seed"},
-		{[]string{"--seed", "1", "--count", "1", "--workers", "0"}, "workers, tick and max-states must be positive"},
-	} {
-		var stdout, stderr bytes.Buffer
-		code, err := run(append([]string{"gen"}, tc.args...), &stdout, &stderr)
-		if code != 2 || err == nil || err.Error() != tc.want {
-			t.Errorf("%q: got exit %d, %v; want %q", tc.args, code, err, tc.want)
+func program(t testing.TB, name string) string {
+	return filepath.Join(repoRoot(t), "Test", "programs", name+".json")
+}
+
+func writeTemp(t testing.TB, name, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func mustRead(t testing.TB, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func expectCode(t *testing.T, r result, code int, args ...string) {
+	t.Helper()
+	if r.code != code {
+		t.Errorf("CLI %v: expected exit %d, got %d\n%s\n%s", args, code, r.code, r.stdout, r.stderr)
+	}
+}
+
+func cli(t *testing.T, code int, args ...string) result {
+	t.Helper()
+	r := runGo(args...)
+	expectCode(t, r, code, args...)
+	return r
+}
+
+func TestCLI(t *testing.T) {
+	for _, name := range []string{"users", "branch", "merge"} {
+		if r := cli(t, 0, "validate", program(t, name)); r.stdout != "ok\n" {
+			t.Errorf("validate %s: unexpected output %q", name, r.stdout)
 		}
 	}
-}
-
-func TestGeneratedTraceAndLongLine(t *testing.T) {
-	var out, stderr bytes.Buffer
-	code, err := run([]string{"gen", "--seed", "17", "--count", "30"}, &out, &stderr)
-	if err != nil || code != 0 {
-		t.Fatalf("gen: %d %v %s", code, err, &stderr)
+	invalid := writeTemp(t, "invalid.json", `{"main":"w","workflows":[]}`)
+	if r := cli(t, 1, "validate", invalid); !strings.Contains(r.stderr, "unknown main workflow w") {
+		t.Errorf("invalid program: %s", r.stderr)
 	}
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	// Increase the transaction ID beyond Scanner's default token limit.
-	var first map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
-		t.Fatal(err)
-	}
-	txn := first["txn"]
-	for i, line := range lines {
-		var event map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
+	for _, name := range []string{"users", "branch", "merge"} {
+		generated := cli(t, 0, "gen", program(t, name), "--seed", "3")
+		trace := writeTemp(t, name+".jsonl", generated.stdout)
+		if r := cli(t, 0, "check", trace, "--program", program(t, name)); !strings.Contains(r.stdout, `"uncommitted":false`) {
+			t.Errorf("check %s: %s", name, r.stdout)
+		}
+		// A record cut in the middle of its last line is recovered, and the cut is reported.
+		lines := strings.SplitAfter(generated.stdout, "\n")
+		lines = lines[:len(lines)-1]
+		torn := writeTemp(t, name+"-torn.jsonl", strings.Join(lines[:len(lines)-1], "")+`{"seq"`)
+		r := cli(t, 0, "check", torn, "--program", program(t, name))
+		if !strings.Contains(r.stdout, fmt.Sprintf(`"committed":%d,`, (len(lines)-1)/2)) || !strings.Contains(r.stdout, `"uncommitted":true`) {
+			t.Errorf("check torn %s: %s", name, r.stdout)
+		}
+		// --state prints the replayed state as JSON, wherever the flag is.
+		p, err := suimon.ParseProgram(mustRead(t, program(t, name)))
+		if err != nil {
 			t.Fatal(err)
 		}
-		var id string
-		_ = json.Unmarshal(event["txn"], &id)
-		if id == txn {
-			event["txn"], _ = json.Marshal(strings.Repeat("x", 100000))
+		expected, err := suimon.Check(p, generated.stdout)
+		if err != nil {
+			t.Fatal(err)
 		}
-		b, _ := json.Marshal(event)
-		lines[i] = string(b)
+		want, _ := expected.State.MarshalJSON()
+		for _, args := range [][]string{{"--program", program(t, name), "--state"}, {"--state", "--program", program(t, name)}} {
+			state := cli(t, 0, append([]string{"check", trace}, args...)...)
+			var doc map[string]any
+			if err := json.Unmarshal([]byte(state.stdout), &doc); err != nil || doc["started"] != true || state.stdout != string(want)+"\n" {
+				t.Errorf("check --state %s: %v %.80s", name, err, state.stdout)
+			}
+		}
+		if r := cli(t, 0, "explore", program(t, name), "--seeds", "20"); !strings.HasPrefix(r.stdout, "{") {
+			t.Errorf("explore %s: %s", name, r.stdout)
+		}
 	}
-	path := filepath.Join(t.TempDir(), "generated.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
-		t.Fatal(err)
+	cli(t, 1, "check", program(t, "users"))
+	cli(t, 2, "check", program(t, "users"), "--program", program(t, "users"), "--states")
+	cli(t, 2, "explore", program(t, "users"), "--seeds")
+	cli(t, 1, "validate", filepath.Join(repoRoot(t), "Test", "programs", "missing.json"))
+	cli(t, 2)
+	cli(t, 0, "--help")
+}
+
+func TestCLIOutputs(t *testing.T) {
+	merge := program(t, "merge")
+	cases := []struct {
+		args           []string
+		code           int
+		stdout, stderr string
+	}{
+		{[]string{"help"}, 0, usage, ""},
+		{[]string{"--help", "x"}, 2, "", usage},
+		{[]string{"validate", "a", "b"}, 2, "", usage},
+		{[]string{"explore", merge, "--seeds", "0"}, 0, "{}\n", ""},
+		{[]string{"explore", merge, "--seeds", "1_0", "--steps", "5"}, 1, "", "seed 1: no accepted operation in status running\n"},
+		{[]string{"explore", merge, "--seeds", "3", "--seeds", "5"}, 0, `{"cancelled":2,"succeeded":1}` + "\n", ""},
+		{[]string{"explore", merge, "--seeds", "x"}, 1, "", "--seeds expects a natural number\n"},
+		{[]string{"explore", merge, "--seeds", "1__0"}, 1, "", "--seeds expects a natural number\n"},
+		{[]string{"explore", merge, "--bogus", "1"}, 2, "", "unknown option --bogus\n"},
+		{[]string{"explore", merge, "--seeds", "1", "--bogus"}, 2, "", "missing value for --bogus\n"},
+		{[]string{"gen", merge, "--steps", "0"}, 0, "", ""},
+		{[]string{"check", "x.jsonl"}, 1, "", "--program is required\n"},
+		{[]string{"check", "x.jsonl", "--state"}, 1, "", "--program is required\n"},
+		{[]string{"check", "x.jsonl", "--state", "--program"}, 2, "", "missing value for --program\n"},
+		{[]string{"explore", merge, "--state"}, 2, "", "missing value for --state\n"},
+		{[]string{"explore", merge, "--state", "1"}, 2, "", "unknown option --state\n"},
 	}
-	out.Reset()
-	stderr.Reset()
-	code, err = run([]string{"check", path, "--graph", "../../../../Test/graphs/minimal.json"}, &out, &stderr)
-	if err != nil || code != 0 {
-		t.Fatalf("check: %d %v %s", code, err, &stderr)
+	for _, c := range cases {
+		r := runGo(c.args...)
+		if r.code != c.code || r.stdout != c.stdout || r.stderr != c.stderr {
+			t.Errorf("%v: got %d %q %q, want %d %q %q", c.args, r.code, r.stdout, r.stderr, c.code, c.stdout, c.stderr)
+		}
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	r := runGo("validate", missing)
+	if want := "no such file or directory (error code: 2)\n  file: " + missing + "\n"; r.stderr != want {
+		t.Errorf("missing file: %q", r.stderr)
+	}
+	bad := writeTemp(t, "bad.json", "\xff")
+	if r := runGo("validate", bad); r.stderr != "Tried to read file '"+bad+"' containing non UTF-8 data.\n" {
+		t.Errorf("non UTF-8: %q", r.stderr)
+	}
+}
+
+func TestCLICheck(t *testing.T) {
+	merge := program(t, "merge")
+	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
+	cases := []struct {
+		trace          string
+		code           int
+		stdout, stderr string
+	}{
+		{start, 0, `{"committed":1,"status":"running","uncommitted":false}` + "\n", ""},
+		{start + `{"seq":3,"op":{"type":"cancel"}}` + "\n", 0, `{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
+		{start + `{"seq":3,"op":{"ty`, 0, `{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
+		{start + "{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3", 0,
+			`{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
+		{start + "{\"seq\":3,\"commit\":true}\n", 1, "", "line 3: a commit without an op\n"},
+	}
+	for _, c := range cases {
+		r := runGo("check", writeTemp(t, "trace.jsonl", c.trace), "--program", merge)
+		if r.code != c.code || r.stdout != c.stdout || r.stderr != c.stderr {
+			t.Errorf("%q: got %d %q %q", c.trace, r.code, r.stdout, r.stderr)
+		}
+	}
+	bad := writeTemp(t, "bad.jsonl", "\xff\n")
+	if r := runGo("check", bad, "--program", merge); r.code != 1 ||
+		r.stderr != "Tried to read file '"+bad+"' containing non UTF-8 data.\n" {
+		t.Errorf("non UTF-8 line: %d %q", r.code, r.stderr)
 	}
 }

@@ -1,0 +1,26 @@
+{
+  "main": "stop",
+  "functions": [
+    {"id": "accept", "input": "Order", "output": {"single": "Order"}},
+    {"id": "charge", "input": "Order", "output": {"single": "Receipt"}},
+    {"id": "ship", "input": "Order", "output": {"single": "Shipment"}}
+  ],
+  "transforms": [
+    {"id": "order", "input": "Order", "output": "Order"}
+  ],
+  "workflows": [
+    {
+      "id": "stop",
+      "input": {"type": "Order", "placement": "accept"},
+      "placements": [
+        {"name": "accept", "node": {"type": "function", "function": "accept"}, "policy": "stop"},
+        {"name": "charge", "node": {"type": "function", "function": "charge"}, "policy": "stop"},
+        {"name": "ship", "node": {"type": "function", "function": "ship"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "accept", "target": "charge", "transform": "order"},
+        {"source": "accept", "target": "ship", "transform": "order"}
+      ]
+    }
+  ]
+}

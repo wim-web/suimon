@@ -1,0 +1,30 @@
+{
+  "main": "batch",
+  "functions": [
+    {"id": "produceAll", "input": "Request", "output": {"single": {"list": "Item"}}},
+    {"id": "split", "input": {"list": "Item"}, "output": {"stream": "Item"}},
+    {"id": "process", "input": "Item", "output": {"single": "Done"}}
+  ],
+  "transforms": [
+    {"id": "items", "input": {"list": "Item"}, "output": {"list": "Item"}},
+    {"id": "item", "input": "Item", "output": "Item"},
+    {"id": "done", "input": "Done", "output": "Done"}
+  ],
+  "workflows": [
+    {
+      "id": "batch",
+      "input": {"type": "Request", "placement": "produceAll"},
+      "placements": [
+        {"name": "produceAll", "node": {"type": "function", "function": "produceAll"}, "policy": "stop"},
+        {"name": "split", "node": {"type": "function", "function": "split"}, "policy": "stop"},
+        {"name": "process", "node": {"type": "function", "function": "process"}, "policy": "stop"},
+        {"name": "collect", "node": {"type": "waitStream", "element": "Done"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "produceAll", "target": "split", "transform": "items"},
+        {"source": "split", "target": "process", "transform": "item"},
+        {"source": "process", "target": "collect", "transform": "done"}
+      ]
+    }
+  ]
+}

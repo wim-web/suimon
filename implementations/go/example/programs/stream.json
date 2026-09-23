@@ -1,0 +1,26 @@
+{
+  "main": "stream",
+  "functions": [
+    {"id": "produce", "input": "Request", "output": {"stream": "Item"}},
+    {"id": "process", "input": "Item", "output": {"single": "Done"}}
+  ],
+  "transforms": [
+    {"id": "item", "input": "Item", "output": "Item"},
+    {"id": "done", "input": "Done", "output": "Done"}
+  ],
+  "workflows": [
+    {
+      "id": "stream",
+      "input": {"type": "Request", "placement": "produce"},
+      "placements": [
+        {"name": "produce", "node": {"type": "function", "function": "produce"}, "policy": "stop"},
+        {"name": "process", "node": {"type": "function", "function": "process"}, "policy": "stop"},
+        {"name": "collect", "node": {"type": "waitStream", "element": "Done"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "produce", "target": "process", "transform": "item"},
+        {"source": "process", "target": "collect", "transform": "done"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "main": "fanout",
+  "functions": [
+    {"id": "seed", "output": {"single": "Seed"}},
+    {"id": "gather", "input": "Seed", "output": {"stream": "Item"}},
+    {"id": "ping", "output": {"single": "Pong"}}
+  ],
+  "transforms": [
+    {"id": "seed", "input": "Seed", "output": "Seed"},
+    {"id": "item", "input": "Item", "output": "Out"},
+    {"id": "pong", "input": "Pong", "output": "Out"},
+    {"id": "out", "input": "Out", "output": "Out"}
+  ],
+  "workflows": [
+    {
+      "id": "fanout",
+      "placements": [
+        {"name": "start", "node": {"type": "function", "function": "seed"}, "policy": "continue"},
+        {
+          "name": "work",
+          "node": {
+            "type": "concurrency",
+            "input": "Seed",
+            "limit": 1,
+            "output": "stream",
+            "element": "Out",
+            "tasks": [
+              {"name": "gather", "body": {"type": "function", "function": "gather"}, "inputTransform": "seed", "outputTransform": "item", "policy": "continue", "timeout": {"callMs": 5, "elementMs": 2}},
+              {"name": "ping", "body": {"type": "function", "function": "ping"}, "inputTransform": "discard", "outputTransform": "pong", "policy": "stop"},
+              {"name": "silent", "body": {"type": "subworkflow", "workflow": "inner", "output": "p"}, "inputTransform": "discard", "policy": "continue"}
+            ]
+          },
+          "policy": "continue"
+        },
+        {"name": "collect", "node": {"type": "waitStream", "element": "Out"}, "policy": "continue"},
+        {
+          "name": "solo",
+          "node": {
+            "type": "concurrency",
+            "limit": 2,
+            "output": "list",
+            "element": "Out",
+            "tasks": [
+              {"name": "ping", "body": {"type": "function", "function": "ping"}, "outputTransform": "pong", "policy": "continue"},
+              {"name": "sub", "body": {"type": "subworkflow", "workflow": "inner", "output": "p"}, "outputTransform": "pong", "policy": "continue"}
+            ]
+          },
+          "policy": "stop"
+        }
+      ],
+      "connections": [
+        {"source": "start", "target": "work", "transform": "seed"},
+        {"source": "work", "target": "collect", "transform": "out"}
+      ]
+    },
+    {
+      "id": "inner",
+      "placements": [
+        {"name": "p", "node": {"type": "function", "function": "ping"}, "policy": "continue"}
+      ]
+    }
+  ]
+}

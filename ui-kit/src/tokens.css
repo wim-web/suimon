@@ -27,6 +27,11 @@
   --sui-highlight: #ffffff20;
   --sui-grid: #49414f;
   --sui-edge: #a28fae;
+  --sui-kind-function: #8d45ca;
+  --sui-kind-subworkflow: #3f7fa8;
+  --sui-kind-branch: #a8703a;
+  --sui-kind-collect: #3d8a6a;
+  --sui-kind-concurrency: #b0487f;
   color-scheme: dark;
 }
 :where(.suimon-ui[data-theme='light']) {
@@ -55,5 +60,10 @@
   --sui-shadow-strong: #29173530;
   --sui-grid: #d3c5de;
   --sui-edge: #856494;
+  --sui-kind-function: #7132a9;
+  --sui-kind-subworkflow: #2f6a90;
+  --sui-kind-branch: #8f5a24;
+  --sui-kind-collect: #2b7457;
+  --sui-kind-concurrency: #9a3469;
   color-scheme: light;
 }

@@ -1,0 +1,589 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wim-web.github.io/suimon/schema/trace.schema.json",
+  "title": "suimon execution record line",
+  "description": "One line of an execution record in JSON lines. Each accepted transition is an op line followed by a commit line, with consecutive seq numbers. Writers put the fields in the order seq, op, values and seq, commit; readers look fields up by name. `suimon check` replays the committed transitions against the program; an op without its commit, or a partial last line, is what a crash leaves and is discarded.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/opRecord"
+    },
+    {
+      "$ref": "#/$defs/commitRecord"
+    }
+  ],
+  "$defs": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "text": {
+      "type": "string"
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "boolean": {
+      "type": "boolean"
+    },
+    "path": {
+      "description": "A run: [] is the root run; a sub-workflow call appends the identity of its owner.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "opRecord": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "values": {
+          "description": "Payloads stored by this transition: each key is a value identity and each value is the payload string the runtime serialized. When the transition commits, every value its new state mentions and the previous state did not, lists the engine builds included, needs a payload here or in an earlier committed op line. Left out when empty.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/text"
+          }
+        }
+      },
+      "required": [
+        "seq",
+        "op"
+      ],
+      "additionalProperties": false
+    },
+    "commitRecord": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "commit": {
+          "const": true
+        }
+      },
+      "required": [
+        "seq",
+        "commit"
+      ],
+      "additionalProperties": false
+    },
+    "start": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "start"
+        },
+        "input": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "invoke": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "invoke"
+        },
+        "run": {
+          "$ref": "#/$defs/path"
+        },
+        "placement": {
+          "$ref": "#/$defs/text"
+        },
+        "trigger": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "run",
+        "placement"
+      ],
+      "additionalProperties": false
+    },
+    "fetch": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "fetch"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "returned": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "returned"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "judged": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "judged"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        },
+        "arm": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call",
+        "arm"
+      ],
+      "additionalProperties": false
+    },
+    "yielded": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "yielded"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "ended": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ended"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "failed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "failed"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "timedOut": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "timedOut"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        },
+        "element": {
+          "$ref": "#/$defs/boolean"
+        }
+      },
+      "required": [
+        "type",
+        "call",
+        "element"
+      ],
+      "additionalProperties": false
+    },
+    "lost": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "lost"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "terminated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "terminated"
+        },
+        "call": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "deliver": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "deliver"
+        },
+        "run": {
+          "$ref": "#/$defs/path"
+        },
+        "connection": {
+          "$ref": "#/$defs/index"
+        },
+        "source": {
+          "$ref": "#/$defs/text"
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "run",
+        "connection",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "transformFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "transformFailed"
+        },
+        "run": {
+          "$ref": "#/$defs/path"
+        },
+        "connection": {
+          "$ref": "#/$defs/index"
+        },
+        "source": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "run",
+        "connection",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "taskInput": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "taskInput"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        },
+        "task": {
+          "$ref": "#/$defs/text"
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "execution",
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "taskInputFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "taskInputFailed"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        },
+        "task": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "execution",
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "beginTask": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "beginTask"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        },
+        "task": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "execution",
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "taskOutput": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "taskOutput"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        },
+        "task": {
+          "$ref": "#/$defs/text"
+        },
+        "index": {
+          "$ref": "#/$defs/index"
+        },
+        "value": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "execution",
+        "task",
+        "index",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "taskOutputFailed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "taskOutputFailed"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        },
+        "task": {
+          "$ref": "#/$defs/text"
+        },
+        "index": {
+          "$ref": "#/$defs/index"
+        }
+      },
+      "required": [
+        "type",
+        "execution",
+        "task",
+        "index"
+      ],
+      "additionalProperties": false
+    },
+    "settle": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "settle"
+        },
+        "run": {
+          "$ref": "#/$defs/path"
+        },
+        "placement": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "run",
+        "placement"
+      ],
+      "additionalProperties": false
+    },
+    "closeExecution": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "closeExecution"
+        },
+        "execution": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "type",
+        "execution"
+      ],
+      "additionalProperties": false
+    },
+    "closeRun": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "closeRun"
+        },
+        "run": {
+          "$ref": "#/$defs/path"
+        }
+      },
+      "required": [
+        "type",
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "cancel": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "cancel"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "conclude": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "conclude"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "op": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/start"
+        },
+        {
+          "$ref": "#/$defs/invoke"
+        },
+        {
+          "$ref": "#/$defs/fetch"
+        },
+        {
+          "$ref": "#/$defs/returned"
+        },
+        {
+          "$ref": "#/$defs/judged"
+        },
+        {
+          "$ref": "#/$defs/yielded"
+        },
+        {
+          "$ref": "#/$defs/ended"
+        },
+        {
+          "$ref": "#/$defs/failed"
+        },
+        {
+          "$ref": "#/$defs/timedOut"
+        },
+        {
+          "$ref": "#/$defs/lost"
+        },
+        {
+          "$ref": "#/$defs/terminated"
+        },
+        {
+          "$ref": "#/$defs/deliver"
+        },
+        {
+          "$ref": "#/$defs/transformFailed"
+        },
+        {
+          "$ref": "#/$defs/taskInput"
+        },
+        {
+          "$ref": "#/$defs/taskInputFailed"
+        },
+        {
+          "$ref": "#/$defs/beginTask"
+        },
+        {
+          "$ref": "#/$defs/taskOutput"
+        },
+        {
+          "$ref": "#/$defs/taskOutputFailed"
+        },
+        {
+          "$ref": "#/$defs/settle"
+        },
+        {
+          "$ref": "#/$defs/closeExecution"
+        },
+        {
+          "$ref": "#/$defs/closeRun"
+        },
+        {
+          "$ref": "#/$defs/cancel"
+        },
+        {
+          "$ref": "#/$defs/conclude"
+        }
+      ]
+    }
+  }
+}

@@ -1,106 +1,117 @@
-import { useEffect, useRef, useState } from 'react';
-import { LoaderCircle, Play, Terminal, Type } from 'lucide-react';
-import { createWorkflowView, WorkflowWorkbench } from '@suimon/ui-kit';
-import type { NodePresentations, WorkflowSnapshot, WorkflowView } from '@suimon/ui-kit';
-import { loadSamples, readRunFrames } from './api';
-import type { RunOutput, Sample } from './api';
-import { LiveProgress, seconds } from './LiveProgress';
-import { emptyTimings, observeTimings, progress } from './progress';
-import type { Timings } from './progress';
-import { RunOutputs } from './RunOutputs';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChartGantt, LoaderCircle, Play, Square } from 'lucide-react';
+import { WorkflowWorkbench } from '@suimon/ui-kit';
+import type { JsonValue } from '@suimon/ui-kit';
+import { applyProgress, cancelRun, followRun, loadReport, loadScenarios, startRun } from './api';
+import type { Progress, Report, RunView, Scenario } from './api';
+import { Timeline } from './Timeline';
+import type { TimelineLane } from './Timeline';
 
-const presentations: NodePresentations = {
-  source: { label: 'Generate & emit', description: 'Leaf · time-delayed stream', accent: '#a26aff', position: { x: 0, y: 0 }, outputSide: 'right' },
-  filter: { label: 'Skip #comments', description: 'Filter · per item', accent: '#cb9b50', position: { x: 330, y: 0 }, inputSide: 'left' },
-  each: { label: 'Process in parallel', description: 'ForEach · open to inspect workers', accent: '#dc68b5', position: { x: 330, y: 250 }, outputSide: 'left' },
-  collect: { label: 'Collect all results', description: 'AllWait · stream completion', accent: '#5b9ab4', position: { x: 0, y: 250 }, inputSide: 'right' },
-  trim: { label: 'Trim whitespace', description: 'Text processing', accent: '#a26aff' },
-  uppercase: { label: 'Convert to uppercase', description: 'Leaf · simulated work', accent: '#dc68b5' },
-};
+/** The function whose start times the stream and batch scenarios compare. */
+const downstream = 'process';
+
+const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export function App() {
-  const [samples, setSamples] = useState<Sample[]>([]);
-  const [selected, setSelected] = useState('streaming');
-  const [data, setData] = useState<WorkflowSnapshot | null>(null);
-  const [view, setView] = useState<WorkflowView | null>(null);
-  const [live, setLive] = useState<ReturnType<typeof progress> | null>(null);
-  const [input, setInput] = useState('');
-  const [delay, setDelay] = useState(600);
-  const [running, setRunning] = useState(false);
+  const [scenarios, setScenarios] = useState<Scenario[] | null>(null);
+  const [selected, setSelected] = useState('');
+  const [inputs, setInputs] = useState<Record<string, string>>({});
+  /** The latest run of each scenario. */
+  const [runs, setRuns] = useState<Record<string, RunView>>({});
+  const [reports, setReports] = useState<Record<string, Report>>({});
   const [error, setError] = useState('');
-  const [outputs, setOutputs] = useState<RunOutput[] | undefined>(undefined);
-  const [elapsed, setElapsed] = useState(0);
-  const [timings, setTimings] = useState<Timings>(emptyTimings);
-  const [history, setHistory] = useState<Record<string, Timings>>({});
-  const request = useRef<AbortController | null>(null);
-  const sample = samples.find(sample => sample.id === selected);
-  const comparisonKey = JSON.stringify([input, delay]);
-
-  function display(snapshot: WorkflowSnapshot) {
-    const view = createWorkflowView(snapshot.graph, snapshot.events, snapshot.values);
-    const live = progress(view);
-    setData(snapshot); setView(view); setLive(live);
-    return live;
-  }
+  const [timeline, setTimeline] = useState(true);
+  const followers = useRef(new Map<string, () => void>());
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadSamples(controller.signal).then(list => {
-      const first = list[0];
-      if (!first) throw new Error('サンプルがありません');
-      setSamples(list); setSelected(first.id); setInput(first.input);
-      display({ graph: first.graph, events: [], values: {} });
-    }).catch((err: unknown) => { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err)); });
-    return () => { controller.abort(); request.current?.abort(); };
+    loadScenarios(controller.signal).then(list => {
+      setScenarios(list); setSelected(list[0]?.id ?? '');
+      setInputs(Object.fromEntries(list.map(s => [s.id, s.input === undefined ? '' : JSON.stringify(s.input, null, 2)])));
+    }).catch(e => { if (!controller.signal.aborted) setError(message(e)); });
+    const active = followers.current;
+    return () => { controller.abort(); for (const stop of active.values()) stop(); };
   }, []);
 
-  function changeSample(id: string) {
-    const next = samples.find(sample => sample.id === id);
-    if (!next) return;
-    const keepInput = selected !== 'basic' && id !== 'basic';
-    setSelected(id); if (!keepInput) setInput(next.input);
-    display({ graph: next.graph, events: [], values: {} });
-    setOutputs(undefined); setTimings(emptyTimings()); setElapsed(0); setError('');
-  }
+  const onProgress = useCallback((p: Progress) => {
+    setRuns(previous => {
+      try { return { ...previous, [p.scenario]: applyProgress(previous[p.scenario] ?? null, p) }; }
+      catch (e) {
+        // Stop following: later messages cannot continue a record that missed one.
+        followers.current.get(p.id)?.(); followers.current.delete(p.id);
+        queueMicrotask(() => setError(message(e))); return previous;
+      }
+    });
+    if (p.done) {
+      followers.current.delete(p.id);
+      if (p.error) setError(p.error);
+      else loadReport(p.id).then(report => setReports(previous => ({ ...previous, [p.id]: report }))).catch(e => setError(message(e)));
+    }
+  }, []);
+
+  const scenario = scenarios?.find(s => s.id === selected);
+  const current = scenario ? runs[scenario.id] : undefined;
+  const running = current !== undefined && !current.done;
 
   async function run() {
-    if (!sample) return;
-    const controller = new AbortController(); request.current = controller;
-    setRunning(true); setError(''); setOutputs(undefined); setElapsed(0); setTimings(emptyTimings());
-    display({ graph: sample.graph, events: [], values: {} });
-    let measured = emptyTimings();
+    if (!scenario) return;
+    setError('');
+    let input: JsonValue | undefined;
+    if (scenario.input !== undefined) {
+      try { input = JSON.parse(inputs[scenario.id] ?? '') as JsonValue; }
+      catch { setError('The input is not valid JSON.'); return; }
+    }
     try {
-      const response = await fetch('/api/run', { method: 'POST', signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify({ scenario: selected, input, delay_ms: delay }) });
-      for await (const frame of readRunFrames(response)) {
-        // Keep this scenario's topology identity, including across reruns, so
-        // new data does not reset positions the user dragged on the canvas.
-        const snapshot = { ...frame.snapshot, graph: sample.graph };
-        const state = display(snapshot); setElapsed(frame.elapsedMS);
-        measured = observeTimings(measured, state, frame.elapsedMS, frame.done);
-        setTimings(measured);
-        if (frame.done) {
-          if (frame.error) throw new Error(frame.error);
-          setOutputs(frame.outputs);
-          setHistory(previous => ({ ...previous, [`${selected}:${comparisonKey}`]: measured }));
-        }
-      }
-    } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : String(err)); }
-    finally { if (!controller.signal.aborted) setRunning(false); request.current = null; }
+      const id = await startRun(scenario.id, input);
+      followers.current.set(id, followRun(id, onProgress, e => { followers.current.delete(id); setError(message(e)); }));
+    } catch (e) { setError(message(e)); }
   }
 
-  if (!data || !sample || !view || !live) return <div className="suimon-ui app-loading">{error ? <><strong>サンプルを読み込めませんでした</strong><p role="alert">{error}</p><button onClick={() => location.reload()}>再読み込み</button></> : <><LoaderCircle className="app-spin" size={22} /><span>Loading samples…</span></>}</div>;
-  const streaming = selected !== 'basic';
-  return <WorkflowWorkbench key={selected} data={data} view={view} title={sample.title} subtitle="Examples / Go runtime" presentations={presentations} running={running} showBoundaryNodes={!streaming}
-    actions={<><select className="app-sample-select" aria-label="サンプル" disabled={running} value={selected} onChange={event => changeSample(event.target.value)}>{samples.map(sample => <option key={sample.id} value={sample.id}>{sample.title}</option>)}</select><button className="sui-button sui-button-primary" onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="app-spin" size={14} /> : <Play size={13} fill="currentColor" />}{running ? 'Running…' : 'Run workflow'}</button></>}
-    notice={<>{error && <div className="app-error" role="alert">{error}</div>}{streaming && <LiveProgress state={live} total={input.trim() ? input.trim().split(/\s+/).length : 0} running={running} elapsed={elapsed} timings={timings} />}</>}
-    sidebarContent={<div className="app-run-input"><p className="app-sample-description">{sample.description}</p><div className="app-section-label"><Type size={13} /><label htmlFor="workflow-input">WORKFLOW INPUT</label></div><textarea id="workflow-input" aria-label="入力テキスト" spellCheck={false} value={input} onChange={event => setInput(event.target.value)} disabled={running} />
-      {streaming ? <><span className="app-input-hint">空白区切り・最大12件。# で始まる項目を除外します。</span><label className="app-delay">待ち時間の基準<select aria-label="待ち時間" value={delay} disabled={running} onChange={event => setDelay(Number(event.target.value))}><option value={200}>200ms · fast</option><option value={600}>600ms · normal</option><option value={1000}>1000ms · slow</option></select></label><p className="app-input-hint">生成: 1倍 / 加工: 2〜4倍。ForEach の内側で実行中の値を確認できます。</p>
-        <div className="app-comparison"><strong>同じ入力・待ち時間の比較</strong><table><thead><tr><th>方式</th><th>下流開始</th><th>全体</th></tr></thead><tbody>{['streaming', 'batch'].map(id => { const past = history[`${id}:${comparisonKey}`]; return <tr key={id}><th>{id === 'streaming' ? 'Stream' : 'Batch'}</th><td>{seconds(past?.firstWorker ?? null)}</td><td>{seconds(past?.total ?? null)}</td></tr>; })}</tbody></table><small>方式を切り替えて実行すると比較できます。</small></div>
-      </> : <span className="app-input-hint">前後の空白を除去して、大文字に変換します。</span>}
-      {outputs !== undefined && <RunOutputs outputs={outputs} />}
-      <div className="app-runtime"><Terminal size={13} /><span>Go runtime</span><span className="app-local">LOCAL</span></div>
+  if (!scenarios || !scenario) {
+    return <div className="suimon-ui app-loading" data-theme="dark">{error ? <><strong>Could not load the scenarios</strong><p role="alert">{error}</p><button onClick={() => location.reload()}>Reload</button></>
+      : <><LoaderCircle className="app-spin" size={22} /><span>Loading scenarios…</span></>}</div>;
+  }
+
+  const compared = scenario.compare ? scenarios.filter(s => s.id === scenario.id || s.id === scenario.compare) : [scenario];
+  const lanes: TimelineLane[] = compared.map(s => {
+    const r = runs[s.id];
+    return { key: s.id, label: s.title, run: r ? { label: s.title, spans: r.spans, elapsedMs: r.elapsedMs, done: r.done } : null };
+  });
+  const report = current ? reports[current.id] : undefined;
+
+  return <WorkflowWorkbench key={scenario.id} program={scenario.program} state={current?.state} records={current?.records}
+    title={scenario.title} subtitle="suimon Go runtime · playground"
+    actions={<>
+      <button className="sui-button" aria-pressed={timeline} onClick={() => setTimeline(!timeline)}><ChartGantt size={13} />Timeline</button>
+      {running && <button className="sui-button" onClick={() => void cancelRun(current.id).catch(e => setError(message(e)))}><Square size={12} />Cancel</button>}
+      <button className="sui-button sui-button-primary" onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="app-spin" size={14} /> : <Play size={13} fill="currentColor" />}{running ? 'Running…' : 'Run'}</button>
+    </>}
+    notice={<>
+      {error && <div className="app-error" role="alert">{error}</div>}
+      {timeline && <Timeline lanes={lanes} highlight={scenario.compare ? downstream : undefined} />}
+    </>}
+    sidebarContent={<div className="app-side">
+      <section className="sui-sidebar-section">
+        <div className="sui-sidebar-group"><span>Scenarios</span><span className="sui-muted">{scenarios.length}</span></div>
+        <ul className="app-scenarios">{scenarios.map(s => {
+          const r = runs[s.id];
+          return <li key={s.id}><button aria-current={s.id === scenario.id ? 'true' : undefined} onClick={() => setSelected(s.id)}>
+            <span>{s.title}</span>{r && <span className="sui-muted">{r.done ? r.state.status : 'running'}</span>}
+          </button></li>;
+        })}</ul>
+        <p className="app-description">{scenario.description}</p>
+      </section>
+      {scenario.input !== undefined && <section className="sui-sidebar-section">
+        <label className="sui-sidebar-group" htmlFor="scenario-input"><span>Input</span></label>
+        <textarea id="scenario-input" className="app-input" spellCheck={false} value={inputs[scenario.id] ?? ''} disabled={running}
+          onChange={event => setInputs(previous => ({ ...previous, [scenario.id]: event.target.value }))} />
+      </section>}
+      {report && <section className="sui-sidebar-section">
+        <div className="sui-sidebar-group"><span>Report</span><span className="sui-muted">{report.status}</span></div>
+        {Object.entries(report.outputs).map(([name, value]) => <div key={name} className="app-output"><b>{name}</b><pre>{JSON.stringify(value, null, 2)}</pre></div>)}
+        {Object.keys(report.outputs).length === 0 && <p className="app-description">No endpoint has a value.</p>}
+        {report.failures.map((f, i) => <p key={i} className="app-failure">{f.placement}{f.task ? `/${f.task}` : ''}: {f.cause}{f.error ? ` · ${f.error}` : ''}</p>)}
+      </section>}
     </div>}
   />;
 }

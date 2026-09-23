@@ -1,6 +1,10 @@
 # Go playground
 
-上流の生成と下流の処理が重なる効果を見比べるためのサンプルです。外部サービスに依存せず待ち時間を再現できるよう、sleep で I/O を模擬します。stream / batch は入力と待ち時間を揃え、途中出力の有無による下流の開始時刻の違いを観察します。
+Go ランタイムの動きを手元で観察するためのサンプルです。外部サービスなしで待ち時間を再現できるよう、I/O は sleep で模擬しています。
+
+中心は Stream と Batch の比較で、同じ入力・同じ待ち時間のまま、下流の処理が始まる時刻の違いをタイムラインで見比べます。
+
+UI の実行状態と実行記録は、ランタイムが書いた実行記録の行を `Check` で再生して求めています。UI がエンジン内部を覗かず、実行記録を読む側と同じ手順で状態を得るためです。
 
 ## 起動
 
@@ -8,10 +12,10 @@
 
 ```sh
 pnpm install
-pnpm build
+pnpm --filter '@suimon/go-example-ui...' build
 go -C implementations/go run ./example -ui
 ```
 
-[http://127.0.0.1:8080](http://127.0.0.1:8080) を開き、Streaming pipeline と Batch comparison を同じ入力・待ち時間で実行して比較してください。Go だけで実行する場合は [Go README](../README.md#実行) を参照してください。
+[http://127.0.0.1:8080](http://127.0.0.1:8080) を開きます。オプションは `go -C implementations/go run ./example -h` で確認できます。
 
-[サンプルのコード](scenarios.go) / [UI kit の組み込み例](ui/src/)
+[プログラム](programs/) / [関数と登録](scenarios.go) / [API](server.go) / [UI](ui/src/)

@@ -1,99 +1,141 @@
-import { parseGraph, parseTraceEvents } from '@suimon/ui-kit';
-import type { Graph, JsonValue, PortRef, WorkflowSnapshot } from '@suimon/ui-kit';
+import { parseProgram, parseRecords, parseState } from '@suimon/ui-kit';
+import type { ExecutionRecord, JsonValue, Program, RuntimeState } from '@suimon/ui-kit';
 
-export interface Sample { id: string; title: string; description: string; input: string; graph: Graph }
-export interface RunOutput { port: PortRef; items: { id: string; value: JsonValue }[] }
-export interface RunFrame { snapshot: WorkflowSnapshot; elapsedMS: number; done: boolean; error?: string; outputs: RunOutput[] }
+/* The JSON API of the example server (implementations/go/example/server.go). */
 
-function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
-function jsonValue(value: unknown): value is JsonValue {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  return Array.isArray(value) ? value.every(jsonValue) : record(value) && Object.values(value).every(jsonValue);
+export interface Scenario { id: string; title: string; description: string; program: Program; input?: JsonValue; compare?: string }
+export interface Span { function: string; detail: string; startMs: number; endMs: number | null; marks: number[]; outcome: 'running' | 'ok' | 'error' | 'cancelled' }
+/** One progress message: the records from `offset` on, and the state they establish. */
+export interface Progress { id: string; scenario: string; state: RuntimeState; offset: number; records: string[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
+export interface FailureReport { run: string[]; placement: string; task?: string; cause: string; error?: string }
+export interface Report { status: string; outputs: Record<string, JsonValue>; endpoints: Record<string, string>; failures: FailureReport[] }
+
+type Obj = Record<string, unknown>;
+function object(value: unknown, at: string): Obj {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${at}: expected an object`);
+  return value as Obj;
 }
+function string(value: unknown, at: string): string {
+  if (typeof value !== 'string') throw new TypeError(`${at}: expected a string`);
+  return value;
+}
+function number(value: unknown, at: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new TypeError(`${at}: expected a non-negative number`);
+  return value;
+}
+function array(value: unknown, at: string): unknown[] {
+  if (!Array.isArray(value)) throw new TypeError(`${at}: expected an array`);
+  return value;
+}
+const outcomes = ['running', 'ok', 'error', 'cancelled'] as const;
 
-export function parseOutputs(value: unknown): RunOutput[] {
-  if (!Array.isArray(value)) throw new Error('Expected outputs array');
-  return value.map((output: unknown) => {
-    if (!record(output) || !record(output.port) || typeof output.port.node !== 'string' || typeof output.port.port !== 'string' || !Array.isArray(output.items)) throw new Error('Invalid output port');
-    const items = output.items.map((item: unknown) => {
-      if (!record(item) || typeof item.id !== 'string' || !Object.hasOwn(item, 'value') || !jsonValue(item.value)) throw new Error('Invalid output item');
-      return { id: item.id, value: item.value };
-    });
-    return { port: { node: output.port.node, port: output.port.port }, items };
+export function parseScenarios(value: unknown): Scenario[] {
+  return array(value, 'scenarios').map((item, i) => {
+    const at = `scenarios[${i}]`, o = object(item, at);
+    const scenario: Scenario = { id: string(o.id, `${at}.id`), title: string(o.title, `${at}.title`), description: string(o.description, `${at}.description`), program: parseProgram(o.program) };
+    if (o.input !== undefined) scenario.input = o.input as JsonValue;
+    if (o.compare !== undefined) scenario.compare = string(o.compare, `${at}.compare`);
+    return scenario;
   });
 }
 
-export async function loadSamples(signal: AbortSignal): Promise<Sample[]> {
-  const response = await fetch('/api/samples', { signal });
-  if (!response.ok) throw new Error(await response.text());
-  const raw: unknown = await response.json();
-  if (!Array.isArray(raw)) throw new Error('Invalid samples response');
-  return raw.map((value: unknown) => {
-    if (!value || typeof value !== 'object') throw new Error('Invalid sample');
-    const sample = value as Record<string, unknown>;
-    if (typeof sample.id !== 'string' || typeof sample.title !== 'string' || typeof sample.description !== 'string' || typeof sample.input !== 'string') throw new Error('Invalid sample metadata');
-    return { id: sample.id, title: sample.title, description: sample.description, input: sample.input, graph: parseGraph(sample.graph) };
-  });
-}
-
-function parseFrame(line: string, previous?: RunFrame): RunFrame {
-  const raw: unknown = JSON.parse(line);
-  if (!record(raw)) throw new Error('Invalid run frame');
-  const frame = raw;
-  if (typeof frame.done !== 'boolean' || typeof frame.elapsed_ms !== 'number' || !Number.isFinite(frame.elapsed_ms) || frame.elapsed_ms < 0) throw new Error('Invalid run progress');
-  if (frame.error !== undefined && typeof frame.error !== 'string') throw new Error('Invalid run error');
-  if (previous && frame.elapsed_ms < previous.elapsedMS) throw new Error('Run progress moved backwards');
-  if (previous && frame.graph !== undefined) throw new Error('Graph must only appear in the first run frame');
-  const graph = previous?.snapshot.graph ?? parseGraph(frame.graph);
-  const priorEvents = previous?.snapshot.events ?? [];
-  const priorValues = previous?.snapshot.values ?? {};
-  const offset = priorEvents.length;
-  if (!Number.isSafeInteger(frame.event_offset) || frame.event_offset !== offset) throw new Error('Run event offset is missing, repeated or out of order');
-  // Validate only the new records. Existing events and topology keep their
-  // identities; the kit still receives an immutable, complete snapshot.
-  const events = parseTraceEvents(frame.events);
-  if (events.some((event, i) => event.sequence !== offset + i + 1)) throw new Error('Run event sequence is missing, repeated or out of order');
-  const last = events.at(-1);
-  if (last && (last.type !== 'transaction.committed' || last.op !== null)) throw new Error('Run frame contains an uncommitted event suffix');
-  if (!record(frame.values) || !Object.values(frame.values).every(jsonValue)) throw new Error('Invalid run values');
-  const valueIDs = Object.keys(frame.values);
-  if (valueIDs.some(id => Object.hasOwn(priorValues, id))) throw new Error('Run item value was already received');
-  if (!frame.done && (frame.outputs !== undefined || frame.error !== undefined)) throw new Error('Run outcome appeared before the final frame');
-  const snapshot: WorkflowSnapshot = {
-    graph,
-    events: events.length ? [...priorEvents, ...events] : priorEvents,
-    values: valueIDs.length ? { ...priorValues, ...frame.values as Record<string, JsonValue> } : priorValues,
+export function parseSpan(value: unknown, at: string): Span {
+  const o = object(value, at);
+  const outcome = string(o.outcome, `${at}.outcome`);
+  if (!(outcomes as readonly string[]).includes(outcome)) throw new TypeError(`${at}.outcome: unknown outcome ${outcome}`);
+  return {
+    function: string(o.function, `${at}.function`), detail: string(o.detail, `${at}.detail`), startMs: number(o.startMs, `${at}.startMs`),
+    endMs: o.endMs === null ? null : number(o.endMs, `${at}.endMs`),
+    marks: o.marks === undefined ? [] : array(o.marks, `${at}.marks`).map((m, j) => number(m, `${at}.marks[${j}]`)),
+    outcome: outcome as Span['outcome'],
   };
-  return { snapshot, elapsedMS: frame.elapsed_ms, done: frame.done, error: frame.error, outputs: frame.done ? parseOutputs(frame.outputs) : [] };
 }
 
-// HTTP chunks may split a JSON record or a multibyte UTF-8 character.
-export async function* readRunFrames(response: Response): AsyncGenerator<RunFrame> {
+export function parseProgress(value: unknown): Progress {
+  const o = object(value, 'progress');
+  const progress: Progress = {
+    id: string(o.id, 'progress.id'), scenario: string(o.scenario, 'progress.scenario'), state: parseState(o.state),
+    offset: number(o.offset, 'progress.offset'), records: array(o.records, 'progress.records').map((r, i) => string(r, `progress.records[${i}]`)),
+    spans: array(o.spans, 'progress.spans').map((s, i) => parseSpan(s, `progress.spans[${i}]`)),
+    elapsedMs: number(o.elapsedMs, 'progress.elapsedMs'), done: o.done === true,
+  };
+  if (o.error !== undefined) progress.error = string(o.error, 'progress.error');
+  return progress;
+}
+
+export function parseReport(value: unknown): Report {
+  const o = object(value, 'report');
+  return {
+    status: string(o.status, 'report.status'),
+    outputs: object(o.outputs, 'report.outputs') as Record<string, JsonValue>,
+    endpoints: Object.fromEntries(Object.entries(object(o.endpoints, 'report.endpoints')).map(([k, v]) => [k, string(v, `report.endpoints.${k}`)])),
+    failures: array(o.failures, 'report.failures').map((f, i) => {
+      const at = `report.failures[${i}]`, x = object(f, at);
+      const failure: FailureReport = { run: array(x.run, `${at}.run`).map((s, j) => string(s, `${at}.run[${j}]`)), placement: string(x.placement, `${at}.placement`), cause: string(x.cause, `${at}.cause`) };
+      if (x.task !== undefined) failure.task = string(x.task, `${at}.task`);
+      if (x.error !== undefined) failure.error = string(x.error, `${at}.error`);
+      return failure;
+    }),
+  };
+}
+
+/** The accumulated view of one run: every record so far, parsed. */
+export interface RunView { id: string; scenario: string; state: RuntimeState; lines: string[]; records: ExecutionRecord[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
+
+/**
+ * Applies one progress message. Its records must continue the lines received so far, or start
+ * over at offset 0 (a new run, or an event stream that reconnected).
+ */
+export function applyProgress(previous: RunView | null, p: Progress): RunView {
+  const base = previous?.id === p.id && p.offset > 0 ? previous : null;
+  const lines = base?.lines ?? [];
+  if (p.offset !== lines.length) throw new Error(`progress at record ${p.offset}, but ${lines.length} records were received`);
+  const all = p.records.length || !base ? [...lines, ...p.records] : lines;
+  // parseRecords checks the sequence from 1, so the whole record is parsed again.
+  const view: RunView = {
+    id: p.id, scenario: p.scenario, state: p.state, lines: all, records: all === lines && base ? base.records : parseRecords(all),
+    spans: p.spans, elapsedMs: p.elapsedMs, done: p.done,
+  };
+  if (p.error !== undefined) view.error = p.error;
+  return view;
+}
+
+async function json(response: Response): Promise<unknown> {
+  if (!response.ok) throw new Error((await response.text()).trim() || `${response.status} ${response.statusText}`);
+  return response.json();
+}
+
+export async function loadScenarios(signal?: AbortSignal): Promise<Scenario[]> {
+  return parseScenarios(await json(await fetch('/api/scenarios', { signal })));
+}
+
+export async function startRun(scenario: string, input: JsonValue | undefined): Promise<string> {
+  const body = input === undefined ? { scenario } : { scenario, input };
+  const o = object(await json(await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })), 'run');
+  return string(o.id, 'run.id');
+}
+
+export async function loadReport(id: string): Promise<Report> {
+  return parseReport(await json(await fetch(`/api/runs/${encodeURIComponent(id)}/report`)));
+}
+
+export async function cancelRun(id: string): Promise<void> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   if (!response.ok) throw new Error(await response.text());
-  if (!response.body) throw new Error('Run response has no body');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '', finished = false;
-  let previous: RunFrame | undefined;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-      if (done && buffer.trim()) buffer += '\n';
-      let boundary: number;
-      while ((boundary = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, boundary).trim();
-        buffer = buffer.slice(boundary + 1);
-        if (!line) continue;
-        if (finished) throw new Error('Received data after the final run frame');
-        const frame = parseFrame(line, previous);
-        previous = frame;
-        finished = frame.done;
-        yield frame;
-      }
-      if (done) break;
-    }
-    if (!finished) throw new Error('実行結果を受信する前に接続が終了しました');
-  } finally { await reader.cancel(); reader.releaseLock(); }
+}
+
+/** Follows a run through server-sent events until it is done; returns a function that stops. */
+export function followRun(id: string, onProgress: (p: Progress) => void, onError: (error: Error) => void): () => void {
+  const source = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
+  const stop = () => source.close();
+  source.onmessage = event => {
+    try {
+      const p = parseProgress(JSON.parse(event.data as string));
+      if (p.done) stop();
+      onProgress(p);
+    } catch (error) { stop(); onError(error instanceof Error ? error : new Error(String(error))); }
+  };
+  source.addEventListener('failure', event => { stop(); onError(new Error(String(JSON.parse((event as MessageEvent<string>).data)))); });
+  source.onerror = () => { if (source.readyState === EventSource.CLOSED) onError(new Error('the event stream closed')); };
+  return stop;
 }

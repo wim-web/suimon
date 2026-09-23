@@ -1,0 +1,221 @@
+import Suimon.Validate
+import Suimon.Json
+
+namespace Suimon.Test.Validate
+open Lean Suimon
+
+def ensure (condition : Bool) (message : String) : IO Unit :=
+  unless condition do throw (IO.userError message)
+
+def contains (text fragment : String) : Bool := (text.splitOn fragment).length > 1
+
+def load (name : String) : IO Program := do
+  match Json.parse (← IO.FS.readFile s!"Test/programs/{name}.json") >>= Codec.program with
+  | .ok p => pure p
+  | .error e => throw (IO.userError s!"{name}: {e}")
+
+def accepted (label : String) (p : Program) : IO Unit :=
+  match p.validate with
+  | .ok () => pure ()
+  | .error e => throw (IO.userError s!"{label}: expected a valid program, got: {e}")
+
+def rejected (label : String) (fragment : String) (p : Program) : IO Unit :=
+  match p.validate with
+  | .ok () => throw (IO.userError s!"{label}: accepted, expected an error with '{fragment}'")
+  | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got: {e}"
+
+def decodeRejected (label : String) (fragment : String) (text : String) : IO Unit :=
+  match Json.parse text >>= Codec.program with
+  | .ok _ => throw (IO.userError s!"{label}: decoded, expected an error with '{fragment}'")
+  | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got: {e}"
+
+def mapWorkflow (id : String) (f : Workflow → Workflow) (p : Program) : Program :=
+  { p with workflows := p.workflows.map fun w => if w.id == id then f w else w }
+
+def mapPlacement (name : String) (f : Placement → Placement) (w : Workflow) : Workflow :=
+  { w with placements := w.placements.map fun pl => if pl.name == name then f pl else pl }
+
+def mapConnection (source target : String) (f : Connection → Connection) (w : Workflow) : Workflow :=
+  { w with connections := w.connections.map fun c => if c.source == source && c.target == target then f c else c }
+
+def dropConnection (source target : String) (w : Workflow) : Workflow :=
+  { w with connections := w.connections.filter fun c => !(c.source == source && c.target == target) }
+
+def mapConcurrency (f : Concurrency → Concurrency) (pl : Placement) : Placement :=
+  match pl.control with
+  | .concurrency c => { pl with control := .concurrency (f c) }
+  | _ => pl
+
+def mapTask (name : String) (f : TaskSpec → TaskSpec) (c : Concurrency) : Concurrency :=
+  { c with tasks := c.tasks.map fun t => if t.name == name then f t else t }
+
+def kinds (p : Program) (id : String) : List (String × Option Kind) :=
+  match p.workflow? id with
+  | some w => w.placements.map fun pl => (pl.name, w.outputKind? p pl.name)
+  | none => []
+
+def cycle : Program := {
+  main := "loop"
+  functions := [{ id := "step", input := some (.named "A"), output := .single (.named "A") }]
+  transforms := [{ id := "a", input := .named "A", output := .named "A" }]
+  workflows := [{
+    id := "loop"
+    placements := [
+      { name := "x", control := .call (.function "step"), policy := .stop },
+      { name := "y", control := .call (.function "step"), policy := .stop }]
+    connections := [
+      { source := "x", target := "y", transform := .declared "a" },
+      { source := "y", target := "x", transform := .declared "a" }] }] }
+
+/-- A concurrency without input, whose only task takes no input either. --/
+def standalone (input : Option TransformRef) : Program := {
+  main := "w"
+  functions := [{ id := "loadConfig", output := .single (.named "Config") }]
+  transforms := [{ id := "config", input := .named "Config", output := .named "Config" }]
+  workflows := [{
+    id := "w"
+    placements := [{
+      name := "c"
+      policy := .stop
+      control := .concurrency {
+        limit := 1
+        output := .list
+        element := .named "Config"
+        tasks := [{
+          name := "config"
+          body := .function "loadConfig"
+          input := input
+          output := some "config"
+          policy := .stop }] } }] }] }
+
+def run : IO Unit := do
+  let users ← load "users"
+  let branch ← load "branch"
+  let merge ← load "merge"
+  for (label, p) in [("users", users), ("branch", branch), ("merge", merge)] do
+    accepted label p
+    match Codec.program (Codec.programJson p) with
+    | .ok q => ensure (q == p) s!"{label}: JSON round trip changed the program"
+    | .error e => throw (IO.userError s!"{label}: JSON round trip failed: {e}")
+
+  ensure (kinds users "users" == [("fetchAllUsers", some .stream), ("perUser", some .stream), ("all", some .single)])
+    "users: Stream input to a List concurrency is a Stream of lists"
+  ensure (kinds branch "shipping" ==
+    [("list", some .stream), ("paid", some .stream), ("ship", some .stream), ("receipts", some .single)])
+    "branch: a branch keeps its input kind"
+  ensure (kinds merge "dashboard" == [("sales", some .single), ("stock", some .single),
+    ("widgets", some .single), ("page", some .single), ("archive", some .single), ("notify", some .single)])
+    "merge: Merge of Singles is Single, and a discard connection from a Single is Single"
+  ensure (users.resultType (.concurrency { limit := 1, tasks := [], output := .list, element := .named "T" })
+    == some (.list (.named "T"))) "a List concurrency produces List<T>"
+
+  -- Names and references
+  rejected "duplicate placement" "duplicate placement name" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with placements := w.placements ++ w.placements.take 1 }
+  rejected "unknown main" "unknown main workflow nope" { merge with main := "nope" }
+  rejected "unknown transform" "unknown transform nope" <| merge |> mapWorkflow "dashboard"
+    (mapConnection "sales" "archive" fun c => { c with transform := .declared "nope" })
+  rejected "unknown output endpoint" "fetch is not an endpoint of workflow profileFlow" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency (mapTask "profile" fun t =>
+      { t with body := .workflow "profileFlow" "fetch" })))
+
+  -- Types
+  rejected "transform input" "takes Stock, but sales produces Sales" <| merge |> mapWorkflow "dashboard"
+    (mapConnection "sales" "archive" fun c => { c with transform := .declared "stockWidget" })
+  rejected "transform output" "returns Widget, but archive takes Sales" <| merge |> mapWorkflow "dashboard"
+    (mapConnection "sales" "archive" fun c => { c with transform := .declared "salesWidget" })
+  rejected "entry type" "the input type Org does not match" <| users |> mapWorkflow "users" fun w =>
+    { w with input := some { valueType := .named "Org", placement := "fetchAllUsers" } }
+  rejected "task input transform" "an input transform is required" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency (mapTask "orders" fun t => { t with input := none })))
+  rejected "task output transform" "takes Profile, but the body produces Orders" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency (mapTask "orders" fun t =>
+      { t with output := some "profileSummary" })))
+
+  -- Inputs
+  rejected "two inputs" "archive: needs exactly one input" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with connections := w.connections ++ w.connections.filter (·.target == "archive") }
+  rejected "missing input" "archive: needs exactly one input" <| merge |>
+    mapWorkflow "dashboard" (dropConnection "sales" "archive")
+  rejected "input to a node without input" "stock takes no input" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with connections := w.connections ++ [{ source := "sales", target := "stock", transform := .declared "sales" }] }
+  rejected "Merge entry" "Merge cannot be the entry" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with input := some { valueType := .named "Widget", placement := "widgets" } }
+
+  -- discard: a target without input runs once per value it receives, without the value
+  let ticks := branch |> mapWorkflow "shipping" fun w =>
+    { w with
+      placements := w.placements ++ [
+        { name := "tick", control := .call (.function "tick"), policy := .«continue» },
+        { name := "ticks", control := .waitStream (.named "Tick"), policy := .stop }]
+      connections := w.connections ++ [
+        { source := "ship", target := "tick", transform := .discard },
+        { source := "tick", target := "ticks", transform := .declared "tick" }] }
+  let ticks := { ticks with
+    functions := ticks.functions ++ [{ id := "tick", output := .single (.named "Tick") }]
+    transforms := ticks.transforms ++ [{ id := "tick", input := .named "Tick", output := .named "Tick" }] }
+  accepted "discard from a Stream" ticks
+  ensure ((kinds ticks "shipping").lookup "tick" == some (some .stream)) "discard keeps the Stream kind"
+  rejected "discard to a node with input" "discard passes no value, but archive takes Sales" <| merge |>
+    mapWorkflow "dashboard" (mapConnection "sales" "archive" fun c => { c with transform := .discard })
+  rejected "two discard connections" "notify: accepts at most one connection" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with connections := w.connections ++ [{ source := "stock", target := "notify", transform := .discard }] }
+  let configTask := fun (input : Option TransformRef) => users |> mapWorkflow "users"
+    (mapPlacement "perUser" (mapConcurrency fun c => { c with tasks := c.tasks ++ [{
+      name := "config", body := .function "loadConfig", input, policy := .«continue» }] }))
+  let withConfig := fun (p : Program) =>
+    { p with functions := p.functions ++ [{ id := "loadConfig", output := .single (.named "Config") }] }
+  accepted "task without input discards the concurrency input" (withConfig (configTask (some .discard)))
+  rejected "task without input and without discard" "the input transform must be discard"
+    (withConfig (configTask none))
+  accepted "task without input in a concurrency without input" (standalone none)
+  rejected "discard without concurrency input" "the concurrency has no input to discard" (standalone (some .discard))
+  rejected "declared discard" "discard is provided by the library and cannot be declared"
+    { merge with transforms := merge.transforms ++ [{ id := "discard", input := .named "A", output := .named "A" }] }
+
+  -- Graph structure and kinds
+  rejected "cycle" "connections contain a cycle" cycle
+  rejected "recursive call" "workflows call each other in a cycle" <| users |> mapWorkflow "profileFlow"
+    (mapPlacement "format" fun pl => { pl with control := .call (.workflow "profileFlow" "format") })
+  rejected "waitStream on Single" "waitStream needs a Stream input" <| merge |> mapWorkflow "dashboard"
+    (mapPlacement "page" fun pl => { pl with control := .waitStream (.list (.named "Widget")) })
+  rejected "Merge of Stream" "Merge accepts only Single inputs (ship)" <| branch |> mapWorkflow "shipping"
+    (mapPlacement "receipts" fun pl => { pl with control := .merge (.named "Receipt") })
+  rejected "Stream endpoint" "endpoint ship must be Single" <| branch |> mapWorkflow "shipping" fun w =>
+    { dropConnection "ship" "receipts" w with placements := w.placements.filter (·.name != "receipts") }
+
+  -- Branch arms
+  rejected "no connected arm" "at least one arm needs a connection" <| branch |>
+    mapWorkflow "shipping" (dropConnection "paid" "ship")
+  rejected "unknown arm" "unknown arm refunded" <| branch |> mapWorkflow "shipping"
+    (mapConnection "paid" "ship" fun c => { c with arm := some "refunded" })
+  rejected "missing arm" "a connection from a branch needs an arm" <| branch |> mapWorkflow "shipping"
+    (mapConnection "paid" "ship" fun c => { c with arm := none })
+  rejected "arm outside a branch" "only a connection from a branch has an arm" <| merge |>
+    mapWorkflow "dashboard" (mapConnection "sales" "archive" fun c => { c with arm := some "x" })
+
+  -- Settings
+  rejected "zero limit" "limit must be positive" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency fun c => { c with limit := 0 }))
+  rejected "no task in the output" "at least one task must be in the output" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency fun c =>
+      { c with tasks := c.tasks.map fun t => { t with output := none } }))
+  accepted "Merge with one input" <| merge |> mapWorkflow "dashboard" fun w =>
+    { w with
+      placements := w.placements.filter (·.name != "stock")
+      connections := w.connections.filter (·.source != "stock") }
+  rejected "timeout on waitStream" "a timeout is only for a function call or a branch judge" <| users |>
+    mapWorkflow "users" (mapPlacement "all" fun pl => { pl with timeout := { callMs := some 10 } })
+  rejected "element timeout on Single" "an element timeout is only for a Stream function" <| merge |>
+    mapWorkflow "dashboard" (mapPlacement "sales" fun pl => { pl with timeout := { elementMs := some 10 } })
+  rejected "zero timeout" "a timeout must be positive" <| branch |>
+    mapWorkflow "shipping" (mapPlacement "paid" fun pl => { pl with timeout := { callMs := some 0 } })
+
+  -- Decoding
+  let base := "{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[{\"name\":\"a\",\"node\":{\"type\":\"merge\",\"element\":\"T\"}"
+  decodeRejected "unknown field" "unknown field retries" (base ++ ",\"policy\":\"stop\",\"retries\":1}]}]}")
+  decodeRejected "missing policy" "missing field policy" (base ++ "}]}]}")
+  decodeRejected "unknown policy" "policy is stop or continue" (base ++ ",\"policy\":\"retry\"}]}]}")
+  IO.println "validate: ok"
+
+end Suimon.Test.Validate
