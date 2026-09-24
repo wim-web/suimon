@@ -110,10 +110,13 @@ def mix (seed : UInt64) : UInt64 :=
   let z := (z ^^^ (z >>> 27)) * 0x94d049bb133111eb
   z ^^^ (z >>> 31)
 
-/-- Failures, cancellation and short streams end work early, so a walk picks them rarely. --/
+/-- Failures, cancellation and short streams end work early, so a walk picks them rarely. A
+    cancellation after a stop ends nothing early: the stop has already cancelled the calls and left
+    the waiting tasks unstarted, and the cancellation only marks the run cancelled, so a walk does
+    not keep it rare. --/
 def disruptive (cfg : Config) (s : State) : Op → Bool
-  | .failed _ | .timedOut .. | .lost _ | .transformFailed .. | .taskInputFailed .. | .taskOutputFailed ..
-  | .cancel => true
+  | .failed _ | .timedOut .. | .lost _ | .transformFailed .. | .taskInputFailed .. | .taskOutputFailed .. => true
+  | .cancel => s.status == .running
   | .ended id => (s.call? id).any (·.yields < cfg.maxYields)
   | _ => false
 

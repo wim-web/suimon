@@ -215,12 +215,12 @@ def run : IO Unit := do
     randomWalks label p {} 200
     randomWalks s!"{label} without failures" p { failures := false, cancel := false } 50
     randomWalks s!"{label} without cancellation" p { cancel := false } 50
-  -- Random walks pick two disruptive operations close together, and cancel after a stop, though
-  -- they pick about one disruptive operation in 40 choices between both kinds. The remainders of a
-  -- linear congruential generator, whose low bits cycle, kept disruptive operations 8 steps apart:
-  -- none of these walks did either.
+  -- Random walks pick two disruptive operations close together, though they pick about one
+  -- disruptive operation in 40 choices between both kinds, and they often cancel after a stop, which
+  -- ends nothing early. The remainders of a linear congruential generator, whose low bits cycle,
+  -- kept disruptive operations 8 steps apart: none of these walks did either.
   let m := [users, branch, merge].foldl (fun m p => mixing p 300 m) {}
-  ensure (100 * m.near ≥ m.walks && 500 * m.cancelAfterStop ≥ m.walks && 32 * m.disrupted ≤ m.choices &&
+  ensure (100 * m.near ≥ m.walks && 30 * m.cancelAfterStop ≥ m.walks && 32 * m.disrupted ≤ m.choices &&
       m.choices ≤ 50 * m.disrupted)
     (s!"mixing: of {m.walks} walks, {m.near} pick two disruptive operations at most 4 steps apart and " ++
       s!"{m.cancelAfterStop} cancel after a stop; {m.disrupted} of {m.choices} choices take a disruptive operation")

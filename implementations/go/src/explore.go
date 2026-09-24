@@ -272,10 +272,15 @@ func mix(seed uint64) uint64 {
 }
 
 // disruptive: failures, cancellation and short streams end work early, so a walk picks them rarely.
+// A cancellation after a stop ends nothing early: the stop has already cancelled the calls and left
+// the waiting tasks unstarted, and the cancellation only marks the run cancelled, so a walk does not
+// keep it rare.
 func disruptive(cfg Config, s *State, op Op) bool {
 	switch op := op.(type) {
-	case OpFailed, OpTimedOut, OpLost, OpTransformFailed, OpTaskInputFailed, OpTaskOutputFailed, OpCancel:
+	case OpFailed, OpTimedOut, OpLost, OpTransformFailed, OpTaskInputFailed, OpTaskOutputFailed:
 		return true
+	case OpCancel:
+		return s.Status == StatusRunning
 	case OpEnded:
 		c, ok := s.call(op.Call)
 		return ok && c.Yields < cfg.MaxYields
