@@ -72,6 +72,9 @@ type Engine struct {
 // header, it must have the same canonical form. Only a definition built in code can fail this, such
 // as one with an empty id, which ParseDefinition rejects.
 func NewEngine(p *Definition, r *Registry) (*Engine, error) {
+	if err := p.representable(); err != nil {
+		return nil, err
+	}
 	d := p.derive()
 	if err := p.validate(d); err != nil {
 		return nil, err
@@ -82,8 +85,12 @@ func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 // NewUncheckedEngine is NewEngine without validating the definition (runUnchecked, §14). The engine
 // still records, applies the policies, timeouts and limits, and checks each operation with Step,
 // but for a definition that validation would reject nothing guarantees that the execution ends: Wait
-// may return ErrStuck.
+// may return ErrStuck. It still refuses what a Go definition can hold but a Lean one cannot, as
+// Validate does first: the journal could not record such a definition faithfully.
 func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
+	if err := p.representable(); err != nil {
+		return nil, err
+	}
 	return newEngine(p, p.derive(), r)
 }
 

@@ -3,6 +3,7 @@ package suimon
 import (
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -161,6 +162,21 @@ func TestValidateRepresentable(t *testing.T) {
 	merge = load(t, "merge")
 	merge.Transforms[0].Output.Lists = -1
 	rejected(t, "negative list depth", "has a negative number of List wrappers", merge)
+	// The engines refuse them too, even without validation: two names that differ only in invalid
+	// bytes would record as the same name.
+	r, err := NewRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge = load(t, "merge")
+	merge.Workflows[0].Placements[0].Name = "a\xff"
+	merge.Workflows[0].Placements[1].Name = "a\xfe"
+	for label, engine := range map[string]func(*Definition, *Registry) (*Engine, error){
+		"NewEngine": NewEngine, "NewUncheckedEngine": NewUncheckedEngine} {
+		if _, err := engine(merge, r); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
+			t.Errorf("%s: got %v, want the name rejected as not UTF-8", label, err)
+		}
+	}
 }
 
 func TestValidateTypes(t *testing.T) {
