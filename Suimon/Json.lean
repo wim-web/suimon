@@ -469,7 +469,8 @@ def loadJson (json : Json) : Except String Definition := do
   return p
 
 /-- Reads the definition that the header of an execution record holds, as a definition file is read.
-    `suimon check` replays a record against it. --/
+    `suimon check` replays a record against it, and the recovery theorems are about this loader
+    (`Trace.check_text_of_validate`). --/
 def load (w : Wire) : Except String Definition :=
   loadJson w.toJson
 

@@ -542,6 +542,106 @@ theorem check_resume {c : Codec} (hc : c.Lawful) {load : Wire → Except String 
     record_append hu₀ (by rw [htake, Nat.add_comm]; simpa using hmore)
   rw [recording_append, check_text hc hw hload hall, List.length_append, htake]
 
+/-! ### A crash anywhere
+
+A crash may cut a recording at any character. What is left is a part of the header, or the header,
+some records and a part of the next line (`prefix_recording`); `check_torn_header` and `check_torn`
+cover both. -/
+
+/-- A prefix of lines, each ended by a newline, is some of the lines and then a part of the next one,
+    without a newline. --/
+theorem prefix_lines : ∀ {lines : List (List Char)}, (∀ l ∈ lines, '\n' ∉ l) → ∀ {pre : List Char},
+    pre <+: lines.flatMap (· ++ ['\n']) →
+    ∃ k ≤ lines.length, ∃ tail, '\n' ∉ tail ∧ pre = (lines.take k).flatMap (· ++ ['\n']) ++ tail
+  | [], _, pre, h => by
+    obtain rfl := List.prefix_nil.1 h
+    exact ⟨0, Nat.le_refl _, [], by simp, by simp⟩
+  | l :: ls, hlines, pre, h => by
+    have hl : '\n' ∉ l := hlines l List.mem_cons_self
+    have hls : ∀ l' ∈ ls, '\n' ∉ l' := fun l' m => hlines l' (List.mem_cons_of_mem _ m)
+    rw [List.flatMap_cons, List.append_assoc] at h
+    rcases List.prefix_or_prefix_of_prefix h (List.prefix_append l _) with hpl | hlp
+    · exact ⟨0, Nat.zero_le _, pre, fun m => hl (hpl.subset m), by simp⟩
+    · obtain ⟨r, rfl⟩ := hlp
+      have hr := (List.prefix_append_right_inj l).1 h
+      cases r with
+      | nil => exact ⟨0, Nat.zero_le _, l, hl, by simp⟩
+      | cons x r =>
+        rw [List.singleton_append, List.cons_prefix_cons] at hr
+        obtain ⟨rfl, hr⟩ := hr
+        obtain ⟨k, hk, tail, htail, rfl⟩ := prefix_lines hls hr
+        exact ⟨k + 1, by simp; omega, tail, htail, by simp⟩
+
+/-- What a crash leaves of a recording: a part of the header, without a newline, or the header, the
+    first `k` records and a part of the next line. --/
+theorem prefix_recording {c : Codec} (hc : c.Lawful) (header : Wire) (rs : List Record) {pre : String}
+    (h : pre.toList <+: (recording c header rs).toList) :
+    '\n' ∉ pre.toList ∨
+      ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c header (rs.take k) ++ tail := by
+  rw [recording_toList] at h
+  obtain ⟨k, hk, tail, htail, hpre⟩ := prefix_lines (newline_not_mem_lines hc header rs) h
+  cases k with
+  | zero => exact Or.inl (by simpa [hpre] using htail)
+  | succ k =>
+    refine Or.inr ⟨k, by simp at hk; omega, String.ofList tail, by simpa using htail, String.ext ?_⟩
+    rw [String.toList_append, recording_toList, hpre, String.toList_ofList]
+    simp [List.map_take]
+
+/-- A crash anywhere in a recording, the header included, leaves a text that checks: before the header
+    is complete, to nothing; after it, to exactly the transitions whose commit records are complete,
+    which are the first `k / 2` when the text holds the first `k` records. --/
+theorem check_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
+    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
+    (hpre : pre.toList <+: (recording c w rs).toList) :
+    ('\n' ∉ pre.toList ∧
+      check c load pre =
+        .ok { definition := none, state := {}, committed := 0, uncommitted := decide (pre ≠ ""), values := [] }) ∨
+    ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c w (rs.take k) ++ tail ∧
+      ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
+        check c load pre =
+          .ok { definition := some p, state := u, committed := k / 2,
+                uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
+  rcases prefix_recording hc w rs hpre with hnl | ⟨k, hk, tail, htail, rfl⟩
+  · exact Or.inl ⟨hnl, check_torn_header c load hnl⟩
+  · obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h hk htail
+    exact Or.inr ⟨k, hk, tail, htail, rfl, u, hu, hcheck⟩
+
+/-- After a crash anywhere in a recording, recovery gives the state after the first `n` transitions,
+    those whose commit records survived (`check_prefix`). --/
+theorem recover_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
+    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
+    (hpre : pre.toList <+: (recording c w rs).toList) :
+    ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
+      recover c load pre = .ok u := by
+  rcases check_prefix hc hw hload h hpre with ⟨-, hcheck⟩ | ⟨k, hk, tail, -, -, u, hu, hcheck⟩
+  · exact ⟨0, Nat.zero_le _, {}, by simp [record, pure_ok], by simp [recover, hcheck, Except.map]⟩
+  · have hlen := record_length h
+    exact ⟨k / 2, by omega, u, hu, by simp [recover, hcheck, Except.map]⟩
+
+/-- After a crash anywhere in a recording, the runtime keeps the header and the committed lines
+    (writing the header again if the crash cut it), resumes from the recovered state with the committed
+    payloads, and appends the records of new transactions; the result replays like an uninterrupted
+    record. --/
+theorem check_resume_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
+    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
+    (hpre : pre.toList <+: (recording c w rs).toList) :
+    ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
+      recover c load pre = .ok u ∧
+      ∀ {more : List (Op × List (Value × String))} {t' : State} {rs' : List Record},
+        record p u more ((steps.take n).flatMap (·.2)) (2 * n + 1) = .ok (t', rs') →
+        check c load (recording c w (rs.take (2 * n)) ++ text c rs') =
+          .ok { definition := some p, state := t', committed := n + more.length, uncommitted := false,
+                values := (steps.take n ++ more).flatMap (·.2) } := by
+  obtain ⟨n, hn, u, hu, hrecover⟩ := recover_prefix hc hw hload h hpre
+  refine ⟨n, hn, u, hu, hrecover, fun {more t' rs'} hmore => ?_⟩
+  have htake : (steps.take n).length = n := by simp; omega
+  have hall : record p {} (steps.take n ++ more) [] 1 = .ok (t', rs.take (2 * n) ++ rs') :=
+    record_append hu (by rw [htake, Nat.add_comm]; simpa using hmore)
+  rw [recording_append, check_text hc hw hload hall, List.length_append, htake]
+
 /-! ## Payloads of a recovered state (§12.1) -/
 
 /-- Each value of `after` is a value of `before` or one the transition introduces. --/
@@ -628,6 +728,30 @@ theorem check_payloads {c : Codec} {load : Wire → Except String Definition} {t
         simp only [hp, hr, ok_bind, pure_ok, Except.ok.injEq] at h
         subst h
         exact replayLines_covered hempty hr
+
+/-- The definition a checked record names is one that `load` read, from the header. --/
+theorem check_definition {c : Codec} {load : Wire → Except String Definition} {text : String} {checked : Checked}
+    {q : Definition} (h : check c load text = .ok checked) (hq : checked.definition = some q) :
+    ∃ w, load w = .ok q := by
+  simp only [check] at h
+  split at h
+  · simp only [pure_ok, Except.ok.injEq] at h
+    subst h
+    simp at hq
+  · rename_i header lines _
+    cases hd : c.decodeHeader (String.ofList header) with
+    | error e => simp [hd, error_bind, mapError_error] at h
+    | ok w =>
+      cases hl : load w with
+      | error e => simp [hd, hl, ok_bind, error_bind, mapError_error] at h
+      | ok q' =>
+        cases hr : replayLines c q' {} 1 lines with
+        | error e => simp [hd, hl, hr, ok_bind, mapError_ok, map_error] at h
+        | ok r =>
+          simp only [hd, hl, hr, ok_bind, mapError_ok, pure_ok, Except.ok.injEq] at h
+          subst h
+          simp only [Option.some.injEq] at hq
+          exact ⟨w, hq ▸ hl⟩
 
 /-! ## Resuming under a definition (§12.1)
 
@@ -761,5 +885,34 @@ theorem resume_recover {c : Codec} {load : Wire → Except String Definition} {p
     {s : State} (h : resume c load p text = .ok s) : recover c load text = .ok s := by
   obtain ⟨checked, q, hcheck, -, -, rfl⟩ := resume_eq_ok.1 h
   simp [recover, hcheck, Except.map]
+
+/-- A record without a complete line, which a crash inside the header leaves, does not resume. --/
+theorem resume_torn_header (c : Codec) (load : Wire → Except String Definition) (p : Definition) {tail : String}
+    (htail : '\n' ∉ tail.toList) : resume c load p tail = .error "the record has no header" := by
+  simp [resume, check_torn_header c (agreeing load p) htail, ok_bind, throw_error]
+
+/-- A header whose definition `load` reads as `p` agrees with `p`. --/
+theorem agreeing_of_load {load : Wire → Except String Definition} {p : Definition} {w : Wire}
+    (hload : load w = .ok p) : agreeing load p w = .ok p :=
+  agreeing_eq_ok.2 ⟨hload, rfl⟩
+
+/-- A definition resumes a whole recording whose header it loads from, from the state of the run that
+    wrote it. --/
+theorem resume_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
+    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
+    resume c load p (recording c w rs) = .ok t := by
+  simp [resume, check_text hc hw (agreeing_of_load hload) h, ok_bind, pure_ok]
+
+/-- After a crash that left the header complete, the definition resumes from the state of the
+    committed transitions. --/
+theorem resume_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
+    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
+    {tail : String} (htail : '\n' ∉ tail.toList) :
+    ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
+      resume c load p (recording c w (rs.take k) ++ tail) = .ok u := by
+  obtain ⟨u, hu, hcheck⟩ := check_torn hc hw (agreeing_of_load hload) h hk htail
+  exact ⟨u, hu, by simp [resume, hcheck, ok_bind, pure_ok]⟩
 
 end Suimon.Trace
