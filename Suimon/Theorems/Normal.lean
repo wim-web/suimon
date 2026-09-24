@@ -1,7 +1,8 @@
-import Suimon.Normal
+import Suimon.Theorems.Json
 import Suimon.Theorems.StaticLemmas
 
-/-! The validator is sound for `Definition.Normal`: a definition it accepts is normal (§15.2). -/
+/-! The validator is sound for `Definition.Normal`: a definition it accepts is normal (§15.2), so the
+    canonical form that a record header holds for it decodes back to it. -/
 
 namespace Suimon
 
@@ -302,3 +303,18 @@ theorem Definition.normal_of_validate {p : Definition} (h : p.validate = .ok ())
     (List.mem_map.2 ⟨w, hw', rfl⟩) (List.mem_map.2 ⟨w', hwm, hwn⟩)
 
 end Suimon
+
+namespace Suimon.Codec
+
+/-- The canonical form of a definition that validation accepts decodes back to it. --/
+theorem definition_definitionWire_of_validate {p : Definition} (h : p.validate = .ok ()) :
+    definition (definitionWire p).toJson = .ok p :=
+  definition_definitionWire (Definition.normal_of_validate h)
+
+/-- Loading the header of a record written for a definition that validation accepts, as the CLI loads a
+    definition (decode, then validate), gives the definition back. --/
+theorem load_definitionWire {p : Definition} (h : p.validate = .ok ()) :
+    (do let q ← definition (definitionWire p).toJson; q.validate; return q) = Except.ok p := by
+  simp [definition_definitionWire_of_validate h, h, bind, Except.bind, pure, Except.pure]
+
+end Suimon.Codec
