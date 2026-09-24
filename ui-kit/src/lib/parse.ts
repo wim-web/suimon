@@ -35,12 +35,17 @@ function positive(value: unknown, at: string): number {
   if (nat(value, at) < 1) fail(at, 'expected a positive integer');
   return value as number;
 }
-/** A limit or timeout of a definition: Lean and Go accept up to 2^64 - 1, which a JavaScript number
-    cannot tell apart from 2^64, so both pass here. */
-function bounded(value: unknown, at: string): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) fail(at, 'expected a positive integer');
+/** A limit or timeout: Lean and Go accept up to 2^64 - 1, which a JavaScript number cannot tell
+    apart from 2^64, so both pass here. A definition's must be positive; a state copies them, from a
+    definition that may not have been validated. */
+function large(value: unknown, at: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) fail(at, 'expected a natural number');
   if (value > 2 ** 64) fail(at, 'must be at most 18446744073709551615');
   return value;
+}
+function bounded(value: unknown, at: string): number {
+  if (large(value, at) < 1) fail(at, 'expected a positive integer');
+  return value as number;
 }
 function bool(value: unknown, at: string): boolean {
   if (typeof value !== 'boolean') fail(at, 'expected a boolean');
@@ -311,7 +316,7 @@ function call(value: unknown, at: string): Call {
     target: req(o, 'target', at, callTarget), input: optional(o, 'input', at, string), stream: req(o, 'stream', at, bool),
     status: req(o, 'status', at, (v, a) => oneOf(v, a, ['running', 'fetching', 'cancelling', 'returned', 'failed', 'lost', 'cancelled'] as const)),
     yields: req(o, 'yields', at, nat),
-    timeout: { callMs: optional(t, 'callMs', `${at}.timeout`, nat), elementMs: optional(t, 'elementMs', `${at}.timeout`, nat) },
+    timeout: { callMs: optional(t, 'callMs', `${at}.timeout`, large), elementMs: optional(t, 'elementMs', `${at}.timeout`, large) },
     policy: req(o, 'policy', at, policy),
   };
 }

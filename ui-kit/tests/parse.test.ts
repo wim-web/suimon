@@ -82,6 +82,14 @@ describe('parseState', () => {
     expect(parseState(stateJson('merge-a')).deliveries.some(d => d.outcome === 'trigger')).toBe(true);
   });
 
+  it('accepts call timeouts up to 2^64 - 1, as a definition does', () => {
+    const json = clone(stateJson('users-a')) as Json;
+    json.calls[0].timeout = { callMs: 2 ** 60, elementMs: 0 };
+    expect(parseState(json).calls[0]!.timeout).toEqual({ callMs: 2 ** 60, elementMs: 0 });
+    json.calls[0].timeout = { callMs: 2 ** 65, elementMs: null };
+    expect(() => parseState(json)).toThrow('timeout.callMs: must be at most 18446744073709551615');
+  });
+
   it('reads task outputs as pending, a value or failed, and the producer of each result', () => {
     const outputs = (name: string) => parseState(stateJson(name)).taskResults.map(r => typeof r.output === 'object' ? 'value' : r.output);
     expect(outputs('users-a')).toEqual(['value', 'value', 'value', 'value']);
