@@ -117,9 +117,20 @@ func TestServerRun(t *testing.T) {
 	if state := decode[map[string]any](t, p.State); state["status"] != "succeeded" {
 		t.Errorf("state status %v", state["status"])
 	}
+	for _, s := range p.Spans {
+		if *s.EndMs > p.ElapsedMs {
+			t.Errorf("%s ended at %.1fms, after the run at %.1fms", s.Function, *s.EndMs, p.ElapsedMs)
+		}
+	}
+	// A finished run keeps its duration as the elapsed time.
+	time.Sleep(30 * time.Millisecond)
 	status, data := call(t, "GET", srv.URL+"/api/runs/"+id+"?after=2", "")
-	if tail := decode[progress](t, data); status != http.StatusOK || tail.Offset != 2 || !slices.Equal(tail.Records, p.Records[2:]) {
+	tail := decode[progress](t, data)
+	if status != http.StatusOK || tail.Offset != 2 || !slices.Equal(tail.Records, p.Records[2:]) {
 		t.Errorf("after=2: %d offset %d, %d records of %d", status, tail.Offset, len(tail.Records), len(p.Records))
+	}
+	if tail.ElapsedMs != p.ElapsedMs {
+		t.Errorf("elapsed %.3fms, then %.3fms after the end", p.ElapsedMs, tail.ElapsedMs)
 	}
 	status, data = call(t, "GET", srv.URL+"/api/runs/"+id+"/report", "")
 	if status != http.StatusOK {

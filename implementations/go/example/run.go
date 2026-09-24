@@ -26,6 +26,7 @@ type run struct {
 	lines   []string
 	changed chan struct{} // closed and replaced on every change
 	done    bool
+	endMs   float64 // when the run finished, from its start
 	report  *reportJSON
 	raw     *suimon.Report
 	err     string
@@ -46,7 +47,7 @@ func startRun(ctx context.Context, id string, s *scenario, input json.RawMessage
 	go func() {
 		report, err := exec.Wait()
 		r.mu.Lock()
-		r.done = true
+		r.done, r.endMs = true, r.env.now()
 		if err != nil {
 			r.err = err.Error()
 		} else {
@@ -80,7 +81,7 @@ func (r *run) signal() {
 }
 
 // progress is what a client sees of a run: the record lines from offset on, the state they
-// establish, and the spans of user code.
+// establish, the spans of user code, and the time since the start of the run, which stops at its end.
 type progress struct {
 	ID         string          `json:"id"`
 	Scenario   string          `json:"scenario"`
@@ -98,8 +99,12 @@ type progress struct {
 func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	r.mu.Lock()
 	lines := r.lines
-	done, runErr, changed := r.done, r.err, r.changed
+	done, endMs, runErr, changed := r.done, r.endMs, r.err, r.changed
 	r.mu.Unlock()
+	elapsed := r.env.now()
+	if done {
+		elapsed = endMs
+	}
 	offset = min(max(offset, 0), len(lines))
 	checked, err := suimon.Check(strings.Join(lines, "\n")+"\n", suimon.LoadHeader)
 	if err != nil {
@@ -110,7 +115,7 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 		return progress{}, nil, err
 	}
 	return progress{ID: r.id, Scenario: r.scenario.ID, Definition: r.scenario.Definition, State: state, Offset: offset,
-		Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(), ElapsedMs: r.env.now(), Done: done,
+		Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(), ElapsedMs: elapsed, Done: done,
 		Error: runErr}, changed, nil
 }
 
