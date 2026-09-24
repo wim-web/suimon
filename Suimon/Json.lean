@@ -209,13 +209,40 @@ def list (json : Json) (key : String) (at_ : String) : Except String (List Json)
 def obj (fields : List (String × Option Wire)) : Wire :=
   .obj (fields.filterMap fun (key, value) => value.map (key, ·))
 
-partial def valueType (json : Json) (at_ : String) : Except String ValueType :=
+theorem sizeOf_get?_lt_impl {k : String} {v : Json} :
+    ∀ t : Std.DTreeMap.Internal.Impl String (fun _ => Json),
+      (letI : Ord String := ⟨compare⟩; Std.DTreeMap.Internal.Impl.Const.get? t k) = some v → sizeOf v < sizeOf t
+  | .leaf, h => by simp [Std.DTreeMap.Internal.Impl.Const.get?] at h
+  | .inner _ _ _ l r, h => by
+    simp only [Std.DTreeMap.Internal.Impl.Const.get?] at h
+    simp only [Std.DTreeMap.Internal.Impl.inner.sizeOf_spec]
+    split at h
+    · have := sizeOf_get?_lt_impl l h; omega
+    · have := sizeOf_get?_lt_impl r h; omega
+    · cases h; omega
+
+/-- The value an object holds for a key is smaller than the object, so decoding may recurse into it. --/
+theorem sizeOf_get?_lt {fields : Std.TreeMap.Raw String Json} {k : String} {v : Json}
+    (h : fields.get? k = some v) : sizeOf v < sizeOf (Json.obj fields) := by
+  have := sizeOf_get?_lt_impl fields.inner.inner h
+  rcases fields with ⟨⟨t⟩⟩
+  simp only [Json.obj.sizeOf_spec, Std.TreeMap.Raw.mk.sizeOf_spec, Std.DTreeMap.Raw.mk.sizeOf_spec] at this ⊢
+  omega
+
+/-- A type: a name, or `{"list": type}`. The element of a list is looked up as `field` does, but in the
+    object itself, whose values are smaller than it (`sizeOf_get?_lt`), so that the decoder is a total
+    function that proofs can unfold. --/
+def valueType (json : Json) (at_ : String) : Except String ValueType :=
   match json with
   | .str name => if name.isEmpty then throw s!"{at_}: empty type name" else pure (.named name)
-  | .obj _ => do
-    strict json ["list"] at_
-    return .list (← valueType (← field json "list" at_) at_)
+  | .obj fields => do
+    strict (.obj fields) ["list"] at_
+    match _h : fields.get? "list" with
+    | some element => return .list (← valueType element at_)
+    | none => throw s!"{at_}: missing field list"
   | _ => throw s!"{at_}: a type is a name or \{\"list\": type}"
+termination_by sizeOf json
+decreasing_by exact sizeOf_get?_lt _h
 
 def valueTypeWire : ValueType → Wire
   | .named name => .str name
@@ -376,9 +403,11 @@ def workflow (json : Json) (at_ : String) : Except String Workflow := do
     placements := ← (← list json "placements" at_).mapM (placement · s!"{at_}.placements")
     connections := ← (← list json "connections" at_).mapM (connection · s!"{at_}.connections") }
 
+def entryWire (e : Entry) : Wire :=
+  .obj [("type", valueTypeWire e.valueType), ("placement", .str e.placement)]
+
 def workflowWire (w : Workflow) : Wire :=
-  obj [("id", some (.str w.id)),
-    ("input", w.input.map fun e => .obj [("type", valueTypeWire e.valueType), ("placement", .str e.placement)]),
+  obj [("id", some (.str w.id)), ("input", w.input.map entryWire),
     ("placements", some (.arr (w.placements.map placementWire))),
     ("connections", some (.arr (w.connections.map connectionWire)))]
 
@@ -413,16 +442,20 @@ def definition (json : Json) : Except String Definition := do
     transforms := ← (← list json "transforms" "definition").mapM (transformDecl · "transforms")
     workflows := ← (← list json "workflows" "definition").mapM (workflow · "workflows") }
 
+def functionWire (f : FunctionDecl) : Wire :=
+  obj [("id", some (.str f.id)), ("input", f.input.map valueTypeWire), ("output", some (contractWire f.output))]
+
+def judgeWire (j : JudgeDecl) : Wire := .obj [("id", .str j.id), ("input", valueTypeWire j.input)]
+
+def transformWire (t : TransformDecl) : Wire :=
+  .obj [("id", .str t.id), ("input", valueTypeWire t.input), ("output", valueTypeWire t.output)]
+
 /-- The canonical form of a definition: the definition file with its fields in a fixed order and the
     absent optional fields left out, as Go's `definitionWire` writes it. The header of an execution
     record carries it, so that equal definitions are recorded alike (§12.1). --/
 def definitionWire (p : Definition) : Wire :=
-  .obj [("main", .str p.main),
-    ("functions", .arr (p.functions.map fun f => obj [("id", some (.str f.id)),
-      ("input", f.input.map valueTypeWire), ("output", some (contractWire f.output))])),
-    ("judges", .arr (p.judges.map fun j => .obj [("id", .str j.id), ("input", valueTypeWire j.input)])),
-    ("transforms", .arr (p.transforms.map fun t => .obj [("id", .str t.id),
-      ("input", valueTypeWire t.input), ("output", valueTypeWire t.output)])),
+  .obj [("main", .str p.main), ("functions", .arr (p.functions.map functionWire)),
+    ("judges", .arr (p.judges.map judgeWire)), ("transforms", .arr (p.transforms.map transformWire)),
     ("workflows", .arr (p.workflows.map workflowWire))]
 
 def definitionJson (p : Definition) : Json := (definitionWire p).toJson

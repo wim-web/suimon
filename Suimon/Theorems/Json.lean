@@ -89,22 +89,29 @@ theorem placementWire_distinctKeys (p : Placement) : (placementWire p).DistinctK
 theorem connectionWire_distinctKeys (c : Connection) : (connectionWire c).DistinctKeys :=
   obj_distinctKeys (by simp) (by simp [Wire.DistinctKeys.str, transformRefWire_distinctKeys])
 
+theorem entryWire_distinctKeys (e : Entry) : (entryWire e).DistinctKeys :=
+  .obj (by simp) (by simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys])
+
 theorem workflowWire_distinctKeys (w : Workflow) : (workflowWire w).DistinctKeys :=
   obj_distinctKeys (by simp) (by
-    simp [Wire.DistinctKeys.str, Wire.distinctKeys_obj_iff, valueTypeWire_distinctKeys,
-      arr_map_distinctKeys placementWire_distinctKeys, arr_map_distinctKeys connectionWire_distinctKeys])
+    simp [Wire.DistinctKeys.str, entryWire_distinctKeys, arr_map_distinctKeys placementWire_distinctKeys,
+      arr_map_distinctKeys connectionWire_distinctKeys])
+
+theorem functionWire_distinctKeys (f : FunctionDecl) : (functionWire f).DistinctKeys :=
+  obj_distinctKeys (by simp) (by simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys, contractWire_distinctKeys])
+
+theorem judgeWire_distinctKeys (j : JudgeDecl) : (judgeWire j).DistinctKeys :=
+  .obj (by simp) (by simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys])
+
+theorem transformWire_distinctKeys (t : TransformDecl) : (transformWire t).DistinctKeys :=
+  .obj (by simp) (by simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys])
 
 /-- The canonical form of every definition repeats no key, so a recorder's header reads back. --/
 theorem definitionWire_distinctKeys (p : Definition) : (definitionWire p).DistinctKeys := by
   simp only [definitionWire, Wire.distinctKeys_obj_iff]
   refine ⟨by simp, ?_⟩
   simp only [List.mem_cons, List.not_mem_nil, or_false, forall_eq_or_imp, forall_eq]
-  refine ⟨.str _, ?_, ?_, ?_, arr_map_distinctKeys workflowWire_distinctKeys _⟩
-  · exact arr_map_distinctKeys (fun f => obj_distinctKeys (by simp) (by
-      simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys, contractWire_distinctKeys])) _
-  · exact arr_map_distinctKeys (fun j => .obj (by simp) (by
-      simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys])) _
-  · exact arr_map_distinctKeys (fun t => .obj (by simp) (by
-      simp [Wire.DistinctKeys.str, valueTypeWire_distinctKeys])) _
+  exact ⟨.str _, arr_map_distinctKeys functionWire_distinctKeys _, arr_map_distinctKeys judgeWire_distinctKeys _,
+    arr_map_distinctKeys transformWire_distinctKeys _, arr_map_distinctKeys workflowWire_distinctKeys _⟩
 
 end Suimon.Codec
