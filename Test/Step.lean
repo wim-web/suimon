@@ -84,6 +84,8 @@ def randomWalks (label : String) (p : Definition) (cfg : Explore.Config) (seeds 
       rng := Explore.nextSeed rng
       let some (op, next) := Explore.pick cfg s rng choices | break
       checkTransition p s!"{label} seed {seed}" s next op
+      unless cfg.cancel do
+        ensure (!(op matches .cancel)) s!"{label} seed {seed}: cancelled by a walk without cancellation"
       s := next
       steps := steps + 1
     ensure s.status.terminal s!"{label} seed {seed}: stuck in {repr s.status} after {steps} steps"
@@ -93,6 +95,25 @@ def randomWalks (label : String) (p : Definition) (cfg : Explore.Config) (seeds 
       ensure (s.status == .failed) s!"{label} seed {seed}: a recorded failure must fail the workflow"
     else if s.cancelled then
       ensure (s.status == .cancelled) s!"{label} seed {seed}: cancelled without failures must be cancelled"
+
+/-- One function, whose failure stops the workflow. --/
+def singleStopText : String :=
+  "{\"main\": \"w\", \"functions\": [{\"id\": \"f\", \"output\": {\"single\": \"T\"}}], \"workflows\": [" ++
+  "{\"id\": \"w\", \"placements\": [{\"name\": \"only\", \"node\": {\"type\": \"function\", " ++
+  "\"function\": \"f\"}, \"policy\": \"stop\"}]}]}"
+
+/-- An exploration without cancellation does not cancel after a stop either, though the caller may. --/
+def walkWithoutCancel : IO Unit := do
+  let p ← decoded "single stop" singleStopText
+  accepted "single stop" p
+  let call := Key.invocation [] "only" none
+  let (final, ops) := Explore.walk p { cancel := false, disruption := 1 } 1 20
+  ensure (ops == [.start none, .invoke [] "only" none, .failed call, .conclude] && final.status == .failed &&
+    !final.cancelled) s!"single stop without cancellation: {repr ops}"
+  let stopped ← [Op.start none, .invoke [] "only" none, .failed call].foldlM (init := {}) fun s op =>
+    IO.ofExcept (step p s op)
+  ensure (stopped.status == .stopping && (Explore.candidates p {} stopped).contains .cancel &&
+    !(Explore.candidates p { cancel := false } stopped).contains .cancel) "single stop: cancellation after the stop"
 
 /-- A concurrency task and a placement whose bodies are sub-workflows, each running one call. --/
 def stoppedText : String :=
@@ -153,6 +174,7 @@ def run : IO Unit := do
   for (label, p) in [("users", users), ("branch", branch), ("merge", merge)] do
     randomWalks label p {} 200
     randomWalks s!"{label} without failures" p { failures := false, cancel := false } 50
+    randomWalks s!"{label} without cancellation" p { cancel := false } 50
 
   -- §8.5: each user gets one list from the profile sub-workflow and the orders call.
   let s := drive users (succeed 2 fun _ _ => "")
@@ -191,6 +213,7 @@ def run : IO Unit := do
   ensure ((s.invocationsOf [] "notify").length == 1) "merge: discard runs its target once"
 
   stoppedSubworkflows
+  walkWithoutCancel
 
   -- An identity is the run path followed by the record's label; the run a record owns is at the
   -- record's identity read as a path. The Go port pins the same values (identity_test.go).

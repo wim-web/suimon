@@ -88,7 +88,7 @@ def candidates (p : Definition) (cfg : Config) (s : State) : List Op :=
       s.calls.flatMap (callCandidates p cfg s) ++
       (s.executions.filter (!·.complete)).flatMap (taskCandidates p cfg s)
   | .stopping =>
-    .conclude :: (if s.cancelled then [] else [.cancel]) ++
+    .conclude :: (if cfg.cancel && !s.cancelled then [.cancel] else []) ++
       (s.calls.filter (·.status == .cancelling)).flatMap fun c => [.terminated c.id, .lost c.id]
   | _ => []
 

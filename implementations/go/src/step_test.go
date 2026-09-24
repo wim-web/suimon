@@ -233,6 +233,9 @@ func randomWalks(t *testing.T, label string, p *Definition, cfg Config, seeds in
 				break
 			}
 			checkTransition(t, p, fmt.Sprintf("%s seed %d", label, seed), s, choice.Next, choice.Op)
+			if _, ok := choice.Op.(OpCancel); ok && !cfg.Cancel {
+				t.Fatalf("%s seed %d: cancelled by a walk without cancellation", label, seed)
+			}
 			s = choice.Next
 			steps++
 		}
@@ -259,6 +262,9 @@ func TestRandomWalks(t *testing.T) {
 		cfg := DefaultConfig()
 		cfg.Failures, cfg.Cancel = false, false
 		randomWalks(t, name+" without failures", p, cfg, 50)
+		cfg = DefaultConfig()
+		cfg.Cancel = false
+		randomWalks(t, name+" without cancellation", p, cfg, 50)
 	}
 }
 
@@ -351,6 +357,45 @@ func TestMergeScenario(t *testing.T) {
 	expectStatus(t, "merge", s, StatusSucceeded)
 	if len(s.invocationsOf(nil, "notify")) != 1 {
 		t.Error("merge: discard runs its target once")
+	}
+}
+
+// singleStopText is one function, whose failure stops the workflow (Test/Step.lean).
+const singleStopText = `{"main": "w", "functions": [{"id": "f", "output": {"single": "T"}}], "workflows": [
+  {"id": "w", "placements": [{"name": "only", "node": {"type": "function", "function": "f"}, "policy": "stop"}]}]}`
+
+// An exploration without cancellation does not cancel after a stop either, though the caller may
+// (Test/Step.lean).
+func TestWalkWithoutCancel(t *testing.T) {
+	p, err := ParseDefinition([]byte(singleStopText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	call := keyInvocation(Path{}, "only", nil)
+	cfg := DefaultConfig()
+	cfg.Cancel, cfg.Disruption = false, 1
+	final, ops := Walk(p, cfg, 1, 20)
+	var got []string
+	for _, op := range ops {
+		got = append(got, EncodeOp(op))
+	}
+	want := []string{EncodeOp(OpStart{}), EncodeOp(OpInvoke{Run: Path{}, Placement: "only"}), EncodeOp(OpFailed{call}),
+		EncodeOp(OpConclude{})}
+	if !slices.Equal(got, want) || final.Status != StatusFailed || final.Cancelled {
+		t.Errorf("without cancellation: %v, %v", got, final.Status)
+	}
+	s := &State{}
+	for _, op := range []Op{OpStart{}, OpInvoke{Run: Path{}, Placement: "only"}, OpFailed{call}} {
+		s = mustStep(t, p, s, op)
+	}
+	offers := func(cfg Config) bool {
+		return slices.ContainsFunc(Candidates(p, cfg, s), func(op Op) bool { _, ok := op.(OpCancel); return ok })
+	}
+	if s.Status != StatusStopping || !offers(DefaultConfig()) || offers(cfg) {
+		t.Errorf("cancellation after the stop: %v", s.Status)
 	}
 }
 

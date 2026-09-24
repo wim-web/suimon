@@ -221,7 +221,7 @@ func candidatesWith(p *Definition, d *derivation, cfg Config, s *State) []Op {
 		return ops
 	case StatusStopping:
 		ops := []Op{OpConclude{}}
-		if !s.Cancelled {
+		if cfg.Cancel && !s.Cancelled {
 			ops = append(ops, OpCancel{})
 		}
 		for _, c := range s.Calls {
