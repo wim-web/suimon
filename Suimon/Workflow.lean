@@ -116,4 +116,14 @@ def isEntry (w : Workflow) (name : String) : Bool := w.input.any (·.placement =
 def isEndpoint (w : Workflow) (name : String) : Bool := (w.outgoing name).isEmpty
 end Workflow
 
+def Body.workflowRef : Body → Option String
+  | .workflow id _ => some id
+  | .function _ => none
+
+/-- The workflows a placement calls, as its body or as the bodies of its tasks. --/
+def Control.workflowRefs : Control → List String
+  | .call body => body.workflowRef.toList
+  | .concurrency c => c.tasks.filterMap (·.body.workflowRef)
+  | _ => []
+
 end Suimon

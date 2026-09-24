@@ -25,15 +25,6 @@ def need (value : Option α) (message : String) : Except String α :=
 end Validate
 open Validate
 
-def Body.workflowRef : Body → Option String
-  | .workflow id _ => some id
-  | .function _ => none
-
-def Control.workflowRefs : Control → List String
-  | .call body => body.workflowRef.toList
-  | .concurrency c => c.tasks.filterMap (·.body.workflowRef)
-  | _ => []
-
 /-- A workflow may not call itself, directly or through other workflows (§13.1). --/
 def Definition.callsAcyclic (p : Definition) : Bool :=
   let edges := p.workflows.flatMap fun w =>
@@ -196,7 +187,8 @@ def validateTransform (t : TransformDecl) : Except String Unit := do
   validateTypes s!"transform {t.id}" [t.input, t.output]
 
 /-- Structural checks of §14, and what the definition file can express: identifiers and type names
-    are not empty, and numbers are at most `maxNat`. `run` executes only definitions accepted here. --/
+    are not empty, and numbers are at most `maxNat`. `run` executes only definitions accepted here,
+    which satisfy `Definition.Normal` (`Definition.normal_of_validate`). --/
 def validate (p : Definition) : Except String Unit := do
   check (unique (p.functions.map (·.id))) "duplicate function id"
   check (unique (p.judges.map (·.id))) "duplicate judge id"
@@ -212,7 +204,5 @@ def validate (p : Definition) : Except String Unit := do
   for w in p.workflows do p.validateWorkflow w
 
 end Definition
-
-def Definition.WellFormed (p : Definition) : Prop := p.validate = .ok ()
 
 end Suimon
