@@ -8,16 +8,15 @@ body { margin: 0; background: #1d1d21; font-family: Inter, -apple-system, BlinkM
 @keyframes app-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .app-spin { animation: none; } }
 
-.app-scenarios { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.app-scenarios button { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--sui-text-secondary); font-size: 12px; text-align: left; cursor: pointer; }
-.app-scenarios button:hover { background: var(--sui-hover); }
-.app-scenarios button[aria-current] { background: var(--sui-selected); border-color: var(--sui-border-strong); color: var(--sui-text); }
-.app-description { margin: 12px 0 0; color: var(--sui-text-secondary); font-size: 11px; line-height: 1.7; }
-.app-input { display: block; width: 100%; min-height: 84px; margin-top: 8px; padding: 9px; resize: vertical; background: var(--sui-sunken); color: var(--sui-text); border: 1px solid var(--sui-border); border-radius: 5px; font: 11px/1.6 ui-monospace, monospace; }
+.app-select { max-width: 100%; padding: 6px 8px; background: var(--sui-raised); color: var(--sui-text); border: 1px solid var(--sui-border); border-radius: 5px; font-size: 11px; }
+.sui-toolbar .app-select { max-width: 170px; }
+.app-side .sui-sidebar-group > :first-child { margin-left: 0; }
+.app-description { margin: 0 16px 4px; color: var(--sui-text-secondary); font-size: 11px; line-height: 1.7; }
+.app-input { display: block; width: calc(100% - 32px); min-height: 84px; margin: 0 16px 4px; padding: 9px; resize: vertical; background: var(--sui-sunken); color: var(--sui-text); border: 1px solid var(--sui-border); border-radius: 5px; font: 11px/1.6 ui-monospace, monospace; }
 .app-input:focus { outline: 1px solid var(--sui-focus); }
-.app-output { margin-top: 8px; font-size: 11px; color: var(--sui-text-secondary); }
+.app-output { margin: 0 16px 8px; font-size: 11px; color: var(--sui-text-secondary); }
 .app-output pre { margin: 4px 0 0; padding: 8px; max-height: 180px; overflow: auto; background: var(--sui-sunken); border-radius: 5px; color: var(--sui-success); font: 11px/1.5 ui-monospace, monospace; }
-.app-failure { margin: 8px 0 0; color: var(--sui-danger); font-size: 11px; overflow-wrap: anywhere; }
+.app-failure { margin: 0 16px 8px; color: var(--sui-danger); font-size: 11px; overflow-wrap: anywhere; }
 
 .app-timeline { flex-shrink: 0; max-height: 38vh; overflow-y: auto; padding: 10px 20px 8px; background: var(--sui-panel); border-bottom: 1px solid var(--sui-border); font-size: 11px; color: var(--sui-text-secondary); }
 .app-lane + .app-lane { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--sui-border); }
@@ -37,4 +36,5 @@ body { margin: 0; background: #1d1d21; font-family: Inter, -apple-system, BlinkM
 .app-axis { margin-top: 4px; }
 .app-axis .app-track { height: 14px; border-top: 1px solid var(--sui-border); }
 .app-axis .app-track span { position: absolute; top: 1px; transform: translateX(-50%); color: var(--sui-muted); font: 10px ui-monospace, monospace; }
-@media (max-width: 640px) { .app-row { grid-template-columns: 70px 1fr; } .app-lane-header strong { min-width: 0; } }
+/* On a phone the scenario select names the scenario in place of the title. */
+@media (max-width: 640px) { .app-row { grid-template-columns: 70px 1fr; } .app-lane-header strong { min-width: 0; } .sui-toolbar .sui-workflow-title { display: none; } .sui-toolbar .app-select { max-width: 110px; } }

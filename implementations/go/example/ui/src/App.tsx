@@ -14,24 +14,45 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 
 export function App() {
   const [scenarios, setScenarios] = useState<Scenario[] | null>(null);
-  const [selected, setSelected] = useState('');
-  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadScenarios(controller.signal).then(list => {
+      if (!list.length) throw new Error('The server has no scenarios.');
+      setScenarios(list);
+    }).catch(e => { if (!controller.signal.aborted) setError(message(e)); });
+    return () => controller.abort();
+  }, []);
+
+  if (!scenarios) {
+    return <div className="suimon-ui app-loading" data-theme="dark">{error ? <><strong>Could not load the scenarios</strong><p role="alert">{error}</p><button onClick={() => location.reload()}>Reload</button></>
+      : <><LoaderCircle className="app-spin" size={22} /><span>Loading scenarios…</span></>}</div>;
+  }
+  return <Playground scenarios={scenarios} />;
+}
+
+/** The playground for the scenarios of the server, of which there is at least one. */
+export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
+  const [selected, setSelected] = useState(scenarios[0]!.id);
+  const [inputs, setInputs] = useState<Record<string, string>>(() => Object.fromEntries(scenarios.map(s => [s.id, s.input === undefined ? '' : JSON.stringify(s.input, null, 2)])));
   /** The latest run of each scenario. */
   const [runs, setRuns] = useState<Record<string, RunView>>({});
   const [reports, setReports] = useState<Record<string, Report>>({});
   const [error, setError] = useState('');
   const [timeline, setTimeline] = useState(true);
   const followers = useRef(new Map<string, () => void>());
+  // Choosing a scenario mounts the workbench again, and the select in its header with it.
+  const scenarioSelect = useRef<HTMLSelectElement>(null);
+  const refocus = useRef(false);
 
   useEffect(() => {
-    const controller = new AbortController();
-    loadScenarios(controller.signal).then(list => {
-      setScenarios(list); setSelected(list[0]?.id ?? '');
-      setInputs(Object.fromEntries(list.map(s => [s.id, s.input === undefined ? '' : JSON.stringify(s.input, null, 2)])));
-    }).catch(e => { if (!controller.signal.aborted) setError(message(e)); });
     const active = followers.current;
-    return () => { controller.abort(); for (const stop of active.values()) stop(); };
+    return () => { for (const stop of active.values()) stop(); };
   }, []);
+  useEffect(() => {
+    if (refocus.current) { refocus.current = false; scenarioSelect.current?.focus(); }
+  }, [selected]);
 
   const onProgress = useCallback((p: Progress) => {
     setRuns(previous => {
@@ -49,12 +70,11 @@ export function App() {
     }
   }, []);
 
-  const scenario = scenarios?.find(s => s.id === selected);
-  const current = scenario ? runs[scenario.id] : undefined;
+  const scenario = scenarios.find(s => s.id === selected) ?? scenarios[0]!;
+  const current = runs[scenario.id];
   const running = current !== undefined && !current.done;
 
   async function run() {
-    if (!scenario) return;
     setError('');
     let input: JsonValue | undefined;
     if (scenario.input !== undefined) {
@@ -65,11 +85,6 @@ export function App() {
       const id = await startRun(scenario.id, input);
       followers.current.set(id, followRun(id, onProgress, e => { followers.current.delete(id); setError(message(e)); }));
     } catch (e) { setError(message(e)); }
-  }
-
-  if (!scenarios || !scenario) {
-    return <div className="suimon-ui app-loading" data-theme="dark">{error ? <><strong>Could not load the scenarios</strong><p role="alert">{error}</p><button onClick={() => location.reload()}>Reload</button></>
-      : <><LoaderCircle className="app-spin" size={22} /><span>Loading scenarios…</span></>}</div>;
   }
 
   const compared = scenario.compare ? scenarios.filter(s => s.id === scenario.id || s.id === scenario.compare) : [scenario];
@@ -83,6 +98,10 @@ export function App() {
     title={scenario.title} subtitle="suimon Go runtime · playground"
     actions={<>
       <button className="sui-button" aria-pressed={timeline} onClick={() => setTimeline(!timeline)}><ChartGantt size={13} />Timeline</button>
+      <select ref={scenarioSelect} className="app-select" aria-label="Scenario" value={scenario.id}
+        onChange={event => { refocus.current = true; setSelected(event.target.value); }}>
+        {scenarios.map(s => <option key={s.id} value={s.id}>{s.title}</option>)}
+      </select>
       {running && <button className="sui-button" onClick={() => void cancelRun(current.id).catch(e => setError(message(e)))}><Square size={12} />Cancel</button>}
       <button className="sui-button sui-button-primary" onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="app-spin" size={14} /> : <Play size={13} fill="currentColor" />}{running ? 'Running…' : 'Run'}</button>
     </>}
@@ -92,13 +111,7 @@ export function App() {
     </>}
     sidebarContent={<div className="app-side">
       <section className="sui-sidebar-section">
-        <div className="sui-sidebar-group"><span>Scenarios</span><span className="sui-muted">{scenarios.length}</span></div>
-        <ul className="app-scenarios">{scenarios.map(s => {
-          const r = runs[s.id];
-          return <li key={s.id}><button aria-current={s.id === scenario.id ? 'true' : undefined} onClick={() => setSelected(s.id)}>
-            <span>{s.title}</span>{r && <span className="sui-muted">{r.done ? r.state.status : 'running'}</span>}
-          </button></li>;
-        })}</ul>
+        <div className="sui-sidebar-group"><span>Scenario</span></div>
         <p className="app-description">{scenario.description}</p>
       </section>
       {scenario.input !== undefined && <section className="sui-sidebar-section">
