@@ -24,10 +24,10 @@ export function firstStart(spans: readonly Span[], fn: string): number | null {
   return starts.length ? Math.min(...starts) : null;
 }
 
-/** When the last span ended, or null while one is running. */
-export function lastEnd(spans: readonly Span[]): number | null {
-  if (!spans.length || spans.some(s => s.endMs === null)) return null;
-  return Math.max(...spans.map(s => s.endMs!));
+/** When the first call of the function returned a result, if one did: a call that failed or was cancelled has none. */
+export function firstResult(spans: readonly Span[], fn: string): number | null {
+  const ends = spans.flatMap(s => s.function === fn && s.outcome === 'ok' && s.endMs !== null ? [s.endMs] : []);
+  return ends.length ? Math.min(...ends) : null;
 }
 
 /** Tick positions for an axis of `max` milliseconds: a round step of at least 1ms giving about `count` ticks. */

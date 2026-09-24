@@ -7,7 +7,7 @@ import type { Progress, Report, RunView, Scenario } from './api';
 import { latestRun, runKey, timelineLanes, shownUnit } from './lanes';
 import { Timeline } from './Timeline';
 
-/** The function whose start times the stream and batch scenarios compare. */
+/** The downstream function of the stream and batch scenarios: the timeline compares when its first call starts and when its first result appears. */
 const downstream = 'process';
 
 /** The choices of one unit of simulated I/O for a run, in milliseconds. */

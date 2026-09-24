@@ -1,7 +1,7 @@
 import type { Span } from './api';
-import { firstStart, formatMs, lastEnd, packSpans, spanEnd, ticks } from './spans';
+import { firstResult, firstStart, formatMs, packSpans, spanEnd, ticks } from './spans';
 
-/** The spans of user code in one run, in milliseconds from its start. */
+/** The spans of user code in one run, in milliseconds from its start, and the time since its start, which stops at its end. */
 export interface TimelineRun { label: string; spans: Span[]; elapsedMs: number; done: boolean }
 /** A lane of a run, if there is one, whose unit of simulated I/O is `unitMs`. */
 export interface TimelineLane { key: string; label: string; unitMs: number; run: TimelineRun | null }
@@ -15,7 +15,8 @@ function colorOf(fn: string): string {
 
 /**
  * Lanes of runs on one time axis, so that runs of different scenarios can be compared; each lane
- * shows its unit. `highlight` names the function whose first start is marked in every lane.
+ * shows its unit and the total time of its run. `highlight` names the downstream function: each lane
+ * also shows when its first call started, marked across the lane, and when its first result appeared.
  */
 export function Timeline({ lanes, highlight }: { lanes: TimelineLane[]; highlight?: string }) {
   const extent = Math.max(100, ...lanes.map(l => l.run ? Math.max(l.run.elapsedMs, ...l.run.spans.map(s => spanEnd(s, l.run!.elapsedMs))) : 0));
@@ -27,11 +28,10 @@ export function Timeline({ lanes, highlight }: { lanes: TimelineLane[]; highligh
       const unit = <span>unit <b>{unitMs}ms</b></span>;
       if (!run) return <div key={key} className="app-lane"><div className="app-lane-header"><strong>{label}</strong>{unit}<span className="sui-muted">not run yet</span></div></div>;
       const first = highlight ? firstStart(run.spans, highlight) : null;
-      const end = run.done ? lastEnd(run.spans) : null;
       return <div key={key} className="app-lane">
         <div className="app-lane-header"><strong>{label}</strong>{unit}
-          {highlight && <span>first {highlight} at <b>{formatMs(first)}</b></span>}
-          <span>{run.done ? <>user code done at <b>{formatMs(end)}</b></> : <>running · {formatMs(run.elapsedMs)}</>}</span>
+          {highlight && <><span>first {highlight} at <b>{formatMs(first)}</b></span><span>first result at <b>{formatMs(firstResult(run.spans, highlight))}</b></span></>}
+          <span>{run.done ? <>total <b>{formatMs(run.elapsedMs)}</b></> : <>running · {formatMs(run.elapsedMs)}</>}</span>
         </div>
         <div className="app-lane-body">
           {packSpans(run.spans, run.elapsedMs).map(group => group.rows.map((row, i) => <div key={`${group.function}/${i}`} className="app-row">

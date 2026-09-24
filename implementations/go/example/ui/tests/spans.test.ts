@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { Span } from '../src/api';
-import { firstStart, formatMs, lastEnd, packSpans, ticks } from '../src/spans';
+import { firstResult, firstStart, formatMs, packSpans, ticks } from '../src/spans';
 
 const span = (fn: string, detail: string, startMs: number, endMs: number | null): Span => ({ function: fn, detail, startMs, endMs, marks: [], outcome: endMs === null ? 'running' : 'ok' });
 
@@ -17,12 +17,17 @@ it('draws a running span up to now', () => {
   expect(packSpans([span('lookup', 'stuck', 10, null), span('lookup', 'next', 40, 60)], 20)[0]!.rows).toHaveLength(1);
 });
 
-it('finds the first start of downstream work and the end of user code', () => {
-  const spans = [span('produceAll', '5 items', 0, 250), span('process', 'a', 251, 300), span('process', 'b', 250.5, 310)];
+it('finds the first start of downstream work and its first result', () => {
+  const spans = [span('produceAll', '5 items', 0, 250), span('process', 'a', 251, 300), span('process', 'b', 250.5, 310), span('process', 'c', 252, null)];
   expect(firstStart(spans, 'process')).toBe(250.5);
   expect(firstStart(spans, 'missing')).toBeNull();
-  expect(lastEnd(spans)).toBe(310);
-  expect(lastEnd([...spans, span('ship', 'x', 1, null)])).toBeNull();
+  // The first result is the first call to return, whichever started first.
+  expect(firstResult(spans, 'process')).toBe(300);
+  expect(firstResult(spans, 'missing')).toBeNull();
+  // A running call has no result yet, and a call that failed or was cancelled has none.
+  const unfinished: Span[] = [span('process', 'c', 252, null), { ...span('process', 'd', 251, 260), outcome: 'cancelled' }, { ...span('process', 'e', 251, 270), outcome: 'error' }];
+  expect(firstResult(unfinished, 'process')).toBeNull();
+  expect(firstResult([...unfinished, ...spans], 'process')).toBe(300);
 });
 
 it('chooses round ticks and formats durations', () => {
