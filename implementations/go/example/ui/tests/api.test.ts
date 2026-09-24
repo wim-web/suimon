@@ -23,8 +23,8 @@ it('accumulates the records of progress messages and rejects a gap', () => {
   const tail = parseProgress({ ...fixture, offset: 4, records: full.records.slice(4) });
   const view = applyProgress(applyProgress(null, head), tail);
   expect(view.lines).toEqual(full.records);
-  // The header holds the definition of the scenario; the records follow it.
-  expect(JSON.parse(full.records[0]!)).toEqual({ definition });
+  // The header holds the definition of the scenario, which the engine validated; the records follow it.
+  expect(JSON.parse(full.records[0]!)).toEqual({ definition, validated: true });
   expect(view.records.length).toBe(full.records.length - 1);
   expect(view.records[0]).toMatchObject({ seq: 1, op: { type: 'start' } });
   expect(view.done).toBe(true);

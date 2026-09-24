@@ -86,7 +86,7 @@ it('inspects those placements with their kind and status', () => {
 
 it('keeps a payload whose value identity is __proto__, from the record to the inspector', () => {
   const start = '{"seq":1,"op":{"type":"start","input":"__proto__"},"values":{"__proto__":"{\\"q\\":1}"}}';
-  const log = parseRecordLog([`{"definition":${definitionText}}`, start, '{"seq":2,"commit":true}', ''].join('\n'));
+  const log = parseRecordLog([`{"definition":${definitionText},"validated":true}`, start, '{"seq":2,"commit":true}', ''].join('\n'));
   expect(Object.entries((log.records[0] as OpRecord).values!)).toEqual([['__proto__', '{"q":1}']]);
   const transitions = recordTransitions(log.records), payloads = recordValues(transitions);
   expect(Object.entries(payloads)).toEqual([['__proto__', '{"q":1}']]);

@@ -131,7 +131,8 @@ export interface RuntimeState {
 }
 
 /* Execution records: schema/trace.schema.json. The first line is the header with the definition of the
-   execution; the op and commit records follow. Value fields hold value identities, which stay opaque. */
+   execution and whether the execution was started with validation of it; the op and commit records
+   follow. Value fields hold value identities, which stay opaque. */
 
 export type CallOp =
   | { type: 'fetch' | 'ended' | 'failed' | 'lost' | 'terminated'; call: string }
@@ -161,10 +162,12 @@ export interface CommitRecord { seq: number; commit: true }
 export type ExecutionRecord = OpRecord | CommitRecord;
 /**
  * The complete lines of a record, and the text after the last newline: the definition of the header,
- * which is null while there is no complete line, and the records after it. The tail is what a crash
- * leaves: it is never parsed and never committed, even when it would parse.
+ * which is null while there is no complete line; whether the header says that the execution was
+ * started with validation of the definition (run), or without it (runUnchecked), null as well while
+ * there is no complete line; and the records after it. The tail is what a crash leaves: it is never
+ * parsed and never committed, even when it would parse.
  */
-export interface RecordLog { definition: Definition | null; records: ExecutionRecord[]; tail: string }
+export interface RecordLog { definition: Definition | null; validated: boolean | null; records: ExecutionRecord[]; tail: string }
 /** One op record; only an op followed by its commit is an accepted transition. */
 export interface Transition { seq: number; op: Op; values: Record<string, string>; committed: boolean }
 

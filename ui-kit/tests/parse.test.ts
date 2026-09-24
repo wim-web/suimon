@@ -147,21 +147,37 @@ describe('parseRecords', () => {
     expect(parsed).toHaveLength(lines.length);
     expect(parsed[0]).toEqual({ seq: 1, op: { type: 'start', input: '5:value5:input' }, values: { '5:value5:input': '5:value5:input' } });
     expect(parsed[1]).toEqual({ seq: 2, commit: true });
-    expect(parseRecordLog(text)).toEqual({ definition: definition('users'), records: parsed, tail: '' });
+    expect(parseRecordLog(text)).toEqual({ definition: definition('users'), validated: true, records: parsed, tail: '' });
     expect(parseRecords([header, ...lines])).toEqual(parsed);
     expect(parseRecords([header, ...lines].map(line => JSON.parse(line)))).toEqual(parsed);
   });
 
-  it('reads the definition from the header, the first line only', () => {
-    expect(parseRecordLog(header + '\n')).toEqual({ definition: definition('users'), records: [], tail: '' });
+  it('reads the definition and the flag from the header, the first line only', () => {
+    expect(parseRecordLog(header + '\n')).toEqual({ definition: definition('users'), validated: true, records: [], tail: '' });
     // A crash inside the header leaves no complete line, and no definition yet.
-    expect(parseRecordLog(header.slice(0, 40))).toEqual({ definition: null, records: [], tail: header.slice(0, 40) });
+    expect(parseRecordLog(header.slice(0, 40))).toEqual({ definition: null, validated: null, records: [], tail: header.slice(0, 40) });
     expect(() => parseRecords(lines.slice(0, 2).join('\n') + '\n')).toThrow('line 1: expected the header with the definition');
     expect(() => parseRecords(lines.slice(0, 2))).toThrow('records[0]: expected the header with the definition');
-    expect(() => parseRecords('{"definition":{"main":"w","workflows":[]}}\n')).toThrow('line 1: definition.main: unknown workflow w');
+    expect(() => parseRecords('{"definition":{"main":"w","workflows":[]},"validated":true}\n')).toThrow('line 1: definition.main: unknown workflow w');
     expect(() => parseRecords('{"definition":{"main":"w"},"seq":1}\n')).toThrow('line 1: unknown field seq');
+    // The flag is required, and a boolean.
+    expect(() => parseRecords(header.replace(',"validated":true}', '}') + '\n')).toThrow('line 1: missing field validated');
+    expect(() => parseRecords(header.replace(',"validated":true}', ',"validated":"true"}') + '\n')).toThrow('line 1.validated: expected a boolean');
+    expect(() => parseRecords(header.replace(',"validated":true}', ',"validated":null}') + '\n')).toThrow('line 1.validated: expected a boolean');
     expect(() => parseRecords(withHeader([header]))).toThrow('line 2: the header must be the first line');
     expect(() => parseRecords(withHeader([lines[0]!, lines[1]!, header]))).toThrow('line 4: the header must be the first line');
+  });
+
+  it('reads the header of an execution started without validation, whose definition validation may reject', () => {
+    const unchecked = header.replace(',"validated":true}', ',"validated":false}');
+    expect(parseRecordLog([unchecked, ...lines])).toEqual({ definition: definition('users'), validated: false, records: parseRecords(text), tail: '' });
+    // A concurrency without a task in the output, which validation rejects.
+    const json = clone(definitionJson('users')) as Json;
+    for (const task of json.workflows[0].placements[1].node.tasks) delete task.outputTransform;
+    const log = parseRecordLog(JSON.stringify({ definition: json, validated: false }) + '\n' + lines.slice(0, 2).join('\n') + '\n');
+    expect(log.validated).toBe(false);
+    expect(log.definition?.workflows[0]!.placements[1]!.node).toMatchObject({ type: 'concurrency', tasks: [{ name: 'profile' }, { name: 'orders' }] });
+    expect(log.records).toHaveLength(2);
   });
 
   it('rejects a line in which an object repeats a key, the definition of the header included', () => {
@@ -192,8 +208,8 @@ describe('parseRecords', () => {
     expect(log.records.at(-1)).toMatchObject({ seq: 79, op: { type: 'taskOutput' } });
     expect(log.tail).toBe('{"seq":80,"commit":true}');
     expect(parseRecords(withHeader(lines.slice(0, 4)) + lines[4]!.slice(0, 20))).toHaveLength(4);
-    expect(parseRecordLog([header, lines[0]!].join('\n'))).toEqual({ definition: definition('users'), records: [], tail: lines[0] });
-    expect(parseRecordLog('')).toEqual({ definition: null, records: [], tail: '' });
+    expect(parseRecordLog([header, lines[0]!].join('\n'))).toEqual({ definition: definition('users'), validated: true, records: [], tail: lines[0] });
+    expect(parseRecordLog('')).toEqual({ definition: null, validated: null, records: [], tail: '' });
     // An array holds complete lines; a host passes the tail it split off as an option.
     expect(parseRecordLog([header, ...lines.slice(0, 79)], { tail: lines[79] })).toEqual(log);
     expect(() => parseRecords([header.slice(0, 20)])).toThrow('records[0]: expected a JSON record');

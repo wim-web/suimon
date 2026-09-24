@@ -419,11 +419,15 @@ function payloads(value: unknown, at: string): Record<string, string> {
   for (const [id, payload] of Object.entries(o)) result[id] = string(payload, `${at}.${id}`);
   return result;
 }
-/** The header, the first line of a record: the definition of the execution, checked by parseDefinition. */
-function header(value: unknown, at: string): Definition {
+/**
+ * The header, the first line of a record: the definition of the execution, checked by parseDefinition,
+ * and whether the execution was started with validation of it.
+ */
+function header(value: unknown, at: string): { definition: Definition; validated: boolean } {
   if (!isObject(value) || !Object.hasOwn(value, 'definition')) fail(at, 'expected the header with the definition');
-  const o = object(value, at, ['definition']);
-  try { return parseDefinition(o.definition); } catch (error) { return fail(at, error instanceof Error ? error.message : String(error)); }
+  const o = object(value, at, ['definition', 'validated']);
+  const validated = bool(field(o, 'validated', at), `${at}.validated`);
+  try { return { definition: parseDefinition(o.definition), validated }; } catch (error) { return fail(at, error instanceof Error ? error.message : String(error)); }
 }
 function record(value: unknown, at: string): ExecutionRecord {
   const o = object(value, at);
@@ -452,8 +456,9 @@ export interface RecordOptions {
  * Checks execution record lines, as `suimon check` reads them, and keeps the torn tail apart.
  *
  * Text is split at newlines: the first complete line (followed by a newline) must be the header,
- * whose definition is checked with parseDefinition, each later complete line one record, and the
- * text after the last newline is the tail. A crash can leave a partial line there, even of the
+ * with its flag, whether the execution was started with validation, and a definition that is checked
+ * with parseDefinition whatever the flag; each later complete line is one record, and the text after
+ * the last newline is the tail. A crash can leave a partial line there, even of the
  * header; the tail is never committed, even when it parses, so it is returned as text and not read.
  * No object of a line may repeat a key, at any depth, the definition of the header included.
  *
@@ -478,9 +483,9 @@ export function parseRecordLog(value: unknown, options: RecordOptions = {}): Rec
     items = array(value, 'records').map((item, i) => ({ value: typeof item === 'string' ? line(item, `records[${i}]`) : item, at: `records[${i}]` }));
   }
   const records: ExecutionRecord[] = [];
-  let definition: Definition | null = null, pending = false;
+  let definition: Definition | null = null, validated: boolean | null = null, pending = false;
   for (const [i, item] of items.entries()) {
-    if (i === 0) { definition = header(item.value, item.at); continue; }
+    if (i === 0) { ({ definition, validated } = header(item.value, item.at)); continue; }
     const r = record(item.value, item.at);
     const expected = records.length + 1;
     if (r.seq !== expected) fail(item.at, `expected sequence ${expected}, got ${r.seq}`);
@@ -488,7 +493,7 @@ export function parseRecordLog(value: unknown, options: RecordOptions = {}): Rec
     else { if (pending) fail(item.at, 'an op before the previous commit'); pending = true; }
     records.push(r);
   }
-  return { definition, records, tail };
+  return { definition, validated, records, tail };
 }
 
 /** The records of `parseRecordLog`, without the header and the tail. */
