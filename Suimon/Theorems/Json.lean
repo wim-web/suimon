@@ -122,10 +122,10 @@ end Suimon.Codec
 The header of a record holds `definitionWire p`, and the loader `Codec.load` decodes its `Json` with
 `Codec.definition` and then validates it. The decoder reads fields by key and rejects what the definition
 file cannot express: an empty string or type name, a number above `maxNat`. `Definition.Expressible`
-states what it can express; every normal definition is expressible (`Definition.Normal.expressible`), and
-the canonical form of an expressible definition decodes back to it
-(`Codec.definition_definitionWire_of_expressible`), so it determines the definition
-(`Codec.definitionWire_inj_of_expressible`). -/
+states what it can express; every normal definition is expressible (`Definition.Normal.expressible`),
+and so is every definition the decoder reads (`Codec.expressible_of_definition`). The canonical form of
+an expressible definition decodes back to it (`Codec.definition_definitionWire_of_expressible`), so it
+determines the definition (`Codec.definitionWire_inj_of_expressible`). -/
 
 namespace Suimon
 
@@ -752,5 +752,285 @@ theorem definitionWire_inj_of_expressible {p q : Definition} (hp : p.Expressible
   have hdecode := definition_definitionWire_of_expressible hp
   rw [h, definition_definitionWire_of_expressible hq] at hdecode
   exact (Except.ok.inj hdecode).symm
+
+/-! ### What the decoder reads, the definition file can express
+
+The decoder rejects an empty string or type name and a number above `maxNat`, and reads the name
+`discard` as the library's transform, so every definition it reads is expressible
+(`expressible_of_definition`). The canonical form determines such a definition
+(`definitionWire_inj_of_expressible`). -/
+
+private theorem bind_eq_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {b : β} :
+    x >>= f = .ok b ↔ ∃ a, x = .ok a ∧ f a = .ok b := by
+  cases x <;> simp [bind, Except.bind]
+
+private theorem map_eq_ok {ε α β : Type} {x : Except ε α} {f : α → β} {b : β} :
+    f <$> x = .ok b ↔ ∃ a, x = .ok a ∧ f a = b := by
+  cases x <;> simp [Functor.map, Except.map]
+
+private theorem pure_eq_ok {ε α : Type} {a b : α} : (pure a : Except ε α) = .ok b ↔ a = b := by
+  simp [pure, Except.pure]
+
+private theorem throw_eq_ok {ε α : Type} {e : ε} {b : α} : (throw e : Except ε α) = .ok b ↔ False := by
+  simp [throw, throwThe, MonadExceptOf.throw]
+
+/-- Each item decoded from a list comes from an item of the list. --/
+theorem mem_of_mapM_ok {α β : Type} {f : α → Except String β} :
+    ∀ {xs : List α} {ys : List β}, xs.mapM f = .ok ys → ∀ y ∈ ys, ∃ x ∈ xs, f x = .ok y
+  | [], ys, h => by
+    simp only [List.mapM_nil, pure_eq_ok] at h
+    subst h
+    simp
+  | x :: xs, ys, h => by
+    simp only [List.mapM_cons, bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨y, hy, ys', hys', rfl⟩ := h
+    intro z hz
+    rcases List.mem_cons.1 hz with rfl | hz
+    · exact ⟨x, List.mem_cons_self, hy⟩
+    · obtain ⟨x', hx', hfx'⟩ := mem_of_mapM_ok hys' z hz
+      exact ⟨x', List.mem_cons_of_mem _ hx', hfx'⟩
+
+/-- The value decoded from an optional field comes from the field. --/
+theorem mem_of_option_mapM_ok {α β : Type} {f : α → Except String β} {o : Option α} {r : Option β}
+    (h : o.mapM f = .ok r) : ∀ y ∈ r, ∃ x ∈ o, f x = .ok y := by
+  intro y hy
+  cases o with
+  | none =>
+    simp only [Option.mapM_none, pure_eq_ok] at h
+    subst h
+    cases hy
+  | some x =>
+    simp only [Option.mapM_some, map_eq_ok] at h
+    obtain ⟨y', hy', rfl⟩ := h
+    cases hy
+    exact ⟨x, rfl, hy'⟩
+
+theorem text_ne {json : Json} {at_ s : String} (h : text json at_ = .ok s) : s ≠ "" := by
+  unfold text at h
+  split at h
+  · rename_i value
+    split at h
+    · simp [throw_eq_ok] at h
+    · rename_i hne
+      simp only [pure_eq_ok] at h
+      subst h
+      simpa using hne
+  · simp [throw_eq_ok] at h
+
+theorem textField_ne {json : Json} {key at_ s : String} (h : textField json key at_ = .ok s) : s ≠ "" := by
+  simp only [textField, bind_eq_ok] at h
+  obtain ⟨v, -, hv⟩ := h
+  exact text_ne hv
+
+theorem textField?_ne {json : Json} {key at_ : String} {s : Option String} (h : textField? json key at_ = .ok s) :
+    ∀ x ∈ s, x ≠ "" := by
+  intro x hx
+  obtain ⟨v, -, hv⟩ := mem_of_option_mapM_ok h x hx
+  exact text_ne hv
+
+theorem natField?_le {json : Json} {key at_ : String} {n : Option Nat} (h : natField? json key at_ = .ok n) :
+    ∀ x ∈ n, x ≤ maxNat := by
+  intro x hx
+  obtain ⟨v, -, hv⟩ := mem_of_option_mapM_ok h x hx
+  split at hv
+  · split at hv
+    · simp only [pure_eq_ok] at hv
+      subst hv
+      assumption
+    · simp [throw_eq_ok] at hv
+  · simp [throw_eq_ok] at hv
+
+theorem valueType_name (json : Json) {at_ : String} : ∀ {t : ValueType}, valueType json at_ = .ok t → t.name ≠ "" := by
+  induction json using valueType.induct with
+  | case1 name hempty =>
+    intro t h
+    rw [valueType.eq_1] at h
+    simp [hempty, throw_eq_ok] at h
+  | case2 name hne =>
+    intro t h
+    rw [valueType.eq_1] at h
+    simp only [hne, Bool.false_eq_true, ↓reduceIte, pure_eq_ok] at h
+    subst h
+    simpa [ValueType.name] using hne
+  | case3 fields ih =>
+    intro t h
+    rw [valueType.eq_2] at h
+    simp only [bind_eq_ok] at h
+    obtain ⟨-, -, h⟩ := h
+    split at h
+    · rename_i element helement
+      simp only [bind_eq_ok, pure_eq_ok] at h
+      obtain ⟨e, he, rfl⟩ := h
+      simpa [ValueType.name] using ih element helement (t := e) he
+    · simp [throw_eq_ok] at h
+  | case4 x hstr hobj =>
+    intro t h
+    rw [valueType.eq_def] at h
+    split at h
+    · rename_i name
+      exact absurd rfl (hstr name)
+    · rename_i fields
+      exact absurd rfl (hobj fields)
+    · simp [throw_eq_ok] at h
+
+theorem contract_name {json : Json} {at_ : String} {c : Contract} (h : contract json at_ = .ok c) :
+    c.element.name ≠ "" := by
+  simp only [contract, bind_eq_ok] at h
+  obtain ⟨-, -, h⟩ := h
+  split at h
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨t, ht, rfl⟩ := h
+    exact valueType_name _ ht
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨t, ht, rfl⟩ := h
+    exact valueType_name _ ht
+  · simp [throw_eq_ok] at h
+
+theorem timeout_expressible {json : Json} {at_ : String} {t : Timeout} (h : timeout json at_ = .ok t) :
+    t.Expressible := by
+  simp only [timeout] at h
+  split at h
+  · simp only [pure_eq_ok] at h
+    subst h
+    simp [Timeout.Expressible]
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, call, hcall, element, helement, rfl⟩ := h
+    intro ms hms
+    simp only [List.mem_append, Option.mem_toList] at hms
+    rcases hms with hms | hms
+    · exact natField?_le hcall ms hms
+    · exact natField?_le helement ms hms
+
+theorem body_expressible {json : Json} {at_ : String} {b : Body} (h : body json at_ = .ok b) : b.Expressible := by
+  simp only [body, bind_eq_ok] at h
+  obtain ⟨kind, -, h⟩ := h
+  split at h
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, id, hid, rfl⟩ := h
+    exact textField_ne hid
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, id, hid, output, houtput, rfl⟩ := h
+    exact ⟨textField_ne hid, textField_ne houtput⟩
+  · simp [throw_eq_ok] at h
+
+theorem transformRef_expressible {id : String} (h : id ≠ "") : (transformRef id).Expressible := by
+  unfold transformRef
+  split
+  · trivial
+  · rename_i hne
+    exact ⟨h, by simpa using hne⟩
+
+theorem task_expressible {json : Json} {at_ : String} {t : TaskSpec} (h : task json at_ = .ok t) :
+    t.Expressible := by
+  simp only [task, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, name, hname, bodyJson, -, b, hb, input, hinput, output, houtput, policyJson, -, policy, -,
+    timeout, htimeout, rfl⟩ := h
+  refine ⟨textField_ne hname, body_expressible hb, fun r hr => ?_, textField?_ne houtput, timeout_expressible htimeout⟩
+  cases input with
+  | none => cases hr
+  | some id =>
+    obtain rfl : r = transformRef id := (Option.some.inj hr).symm
+    exact transformRef_expressible (textField?_ne hinput id rfl)
+
+theorem control_expressible {json : Json} {at_ : String} {c : Control} (h : control json at_ = .ok c) :
+    c.Expressible := by
+  simp only [control, bind_eq_ok] at h
+  obtain ⟨kind, -, h⟩ := h
+  split at h
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨b, hb, rfl⟩ := h
+    exact body_expressible hb
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨b, hb, rfl⟩ := h
+    exact body_expressible hb
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, armsJson, -, arms, harms, judge, hjudge, rfl⟩ := h
+    refine ⟨textField_ne hjudge, fun arm harm => ?_⟩
+    obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok harms arm harm
+    exact text_ne hjson
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, elementJson, -, element, helement, rfl⟩ := h
+    exact valueType_name _ helement
+  · simp only [bind_eq_ok, pure_eq_ok] at h
+    obtain ⟨-, -, elementJson, -, element, helement, rfl⟩ := h
+    exact valueType_name _ helement
+  · simp only [bind_eq_ok] at h
+    obtain ⟨-, -, limit, hlimit, input, hinput, h⟩ := h
+    cases limit with
+    | none => simp [throw_eq_ok, bind_eq_ok] at h
+    | some n =>
+      simp only [bind_eq_ok, pure_eq_ok] at h
+      obtain ⟨_, rfl, tasksJson, -, tasks, htasks, outputJson, -, output, -, elementJson, -, element, helement,
+        rfl⟩ := h
+      refine ⟨fun t ht => ?_, natField?_le hlimit n rfl, fun t ht => ?_, valueType_name _ helement⟩
+      · obtain ⟨json, -, hjson⟩ := mem_of_option_mapM_ok hinput t ht
+        exact valueType_name _ hjson
+      · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok htasks t ht
+        exact task_expressible hjson
+  · simp [throw_eq_ok] at h
+
+theorem placement_expressible {json : Json} {at_ : String} {pl : Placement} (h : placement json at_ = .ok pl) :
+    pl.Expressible := by
+  simp only [placement, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, name, hname, nodeJson, -, control, hcontrol, policyJson, -, policy, -, timeout, htimeout, rfl⟩ := h
+  exact ⟨textField_ne hname, control_expressible hcontrol, timeout_expressible htimeout⟩
+
+theorem connection_expressible {json : Json} {at_ : String} {c : Connection} (h : connection json at_ = .ok c) :
+    c.Expressible := by
+  simp only [connection, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, source, hsource, arm, harm, target, htarget, transform, htransform, rfl⟩ := h
+  exact ⟨textField_ne hsource, textField?_ne harm, textField_ne htarget,
+    transformRef_expressible (textField_ne htransform)⟩
+
+theorem workflow_expressible {json : Json} {at_ : String} {w : Workflow} (h : workflow json at_ = .ok w) :
+    w.Expressible := by
+  simp only [workflow, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, id, hid, input, hinput, placementsJson, -, placements, hplacements, connectionsJson, -,
+    connections, hconnections, rfl⟩ := h
+  refine ⟨textField_ne hid, fun e he => ?_, fun pl hpl => ?_, fun c hc => ?_⟩
+  · obtain ⟨entry, -, hentry⟩ := mem_of_option_mapM_ok hinput e he
+    simp only [bind_eq_ok, pure_eq_ok] at hentry
+    obtain ⟨-, -, typeJson, -, type, htype, placement, hplacement, rfl⟩ := hentry
+    exact ⟨valueType_name _ htype, textField_ne hplacement⟩
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hplacements pl hpl
+    exact placement_expressible hjson
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hconnections c hc
+    exact connection_expressible hjson
+
+theorem functionDecl_expressible {json : Json} {at_ : String} {f : FunctionDecl}
+    (h : functionDecl json at_ = .ok f) :
+    f.id ≠ "" ∧ (∀ t ∈ f.input, t.name ≠ "") ∧ f.output.element.name ≠ "" := by
+  simp only [functionDecl, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, id, hid, input, hinput, outputJson, -, output, houtput, rfl⟩ := h
+  refine ⟨textField_ne hid, fun t ht => ?_, contract_name houtput⟩
+  obtain ⟨json, -, hjson⟩ := mem_of_option_mapM_ok hinput t ht
+  exact valueType_name _ hjson
+
+theorem judgeDecl_expressible {json : Json} {at_ : String} {j : JudgeDecl} (h : judgeDecl json at_ = .ok j) :
+    j.id ≠ "" ∧ j.input.name ≠ "" := by
+  simp only [judgeDecl, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, id, hid, inputJson, -, input, hinput, rfl⟩ := h
+  exact ⟨textField_ne hid, valueType_name _ hinput⟩
+
+theorem transformDecl_expressible {json : Json} {at_ : String} {t : TransformDecl}
+    (h : transformDecl json at_ = .ok t) : t.id ≠ "" ∧ t.input.name ≠ "" ∧ t.output.name ≠ "" := by
+  simp only [transformDecl, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, id, hid, inputJson, -, input, hinput, outputJson, -, output, houtput, rfl⟩ := h
+  exact ⟨textField_ne hid, valueType_name _ hinput, valueType_name _ houtput⟩
+
+/-- Every definition the decoder reads is one the definition file can express. --/
+theorem expressible_of_definition {json : Json} {p : Definition} (h : definition json = .ok p) : p.Expressible := by
+  simp only [definition, bind_eq_ok, pure_eq_ok] at h
+  obtain ⟨-, -, main, hmain, functionsJson, -, functions, hfunctions, judgesJson, -, judges, hjudges,
+    transformsJson, -, transforms, htransforms, workflowsJson, -, workflows, hworkflows, rfl⟩ := h
+  refine ⟨textField_ne hmain, fun f hf => ?_, fun j hj => ?_, fun t ht => ?_, fun w hw => ?_⟩
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hfunctions f hf
+    exact functionDecl_expressible hjson
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hjudges j hj
+    exact judgeDecl_expressible hjson
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok htransforms t ht
+    exact transformDecl_expressible hjson
+  · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hworkflows w hw
+    exact workflow_expressible hjson
 
 end Suimon.Codec
