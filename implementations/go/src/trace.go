@@ -502,7 +502,9 @@ func readHeader(line string, load func(definition []byte) (*Definition, error)) 
 }
 
 // sameDefinition is a load function for Check that accepts only a record of p: the definition of the
-// header must read back to the canonical form of p, and the record replays against p itself.
+// header must read back to the canonical form of p, and the record replays against p itself. Lean's
+// Trace.resume replays against the definition of the header, which is p itself when p is valid
+// (resume_eq_ok_of_validate), so the two replay alike.
 func sameDefinition(p *Definition) func(definition []byte) (*Definition, error) {
 	canonical := definitionWire(p).render()
 	return func(definition []byte) (*Definition, error) {

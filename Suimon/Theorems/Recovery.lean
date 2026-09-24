@@ -5,7 +5,11 @@ import Suimon.Theorems.Normal
     theorems of `Theorems/Trace.lean` for the text codec `Trace.wireCodec` and the loader
     `Codec.load` that the CLI uses, with no hypothesis on the loader, for every definition `p` that
     validation accepts. A recorder of `p` writes the header `Codec.definitionWire p`, which repeats no
-    key (`Codec.definitionWire_distinctKeys`) and loads as `p` (`Codec.load_definitionWire`). -/
+    key (`Codec.definitionWire_distinctKeys`) and loads as `p` (`Codec.load_definitionWire`).
+
+    Resuming compares the canonical forms of the recorded and the resuming definition. For a valid
+    `p` the header then holds `p` itself (`resume_eq_ok_of_validate`), so `Trace.resume`, which
+    replays against the definition of the header, replays against `p`, as Go's `Resume` does. -/
 
 namespace Suimon.Trace
 
@@ -132,5 +136,35 @@ theorem resume_prefix_of_validate (hp : p.validate = .ok ()) (h : record p {} st
   · obtain ⟨u, hu, hresume⟩ := resume_torn_of_validate hp h hk htail
     have hlen := record_length h
     exact Or.inr ⟨k / 2, by omega, u, hu, hresume⟩
+
+/-- The definition that `resume` replays a record against, the one its header holds, is the resuming
+    definition itself when that one is valid. --/
+theorem agreeing_load_eq_ok (hp : p.validate = .ok ()) {w : Wire} {q : Definition}
+    (h : agreeing Codec.load p w = .ok q) : q = p := by
+  obtain ⟨hq, hw⟩ := agreeing_eq_ok.1 h
+  exact Codec.load_eq_of_definitionWire hp hq hw
+
+/-- A valid definition `p` resumes a record exactly when the record checks with the loader of the CLI
+    and its header holds `p` itself, not only a definition of the same canonical form; it resumes from
+    the checked state. Replaying against the definition of the header is then replaying against `p`,
+    as Go's `Resume` does. --/
+theorem resume_eq_ok_of_validate (hp : p.validate = .ok ()) {text : String} {s : State} :
+    resume wireCodec Codec.load p text = .ok s ↔
+      ∃ checked, check wireCodec Codec.load text = .ok checked ∧ checked.definition = some p ∧
+        checked.state = s := by
+  rw [resume_eq_ok]
+  constructor
+  · rintro ⟨checked, q, hcheck, hq, hw, rfl⟩
+    obtain ⟨w, hload⟩ := check_definition hcheck hq
+    obtain rfl := Codec.load_eq_of_definitionWire hp hload hw
+    exact ⟨checked, hcheck, hq, rfl⟩
+  · rintro ⟨checked, hcheck, hq, rfl⟩
+    exact ⟨checked, p, hcheck, hq, rfl, rfl⟩
+
+/-- Canonical forms of valid definitions that render alike, as `resume` compares them, belong to the
+    same definition. --/
+theorem eq_of_render (hp : p.validate = .ok ()) {q : Definition} (hq : q.validate = .ok ())
+    (h : (Codec.definitionWire q).render = (Codec.definitionWire p).render) : q = p :=
+  (Codec.definitionWire_inj hq hp).1 (definitionWire_eq_of_render h)
 
 end Suimon.Trace

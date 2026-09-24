@@ -351,7 +351,8 @@ def recover (c : Codec) (load : Wire → Except String Definition) (text : Strin
 /-! ## Resumption -/
 
 /-- Reads the definition of a header with `load`, and accepts it only when it has the canonical form
-    of `p` (`Codec.definitionWire`). --/
+    of `p` (`Codec.definitionWire`). With the loader of the CLI and a valid `p`, the definition it
+    accepts is `p` itself (`agreeing_load_eq_ok`). --/
 def agreeing (load : Wire → Except String Definition) (p : Definition) (w : Wire) :
     Except String Definition := do
   let q ← load w
@@ -362,7 +363,9 @@ def agreeing (load : Wire → Except String Definition) (p : Definition) (w : Wi
 /-- The state from which the definition `p` resumes a crashed run (§12.1): only a record whose header
     holds a definition with the canonical form of `p` resumes, from the state `recover` gives, and a
     record without a complete header does not. The implementations of user processes are not part
-    of the definition, so they are not compared (§14). --/
+    of the definition, so they are not compared (§14). The record replays against the definition of
+    its header, which is `p` itself when `p` is valid (`resume_eq_ok_of_validate`); Go's `Resume`
+    replays against the engine's definition. --/
 def resume (c : Codec) (load : Wire → Except String Definition) (p : Definition) (text : String) :
     Except String State := do
   let checked ← check c (agreeing load p) text
