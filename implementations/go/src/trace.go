@@ -652,7 +652,7 @@ func Check(text string, load func(definition []byte) (*Definition, error)) (Chec
 	if err != nil {
 		return Checked{}, fmt.Errorf("line 1: %w", err)
 	}
-	r := &replay{machine: newMachine(p, &State{}), known: map[string]bool{}, next: 1}
+	r := &replay{machine: newMachine(p, p.derive(), &State{}), known: map[string]bool{}, next: 1}
 	offset := len(complete[0]) + 1
 	length := offset
 	for index, line := range complete[1:] {
@@ -875,9 +875,9 @@ type ownedRecorder struct {
 }
 
 // newOwnedRecorder continues recording after committed transitions that led to s, with the
-// payloads of values; it takes s over.
-func newOwnedRecorder(p *Definition, s *State, values []Payload, committed int) *ownedRecorder {
-	r := &ownedRecorder{machine: newMachine(p, s), known: map[string]bool{}, seq: 2*committed + 1}
+// payloads of values; it takes s over. d is a derivation of p.
+func newOwnedRecorder(p *Definition, d *derivation, s *State, values []Payload, committed int) *ownedRecorder {
+	r := &ownedRecorder{machine: newMachine(p, d, s), known: map[string]bool{}, seq: 2*committed + 1}
 	for _, v := range values {
 		r.known[v.Value] = true
 	}

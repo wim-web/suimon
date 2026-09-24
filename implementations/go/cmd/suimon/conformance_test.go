@@ -322,6 +322,62 @@ func callMsDefinition(callMs string) string {
 		`{"name":"a","policy":"stop","timeout":{"callMs":` + callMs + `},"node":{"type":"function","function":"f"}}]}]}`
 }
 
+// mergeChainDefinition is a function followed by n Merges, each with two connections from the one
+// before; diamondsDefinition is a function followed by n diamonds, two calls after the end of the
+// previous diamond whose results a Merge collects. Lean's Workflow.kind? derives their kinds in time
+// exponential in n, which compiled code avoids (Workflow.kindFast).
+func mergeChainDefinition(t *testing.T, n int) string {
+	t.Helper()
+	placements := []any{doc{"name": "p0", "node": doc{"type": "function", "function": "f"}, "policy": "stop"}}
+	var connections []any
+	for i := 1; i <= n; i++ {
+		transforms := []string{"l1", "l2"}
+		if i == 1 {
+			transforms = []string{"t1", "t2"}
+		}
+		placements = append(placements, doc{"name": fmt.Sprintf("p%d", i), "node": doc{"type": "merge", "element": "T"}, "policy": "stop"})
+		for _, transform := range transforms {
+			connections = append(connections, doc{"source": fmt.Sprintf("p%d", i-1), "target": fmt.Sprintf("p%d", i), "transform": transform})
+		}
+	}
+	return chainDefinition(t, doc{"main": "w", "functions": []any{doc{"id": "f", "output": doc{"single": "T"}}},
+		"transforms": []any{doc{"id": "t1", "input": "T", "output": "T"}, doc{"id": "t2", "input": "T", "output": "T"},
+			doc{"id": "l1", "input": doc{"list": "T"}, "output": "T"}, doc{"id": "l2", "input": doc{"list": "T"}, "output": "T"}},
+		"workflows": []any{doc{"id": "w", "placements": placements, "connections": connections}}})
+}
+
+func diamondsDefinition(t *testing.T, n int) string {
+	t.Helper()
+	placements := []any{doc{"name": "s0", "node": doc{"type": "function", "function": "f"}, "policy": "stop"}}
+	var connections []any
+	for i := 1; i <= n; i++ {
+		into := "l"
+		if i == 1 {
+			into = "t"
+		}
+		for _, side := range []string{"b", "c"} {
+			name := fmt.Sprintf("%s%d", side, i)
+			placements = append(placements, doc{"name": name, "node": doc{"type": "function", "function": "g"}, "policy": "stop"})
+			connections = append(connections, doc{"source": fmt.Sprintf("s%d", i-1), "target": name, "transform": into},
+				doc{"source": name, "target": fmt.Sprintf("s%d", i), "transform": "t"})
+		}
+		placements = append(placements, doc{"name": fmt.Sprintf("s%d", i), "node": doc{"type": "merge", "element": "T"}, "policy": "stop"})
+	}
+	return chainDefinition(t, doc{"main": "w",
+		"functions":  []any{doc{"id": "f", "output": doc{"single": "T"}}, doc{"id": "g", "input": "T", "output": doc{"single": "T"}}},
+		"transforms": []any{doc{"id": "t", "input": "T", "output": "T"}, doc{"id": "l", "input": doc{"list": "T"}, "output": "T"}},
+		"workflows":  []any{doc{"id": "w", "placements": placements, "connections": connections}}})
+}
+
+func chainDefinition(t *testing.T, d doc) string {
+	t.Helper()
+	data, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestConformanceValidate(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
@@ -355,6 +411,16 @@ func TestConformanceValidate(t *testing.T) {
 		}
 		check(label, path)
 	}
+	for label, text := range map[string]string{"merge chain 20": mergeChainDefinition(t, 20),
+		"merge chain 40": mergeChainDefinition(t, 40), "30 diamonds": diamondsDefinition(t, 30)} {
+		path := filepath.Join(dir, strings.ReplaceAll(label, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if lean := check(label, path); lean.code != 0 {
+			t.Errorf("%s: rejected: %s", label, lean.stderr)
+		}
+	}
 	nonUTF8 := filepath.Join(dir, "latin1.json")
 	if err := os.WriteFile(nonUTF8, []byte("{\"main\":\"\xe9\"}"), 0o644); err != nil {
 		t.Fatal(err)
@@ -385,6 +451,18 @@ func TestConformanceExplore(t *testing.T) {
 		for _, args := range [][]string{{"--seeds", "200"}, {"--seeds", "20", "--steps", "40"}, {"--seeds", "5", "--steps", "3"}} {
 			args = append([]string{"explore", path}, args...)
 			sameResult(t, fmt.Sprint(baseName(path), args[2:]), runLean(t, cli, args...), runGo(args...))
+		}
+	}
+	// Every settle derives kinds, which the Go engine derives once per workflow.
+	dir := t.TempDir()
+	for label, text := range map[string]string{"merge chain 20": mergeChainDefinition(t, 20), "10 diamonds": diamondsDefinition(t, 10)} {
+		path := filepath.Join(dir, strings.ReplaceAll(label, " ", "-")+".json")
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"--seeds", "20"}, {"--seeds", "20", "--steps", "40"}} {
+			args = append([]string{"explore", path}, args...)
+			sameResult(t, fmt.Sprint(label, args[2:]), runLean(t, cli, args...), runGo(args...))
 		}
 	}
 }

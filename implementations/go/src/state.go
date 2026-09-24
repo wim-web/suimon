@@ -362,7 +362,8 @@ type shape struct {
 	merged []indexedConnection
 }
 
-func (w *Workflow) shape(p *Definition, name string) (shape, bool) {
+// shape is Lean's shape? of a placement of w, whose kinds are k.
+func (w *Workflow) shape(k kindTable, name string) (shape, bool) {
 	pl, ok := w.placement(name)
 	if !ok {
 		return shape{}, false
@@ -378,12 +379,12 @@ func (w *Workflow) shape(p *Definition, name string) (shape, bool) {
 	case 0:
 		return shape{kind: shapeNone}, true
 	case 1:
-		k, ok := w.outputKind(p, inputs[0].connection.Source)
+		source, ok := k.outputKind(inputs[0].connection.Source)
 		if !ok {
 			return shape{}, false
 		}
 		kind := shapeSingle
-		if k == KindStream {
+		if source == KindStream {
 			kind = shapeStream
 		}
 		return shape{kind: kind, index: inputs[0].index, connection: inputs[0].connection}, true

@@ -112,6 +112,52 @@ def standalone (input : Option TransformRef) : Definition := {
           output := some "config"
           policy := .stop }] } }] }] }
 
+/-- A function followed by `n` Merges, each with two connections from the one before: `kind?` derives
+    the kind of each placement twice for each Merge after it. --/
+def mergeChain (n : Nat) : Definition := {
+  main := "w"
+  functions := [{ id := "f", output := .single (.named "T") }]
+  transforms := [
+    { id := "t1", input := .named "T", output := .named "T" },
+    { id := "t2", input := .named "T", output := .named "T" },
+    { id := "l1", input := .list (.named "T"), output := .named "T" },
+    { id := "l2", input := .list (.named "T"), output := .named "T" }]
+  workflows := [{
+    id := "w"
+    placements := { name := "p0", control := .call (.function "f"), policy := .stop } ::
+      (List.range n).map fun i => { name := s!"p{i + 1}", control := .merge (.named "T"), policy := .stop }
+    connections := (List.range n).flatMap fun i =>
+      (if i == 0 then ["t1", "t2"] else ["l1", "l2"]).map fun transform =>
+        { source := s!"p{i}", target := s!"p{i + 1}", transform := .declared transform } }] }
+
+/-- A function followed by `n` diamonds: two calls after the end of the previous diamond, whose results
+    a Merge collects. --/
+def diamonds (n : Nat) : Definition := {
+  main := "w"
+  functions := [{ id := "f", output := .single (.named "T") },
+    { id := "g", input := some (.named "T"), output := .single (.named "T") }]
+  transforms := [{ id := "t", input := .named "T", output := .named "T" },
+    { id := "l", input := .list (.named "T"), output := .named "T" }]
+  workflows := [{
+    id := "w"
+    placements := { name := "s0", control := .call (.function "f"), policy := .stop } ::
+      (List.range n).flatMap fun i =>
+        [{ name := s!"b{i + 1}", control := .call (.function "g"), policy := .stop },
+         { name := s!"c{i + 1}", control := .call (.function "g"), policy := .stop },
+         { name := s!"s{i + 1}", control := .merge (.named "T"), policy := .stop }]
+    connections := (List.range n).flatMap fun i =>
+      ["b", "c"].flatMap fun side =>
+        [{ source := s!"s{i}", target := s!"{side}{i + 1}", transform := .declared (if i == 0 then "t" else "l") },
+         { source := s!"{side}{i + 1}", target := s!"s{i + 1}", transform := .declared "t" }] }] }
+
+/-- Validates `p` within a second. Not inlined, so that the validation runs here and not where the
+    compiler would compute a closed definition. --/
+@[noinline] def acceptedQuickly (label : String) (p : Definition) : IO Unit := do
+  let start ← IO.monoMsNow
+  accepted label p
+  let elapsed := (← IO.monoMsNow) - start
+  ensure (elapsed < 1000) s!"{label}: validation took {elapsed} ms"
+
 def run : IO Unit := do
   let users ← load "users"
   let branch ← load "branch"
@@ -207,6 +253,10 @@ def run : IO Unit := do
     (mapPlacement "receipts" fun pl => { pl with control := .merge (.named "Receipt") })
   rejected "Stream endpoint" "endpoint ship must be Single" <| branch |> mapWorkflow "shipping" fun w =>
     { dropConnection "ship" "receipts" w with placements := w.placements.filter (·.name != "receipts") }
+  -- `kind?` takes time exponential in the length of these chains; compiled code uses `kindFast`.
+  for (label, p) in [("merge chain 20", mergeChain 20), ("merge chain 40", mergeChain 40), ("30 diamonds", diamonds 30)] do
+    acceptedQuickly label p
+  ensure ((kinds (mergeChain 40) "w").all (·.2 == some .single)) "merge chain: a Merge of Singles is Single"
 
   -- Branch arms
   rejected "no connected arm" "at least one arm needs a connection" <| branch |>

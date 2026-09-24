@@ -83,8 +83,9 @@ func callCandidates(p *Definition, cfg Config, s *State, c *Call) []Op {
 	return nil
 }
 
-func invokeCandidates(p *Definition, s *State, path Path, w *Workflow, name string) []Op {
-	sh, ok := w.shape(p, name)
+// invokeCandidates are the invocations of the placement name of w, whose kinds are k.
+func invokeCandidates(s *State, path Path, w *Workflow, k kindTable, name string) []Op {
+	sh, ok := w.shape(k, name)
 	if !ok {
 		return nil
 	}
@@ -171,6 +172,11 @@ func taskCandidates(p *Definition, cfg Config, s *State, e *Execution) []Op {
 
 // Candidates are every operation that might be accepted; Step decides which ones are.
 func Candidates(p *Definition, cfg Config, s *State) []Op {
+	return candidatesWith(p, p.derive(), cfg, s)
+}
+
+// candidatesWith is Candidates with d, a derivation of p.
+func candidatesWith(p *Definition, d *derivation, cfg Config, s *State) []Op {
 	if !s.Started {
 		var input *string
 		if w, ok := p.workflow(p.Main); ok && w.Input != nil {
@@ -195,9 +201,10 @@ func Candidates(p *Definition, cfg Config, s *State) []Op {
 			if len(r.Path) != 0 {
 				ops = append(ops, OpCloseRun{Run: r.Path})
 			}
+			kinds := d.kinds(w)
 			for _, pl := range w.Placements {
 				ops = append(ops, OpSettle{Run: r.Path, Placement: pl.Name})
-				ops = append(ops, invokeCandidates(p, s, r.Path, w, pl.Name)...)
+				ops = append(ops, invokeCandidates(s, r.Path, w, kinds, pl.Name)...)
 			}
 		}
 		for i := range s.Results {
@@ -235,9 +242,14 @@ type Choice struct {
 
 // Accepted are the candidates that Step accepts and that change the state.
 func Accepted(p *Definition, cfg Config, s *State) []Choice {
+	return acceptedWith(p, p.derive(), cfg, s)
+}
+
+// acceptedWith is Accepted with d, a derivation of p.
+func acceptedWith(p *Definition, d *derivation, cfg Config, s *State) []Choice {
 	var choices []Choice
-	for _, op := range Candidates(p, cfg, s) {
-		next, err := Step(p, s, op)
+	for _, op := range candidatesWith(p, d, cfg, s) {
+		next, err := stepWith(p, d, s, op)
 		if err == nil && !next.Equal(s) {
 			choices = append(choices, Choice{op, next})
 		}
@@ -300,10 +312,11 @@ func Pick(cfg Config, s *State, seed uint64, choices []Choice) (Choice, bool) {
 // Walk is a random walk from the state before the start until no operation is accepted, or limit
 // operations were taken. It returns the final state and the operations.
 func Walk(p *Definition, cfg Config, seed uint64, limit int) (*State, []Op) {
+	d := p.derive()
 	state := &State{}
 	var trace []Op
 	for range limit {
-		choices := Accepted(p, cfg, state)
+		choices := acceptedWith(p, d, cfg, state)
 		if len(choices) == 0 {
 			break
 		}

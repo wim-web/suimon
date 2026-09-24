@@ -59,7 +59,7 @@ func checkMachine(t *testing.T, label string, m *machine) {
 func agree(t *testing.T, label string, p *Definition, s *State, op Op) {
 	t.Helper()
 	next, err := Step(p, s, op)
-	m := newMachine(p, cloneState(s))
+	m := newMachine(p, p.derive(), cloneState(s))
 	introduced, fastErr := m.apply(op)
 	if !sameError(err, fastErr) {
 		t.Fatalf("%s: %s: Step %v, machine %v", label, EncodeOp(op), err, fastErr)
@@ -88,7 +88,7 @@ func TestMachineAgreesWithStep(t *testing.T) {
 			for seed := range 12 {
 				label := fmt.Sprintf("%s seed %d failures %t", name, seed, cfg.Failures)
 				s := &State{}
-				m := newMachine(p, &State{})
+				m := newMachine(p, p.derive(), &State{})
 				rng := uint64(seed + 1)
 				for step := 0; step < 2000; step++ {
 					snapshot := cloneState(s)
@@ -159,7 +159,7 @@ func TestRecordersAgree(t *testing.T) {
 		for seed := range 8 {
 			label := fmt.Sprintf("%s seed %d", name, seed)
 			final, ops := Walk(p, DefaultConfig(), uint64(seed+1), 5000)
-			pure, owned := NewRecorder(p), newOwnedRecorder(p, &State{}, nil, 0)
+			pure, owned := NewRecorder(p), newOwnedRecorder(p, p.derive(), &State{}, nil, 0)
 			s, known := &State{}, []Payload(nil)
 			var text strings.Builder
 			text.WriteString(EncodeHeader(p) + "\n")

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"unicode/utf8"
 )
 
 // The runtime: an Engine runs a definition with the Go implementations of a Registry. Each execution
@@ -56,6 +55,8 @@ func (e *PanicError) Error() string { return fmt.Sprintf("suimon: panic in user 
 // from the journal, so pass large data by reference, such as a storage key, rather than as a value.
 type Engine struct {
 	definition *Definition
+	// derivation holds the kinds of the definition, derived once for validation and every execution.
+	derivation *derivation
 	registry   *Registry
 	plans      map[string]*workflowPlan
 	// header is the first line of the engine's journals, with its newline.
@@ -71,10 +72,11 @@ type Engine struct {
 // header, it must have the same canonical form. Only a definition built in code can fail this, such
 // as one with an empty id, which ParseDefinition rejects.
 func NewEngine(p *Definition, r *Registry) (*Engine, error) {
-	if err := p.Validate(); err != nil {
+	d := p.derive()
+	if err := p.validate(d); err != nil {
 		return nil, err
 	}
-	return NewUncheckedEngine(p, r)
+	return newEngine(p, d, r)
 }
 
 // NewUncheckedEngine is NewEngine without validating the definition (runUnchecked, §14). The engine
@@ -82,6 +84,11 @@ func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 // but for a definition that validation would reject nothing guarantees that the execution ends: Wait
 // may return ErrStuck.
 func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
+	return newEngine(p, p.derive(), r)
+}
+
+// newEngine is NewUncheckedEngine with d, a derivation of p.
+func newEngine(p *Definition, d *derivation, r *Registry) (*Engine, error) {
 	header, err := recordedHeader(p)
 	if err != nil {
 		return nil, err
@@ -89,7 +96,7 @@ func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := r.check(p); err != nil {
 		return nil, err
 	}
-	return &Engine{definition: p, registry: r, plans: newPlans(p), header: header + "\n"}, nil
+	return &Engine{definition: p, derivation: d, registry: r, plans: newPlans(p, d), header: header + "\n"}, nil
 }
 
 // recordedHeader is the header of the journals of p, after checking that p survives recording: the
@@ -128,7 +135,7 @@ func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*Wo
 	for _, opt := range opts {
 		opt(&o)
 	}
-	d := e.newDriver(ctx, newOwnedRecorder(e.definition, &State{}, nil, 0), o.journal)
+	d := e.newDriver(ctx, newOwnedRecorder(e.definition, e.derivation, &State{}, nil, 0), o.journal)
 	// The header is appended with the records of the start, before the first sync.
 	d.buffer = append(d.buffer, e.header...)
 	op := OpStart{}
@@ -207,7 +214,7 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 		}
 	}
 	// The driver takes the state of c over and changes it in place.
-	d := e.newDriver(ctx, newOwnedRecorder(e.definition, c.State, c.Values, c.Committed), j)
+	d := e.newDriver(ctx, newOwnedRecorder(e.definition, e.derivation, c.State, c.Values, c.Committed), j)
 	for _, v := range c.Values {
 		d.payloads[v.Value] = v.Payload
 	}
@@ -313,6 +320,3 @@ func (d *driver) report() *Report {
 	}
 	return r
 }
-
-// validPayload reports whether a payload can be recorded: journals are UTF-8 text.
-func validPayload(data []byte) bool { return utf8.Valid(data) }

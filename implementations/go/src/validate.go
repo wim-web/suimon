@@ -8,7 +8,10 @@ import (
 
 // Validate performs the structural checks of §14 and returns the first failed check, with the
 // message and in the order of Suimon/Validate.lean. run executes only definitions accepted here.
-func (p *Definition) Validate() error {
+func (p *Definition) Validate() error { return p.validate(p.derive()) }
+
+// validate is Validate with the kinds of d, a derivation of p.
+func (p *Definition) validate(d *derivation) error {
 	if !unique(ids(p.Functions, func(f FunctionDecl) string { return f.ID })) {
 		return errors.New("duplicate function id")
 	}
@@ -33,7 +36,8 @@ func (p *Definition) Validate() error {
 		return errors.New("workflows call each other in a cycle")
 	}
 	for i := range p.Workflows {
-		if err := p.validateWorkflow(&p.Workflows[i]); err != nil {
+		w := &p.Workflows[i]
+		if err := p.validateWorkflow(w, d.kinds(w)); err != nil {
 			return err
 		}
 	}
@@ -316,7 +320,8 @@ func (p *Definition) validateEntry(w *Workflow, e *Entry) error {
 	return nil
 }
 
-func (p *Definition) validatePlacement(w *Workflow, pl *Placement) error {
+// validatePlacement checks pl, a placement of w, whose kinds are k.
+func (p *Definition) validatePlacement(w *Workflow, k kindTable, pl *Placement) error {
 	at := fmt.Sprintf("%s.%s", w.ID, pl.Name)
 	incoming := w.incoming(pl.Name)
 	// expected is the input the control takes, nil for none.
@@ -391,17 +396,17 @@ func (p *Definition) validatePlacement(w *Workflow, pl *Placement) error {
 	}
 	switch pl.Control.(type) {
 	case WaitStreamControl:
-		if input, ok := w.inputKind(p, pl.Name); !ok || input == nil || *input != KindStream {
+		if input, ok := k.inputKind(w, pl.Name); !ok || input == nil || *input != KindStream {
 			return fmt.Errorf("%s: waitStream needs a Stream input", at)
 		}
 	case MergeControl:
 		for _, c := range incoming {
-			if k, ok := w.outputKind(p, c.Source); !ok || k != KindSingle {
+			if kind, ok := k.outputKind(c.Source); !ok || kind != KindSingle {
 				return fmt.Errorf("%s: Merge accepts only Single inputs (%s)", at, c.Source)
 			}
 		}
 	}
-	if _, ok := w.outputKind(p, pl.Name); !ok {
+	if _, ok := k.outputKind(pl.Name); !ok {
 		return fmt.Errorf("%s: Single/Stream cannot be derived", at)
 	}
 	var function *Contract
@@ -414,7 +419,8 @@ func (p *Definition) validatePlacement(w *Workflow, pl *Placement) error {
 	return validateTimeout(at, pl.Timeout, function, isBranch)
 }
 
-func (p *Definition) validateWorkflow(w *Workflow) error {
+// validateWorkflow checks w, whose kinds are k.
+func (p *Definition) validateWorkflow(w *Workflow, k kindTable) error {
 	at := fmt.Sprintf("workflow %s", w.ID)
 	if w.ID == "" {
 		return errors.New("empty workflow id")
@@ -444,13 +450,13 @@ func (p *Definition) validateWorkflow(w *Workflow) error {
 		}
 	}
 	for i := range w.Placements {
-		if err := p.validatePlacement(w, &w.Placements[i]); err != nil {
+		if err := p.validatePlacement(w, k, &w.Placements[i]); err != nil {
 			return err
 		}
 	}
 	for _, pl := range w.Placements {
 		if w.isEndpoint(pl.Name) {
-			if k, ok := w.outputKind(p, pl.Name); !ok || k != KindSingle {
+			if kind, ok := k.outputKind(pl.Name); !ok || kind != KindSingle {
 				return fmt.Errorf("%s: endpoint %s must be Single", at, pl.Name)
 			}
 		}

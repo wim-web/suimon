@@ -88,6 +88,28 @@ func setTimeout(workflow, placement string, timeout Timeout) func(p *Definition)
 	}
 }
 
+// replaceBinding replaces the binding of the identifier of b among the functions, the judges or the
+// transforms, as b is one, with b.
+func replaceBinding(bindings []Binding, b Binding) []Binding {
+	namespace := func(k bindingKind) bindingKind {
+		if k == bindStream {
+			return bindFunction // Single and Stream functions share their identifiers
+		}
+		return k
+	}
+	out := slices.Clone(bindings)
+	for i := range out {
+		if out[i].id == b.id && namespace(out[i].kind) == namespace(b.kind) {
+			out[i] = b
+		}
+	}
+	return out
+}
+
+// invalidUTF8 is JSON text with a string that is not UTF-8, which encoding/json passes on from a
+// json.RawMessage.
+var invalidUTF8 = json.RawMessage{'"', 0xff, '"'}
+
 // Checks of reports.
 
 func expectStatusOf(t *testing.T, r *Report, want Status) {
@@ -817,6 +839,94 @@ func scenarios() []scenario {
 			},
 		},
 		{
+			// An element whose JSON is not UTF-8 is an element error (§4.4): the engine ends the
+			// generator before it records the failure, and waits for it (§8.2, §11.3).
+			name: "branch invalid UTF-8 element", definition: "branch",
+			adjust:        adjustAll(scaleTimeouts(60000), setPolicy("shipping", "list", PolicyContinue)),
+			deterministic: true,
+			prepare: func(t *testing.T, j *memJournal) run {
+				ended, early := make(chan struct{}), &atomic.Int32{}
+				bindings := replaceBinding(branchBindings(branchKnobs{failAfter: -1, blockAfter: -1}),
+					StreamNoInput("listOrders", func(ctx context.Context) iter.Seq2[json.RawMessage, error] {
+						return func(yield func(json.RawMessage, error) bool) {
+							defer func() {
+								if strings.Contains(j.text(), `"type":"failed"`) {
+									early.Add(1)
+								}
+								close(ended)
+							}()
+							if yield(json.RawMessage(`{"id":1,"paid":true}`), nil) {
+								yield(invalidUTF8, nil)
+							}
+						}
+					}))
+				return run{bindings: bindings, check: func(t *testing.T, r *Report, _ string) {
+					select {
+					case <-ended:
+					default:
+						t.Error("Wait returned before the generator ended")
+					}
+					if early.Load() != 0 {
+						t.Error("the failure was recorded before the generator ended")
+					}
+					expectStatusOf(t, r, StatusFailed)
+					expectFailures(t, r, "list:error")
+					if err := r.Failures[0].Err; err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
+						t.Errorf("the failure of the element: %v", err)
+					}
+					// The element accepted before the failure stays (§4.1.1).
+					expectOutputSet(t, r, "receipts", "receipt-1")
+					if list := callsWith(r, "listOrders"); len(list) != 1 || list[0].Status != CallFailed || list[0].Yields != 1 {
+						t.Errorf("list call: %+v", list)
+					}
+				}}
+			},
+		},
+		{
+			name: "merge invalid UTF-8 result", definition: "merge", deterministic: true,
+			prepare: func(t *testing.T, j *memJournal) run {
+				returned := make(chan struct{})
+				bindings := replaceBinding(mergeBindings(mergeKnobs{}),
+					Func("archive", func(ctx context.Context, s sales) (json.RawMessage, error) {
+						defer close(returned)
+						return invalidUTF8, nil
+					}))
+				return run{bindings: bindings, check: func(t *testing.T, r *Report, _ string) {
+					select {
+					case <-returned:
+					default:
+						t.Error("Wait returned before the function returned")
+					}
+					expectStatusOf(t, r, StatusFailed)
+					expectFailures(t, r, "archive:error")
+					if err := r.Failures[0].Err; err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
+						t.Errorf("the failure of the result: %v", err)
+					}
+					expectEndpoint(t, r, "archive", OutcomeFailed)
+					expectNoOutput(t, r, "archive")
+					expectOutput(t, r, "page", "sales=120,stock=7")
+					expectOutput(t, r, "notify", "ack")
+				}}
+			},
+		},
+		{
+			name: "merge invalid UTF-8 transform", definition: "merge", deterministic: true,
+			prepare: func(t *testing.T, j *memJournal) run {
+				bindings := replaceBinding(mergeBindings(mergeKnobs{}),
+					Transform("salesWidget", func(s sales) (json.RawMessage, error) { return invalidUTF8, nil }))
+				return run{bindings: bindings, check: func(t *testing.T, r *Report, _ string) {
+					// A failed transform is a failure of its target, under the target's policy (§4.2).
+					expectStatusOf(t, r, StatusFailed)
+					expectFailures(t, r, "widgets:transform")
+					if err := r.Failures[0].Err; err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
+						t.Errorf("the failure of the transform: %v", err)
+					}
+					expectOutput(t, r, "page", "stock=7")
+					expectOutput(t, r, "archive", "archived 120")
+				}}
+			},
+		},
+		{
 			name: "panic", definition: "merge", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				bindings := mergeBindings(mergeKnobs{})
@@ -958,6 +1068,9 @@ func TestRuntimeInputs(t *testing.T) {
 	}
 	if _, err := users.Start(context.Background(), func() {}); err == nil {
 		t.Error("an input that does not encode is refused")
+	}
+	if _, err := users.Start(context.Background(), invalidUTF8); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
+		t.Errorf("an input whose JSON is not UTF-8 is refused: %v", err)
 	}
 	// An input of another shape than the entry expects fails the entry call when it decodes.
 	r, err := users.Run(context.Background(), []int{1, 2})
@@ -1135,7 +1248,7 @@ func TestRuntimeJournalHeader(t *testing.T) {
 func TestRuntimeNoLeaks(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	for _, name := range []string{"merge", "merge stop", "merge timeout", "users stop", "users cancel", "branch element timeout",
-		"limit slot held"} {
+		"limit slot held", "branch invalid UTF-8 element"} {
 		runOnce(t, scenarioNamed(t, name))
 	}
 	deadline := time.Now().Add(5 * time.Second)

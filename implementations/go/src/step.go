@@ -29,9 +29,13 @@ func require(ok bool, code string) error {
 }
 
 // Step applies one operation. It returns a new state and leaves s unchanged.
-func Step(p *Definition, s *State, op Op) (*State, error) {
+func Step(p *Definition, s *State, op Op) (*State, error) { return stepWith(p, nil, s, op) }
+
+// stepWith is Step with d, a derivation of p to read kinds from, or nil to derive the kinds of the
+// workflow op needs.
+func stepWith(p *Definition, d *derivation, s *State, op Op) (*State, error) {
 	t := *s
-	st := &stepper{view: view{s: &t}, p: p}
+	st := &stepper{view: view{s: &t}, p: p, d: d}
 	if err := st.apply(op); err != nil {
 		return nil, err
 	}
@@ -43,13 +47,16 @@ func Step(p *Definition, s *State, op Op) (*State, error) {
 type machine struct {
 	view
 	p *Definition
+	// d is a derivation of p, which the machine reads the kinds of p from.
+	d *derivation
 	// seen holds every value the state mentions.
 	seen map[string]struct{}
 }
 
-// newMachine takes s over; s must not be used elsewhere while the machine changes it.
-func newMachine(p *Definition, s *State) *machine {
-	m := &machine{view: view{s: s, ix: newStateIndex(s)}, p: p, seen: map[string]struct{}{}}
+// newMachine takes s over; s must not be used elsewhere while the machine changes it. d is a
+// derivation of p.
+func newMachine(p *Definition, d *derivation, s *State) *machine {
+	m := &machine{view: view{s: s, ix: newStateIndex(s)}, p: p, d: d, seen: map[string]struct{}{}}
 	for _, v := range s.Values() {
 		m.seen[v] = struct{}{}
 	}
@@ -59,7 +66,7 @@ func newMachine(p *Definition, s *State) *machine {
 // apply applies op in place and returns the values it introduces, in the order of Introduced. A
 // rejected op changes nothing.
 func (m *machine) apply(op Op) ([]string, error) {
-	st := &stepper{view: m.view, p: m.p}
+	st := &stepper{view: m.view, p: m.p, d: m.d}
 	if err := st.apply(op); err != nil {
 		return nil, err
 	}
@@ -75,7 +82,10 @@ func (m *machine) apply(op Op) ([]string, error) {
 // is owned and changes in place.
 type stepper struct {
 	view
-	p     *Definition
+	p *Definition
+	// d, when not nil, is a derivation of p to read kinds from; without it, the stepper derives the
+	// kinds of the workflow an operation needs.
+	d     *derivation
 	owned uint16
 	// mentions are the values of the records the step added or changed, where they are mentioned.
 	mentions []mention
@@ -100,6 +110,14 @@ const (
 	listSettled
 	listFailures
 )
+
+// kinds is the kind table of w, a workflow of st.p.
+func (st *stepper) kinds(w *Workflow) kindTable {
+	if st.d != nil {
+		return st.d.kinds(w)
+	}
+	return w.deriveKinds(st.p)
+}
 
 func (st *stepper) mention(list, pos, part int, value *string) {
 	if value != nil {
@@ -861,7 +879,7 @@ func (st *stepper) start(input *string) error {
 
 // invocationInput is the input one invocation takes, if its trigger is available (§3.1, §5.3).
 func (st *stepper) invocationInput(r *Run, w *Workflow, name string, trigger *string) (*string, error) {
-	sh, ok := w.shape(st.p, name)
+	sh, ok := w.shape(st.kinds(w), name)
 	if !ok {
 		return nil, reject("INVALID_SHAPE")
 	}
@@ -1453,11 +1471,12 @@ func (st *stepper) settle(path Path, name string) error {
 	if _, dup := st.settledOf(path, name); dup {
 		return reject("ALREADY_SETTLED")
 	}
-	sh, ok := w.shape(st.p, name)
+	k := st.kinds(w)
+	sh, ok := w.shape(k, name)
 	if !ok {
 		return reject("INVALID_SHAPE")
 	}
-	kind, ok := w.outputKind(st.p, name)
+	kind, ok := k.outputKind(name)
 	if !ok {
 		return reject("INVALID_KIND")
 	}

@@ -51,7 +51,7 @@ type placementPlan struct {
 	outgoing []int
 }
 
-func newPlans(p *Definition) map[string]*workflowPlan {
+func newPlans(p *Definition, d *derivation) map[string]*workflowPlan {
 	plans := map[string]*workflowPlan{}
 	for i := range p.Workflows {
 		w := &p.Workflows[i]
@@ -59,12 +59,13 @@ func newPlans(p *Definition) map[string]*workflowPlan {
 			continue // the first workflow of an id counts, as in lookups
 		}
 		wp := &workflowPlan{workflow: w, placements: map[string]*placementPlan{}}
+		kinds := d.kinds(w)
 		for j := range w.Placements {
 			pl := &w.Placements[j]
 			if _, dup := wp.placements[pl.Name]; dup {
 				continue
 			}
-			sh, ok := w.shape(p, pl.Name)
+			sh, ok := w.shape(kinds, pl.Name)
 			pp := &placementPlan{placement: pl, shape: sh, shaped: ok}
 			for k, c := range w.Connections {
 				if c.Source == pl.Name {
@@ -506,10 +507,6 @@ func (d *driver) handle(ev event) {
 			return // not accepted after a cancellation (§10.2)
 		}
 		cr.stopElementTimer()
-		if !validPayload(ev.value) {
-			d.apply(OpFailed{Call: c.ID}, errors.New("suimon: the element is not valid UTF-8 JSON"))
-			return
-		}
 		id := yieldValue(c.ID, c.Yields)
 		d.payloads[id] = string(ev.value)
 		d.apply(OpYielded{Call: c.ID, Value: id}, nil)
@@ -532,13 +529,9 @@ func (d *driver) handle(ev event) {
 	var cause error
 	switch ev.kind {
 	case evReturned:
-		if validPayload(ev.value) {
-			id := returnValue(c.ID)
-			d.payloads[id] = string(ev.value)
-			op = OpReturned{Call: c.ID, Value: id}
-		} else {
-			op, cause = OpFailed{Call: c.ID}, errors.New("suimon: the result is not valid UTF-8 JSON")
-		}
+		id := returnValue(c.ID)
+		d.payloads[id] = string(ev.value)
+		op = OpReturned{Call: c.ID, Value: id}
 	case evJudged:
 		if arms := d.armsOf(&c); slices.Contains(arms, ev.arm) {
 			op = OpJudged{Call: c.ID, Arm: ev.arm}
@@ -691,9 +684,6 @@ func (d *driver) transform(id, v string) (out string, err error) {
 	data, err := b.transform([]byte(input))
 	if err != nil {
 		return "", err
-	}
-	if !validPayload(data) {
-		return "", errors.New("suimon: the transformed value is not valid UTF-8 JSON")
 	}
 	return string(data), nil
 }

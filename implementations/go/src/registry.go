@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"unicode/utf8"
 )
 
 // A definition names its functions, judges and transforms; a Registry supplies their Go
@@ -163,7 +164,12 @@ func Passthrough(id string) Binding {
 		transform: func(input []byte) ([]byte, error) { return input, nil }}
 }
 
-// encodeValue is the JSON of v, without the HTML escaping of json.Marshal.
+// encodeValue is the JSON of v, without the HTML escaping of json.Marshal. The JSON must be UTF-8,
+// since the journal records it as text: encoding/json replaces invalid bytes in strings, but passes
+// on what a json.RawMessage holds or a MarshalJSON method returns. Every value that user code
+// returns, yields or transforms into is encoded here, except what Passthrough returns, which is a
+// value the engine already holds; so an element that is not UTF-8 is an element error, and a result
+// that is not is the call's error.
 func encodeValue(v any) ([]byte, error) {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
@@ -171,7 +177,11 @@ func encodeValue(v any) ([]byte, error) {
 	if err := enc.Encode(v); err != nil {
 		return nil, fmt.Errorf("suimon: encoding a value: %w", err)
 	}
-	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+	data := bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("suimon: encoding a value: the JSON of %T is not valid UTF-8", v)
+	}
+	return data, nil
 }
 
 func decodeValue[T any](data []byte) (T, error) {

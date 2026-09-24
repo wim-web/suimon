@@ -46,9 +46,10 @@ func kinds(p *Definition, id string) []placementKind {
 		return nil
 	}
 	var out []placementKind
+	table := w.deriveKinds(p)
 	for _, pl := range w.Placements {
 		kind := "none"
-		if k, ok := w.outputKind(p, pl.Name); ok {
+		if k, ok := table.outputKind(pl.Name); ok {
 			kind = k.String()
 		}
 		out = append(out, placementKind{pl.Name, kind})

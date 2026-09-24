@@ -1,5 +1,7 @@
 package suimon
 
+import "maps"
+
 // Derivations of Suimon/Derive.lean. An Option (Option T) of Lean is returned as a pointer that is
 // nil for "no input" together with a flag that is false for "unknown".
 
@@ -169,31 +171,79 @@ func (w *Workflow) combineInput(name string, sources []Kind) (input *Kind, ok bo
 	return ptr(sources[0]), true
 }
 
-// kind is the output kind of a placement; the fuel bounds the length of connection paths.
-func (w *Workflow) kind(p *Definition, fuel int, name string) (Kind, bool) {
-	if fuel == 0 {
-		return 0, false
-	}
-	pl, ok := w.placement(name)
-	if !ok {
-		return 0, false
-	}
-	sources, ok := w.sourceKinds(p, fuel-1, name)
-	if !ok {
-		return 0, false
-	}
-	input, ok := w.combineInput(name, sources)
-	if !ok {
-		return 0, false
-	}
-	return p.outputKind(pl.Control, input)
+// kindTable holds the output kinds of the placements of one workflow at one fuel, by name: what
+// Lean's w.kind? p fuel name derives. A placement whose kind cannot be derived, like a name that is
+// not a placement, has no entry.
+type kindTable map[string]Kind
+
+// kindRow is what kind? reads of one placement name: the placement it names, which is the first of
+// that name, and its input connections.
+type kindRow struct {
+	name      string
+	placement *Placement
+	incoming  []Connection
 }
 
-// sourceKinds is Lean's (w.incoming name).mapM fun c => w.kind? p fuel c.source.
-func (w *Workflow) sourceKinds(p *Definition, fuel int, name string) ([]Kind, bool) {
-	var sources []Kind
-	for _, c := range w.incoming(name) {
-		k, ok := w.kind(p, fuel, c.Source)
+// kindsAt derives the table at fuel level by level, as kind? recurses on the fuel: the table at fuel
+// 0 is empty, and the table at fuel n+1 holds the kind of each placement derived from the kinds of
+// its sources in the table at fuel n. kind? itself derives the kind of a source once for each path
+// to it, which takes time exponential in the length of a chain of Merges with two connections from
+// each to the next; a level derives each kind once. The tables are those of kind? at every fuel, so
+// the fuel bounds the connection paths of a cyclic workflow as it does in Lean. Each table is
+// derived from the one below alone, so once a table equals the one below it, it stays the same at
+// every higher fuel.
+func (w *Workflow) kindsAt(p *Definition, fuel int) kindTable {
+	rows := make([]kindRow, 0, len(w.Placements))
+	seen := make(map[string]bool, len(w.Placements))
+	for i := range w.Placements {
+		pl := &w.Placements[i]
+		if !seen[pl.Name] {
+			// A later placement of the name reads what the first one reads.
+			seen[pl.Name] = true
+			rows = append(rows, kindRow{name: pl.Name, placement: pl})
+		}
+	}
+	incoming := make(map[string][]Connection, len(rows))
+	for _, c := range w.Connections {
+		incoming[c.Target] = append(incoming[c.Target], c)
+	}
+	for i := range rows {
+		rows[i].incoming = incoming[rows[i].name]
+	}
+	table := kindTable{}
+	for range fuel {
+		next := make(kindTable, len(rows))
+		for _, row := range rows {
+			if k, ok := table.kindFrom(p, w, row); ok {
+				next[row.name] = k
+			}
+		}
+		if maps.Equal(next, table) {
+			break
+		}
+		table = next
+	}
+	return table
+}
+
+// kindFrom is the kind? of a row at fuel n+1 from the table at fuel n.
+func (t kindTable) kindFrom(p *Definition, w *Workflow, row kindRow) (Kind, bool) {
+	sources, ok := t.sourceKinds(row.incoming)
+	if !ok {
+		return 0, false
+	}
+	input, ok := w.combineInput(row.name, sources)
+	if !ok {
+		return 0, false
+	}
+	return p.outputKind(row.placement.Control, input)
+}
+
+// sourceKinds is Lean's incoming.mapM fun c => prev c.source.
+func (t kindTable) sourceKinds(incoming []Connection) ([]Kind, bool) {
+	sources := make([]Kind, 0, len(incoming))
+	for _, c := range incoming {
+		k, ok := t[c.Source]
 		if !ok {
 			return nil, false
 		}
@@ -204,18 +254,49 @@ func (w *Workflow) sourceKinds(p *Definition, fuel int, name string) ([]Kind, bo
 
 func (w *Workflow) depth() int { return len(w.Placements) + 1 }
 
-// inputKind is the derived input kind of a placement, nil when it takes no input.
-func (w *Workflow) inputKind(p *Definition, name string) (input *Kind, ok bool) {
-	sources, ok := w.sourceKinds(p, w.depth(), name)
+// deriveKinds derives the table of w at the fuel of Lean's outputKind? and inputKind?, which
+// suffices for an acyclic workflow.
+func (w *Workflow) deriveKinds(p *Definition) kindTable { return w.kindsAt(p, w.depth()) }
+
+// outputKind is Lean's outputKind? of the workflow of the table, derived by deriveKinds.
+func (t kindTable) outputKind(name string) (Kind, bool) {
+	k, ok := t[name]
+	return k, ok
+}
+
+// inputKind is Lean's inputKind? of the workflow w of the table, derived by deriveKinds: the input
+// kind of a placement, nil when it takes no input.
+func (t kindTable) inputKind(w *Workflow, name string) (input *Kind, ok bool) {
+	sources, ok := t.sourceKinds(w.incoming(name))
 	if !ok {
 		return nil, false
 	}
 	return w.combineInput(name, sources)
 }
 
-// outputKind is the derived output kind of a placement.
-func (w *Workflow) outputKind(p *Definition, name string) (Kind, bool) {
-	return w.kind(p, w.depth(), name)
+// derivation holds the kind tables of the workflows of a definition, derived once, which the
+// validator and the engine share. The definition must not change while its derivation is in use. A
+// derivation is only read after derive returns, so goroutines may share it.
+type derivation struct {
+	p      *Definition
+	tables map[*Workflow]kindTable
+}
+
+func (p *Definition) derive() *derivation {
+	d := &derivation{p: p, tables: make(map[*Workflow]kindTable, len(p.Workflows))}
+	for i := range p.Workflows {
+		w := &p.Workflows[i]
+		d.tables[w] = w.deriveKinds(p)
+	}
+	return d
+}
+
+// kinds is the table of w, a workflow of the definition, as deriveKinds derives it.
+func (d *derivation) kinds(w *Workflow) kindTable {
+	if t, ok := d.tables[w]; ok {
+		return t
+	}
+	return w.deriveKinds(d.p)
 }
 
 // OutputKind is the derived Single/Stream kind of a placement of workflow; ok is false when it
@@ -225,7 +306,7 @@ func (p *Definition) OutputKind(workflow, placement string) (kind Kind, ok bool)
 	if !found {
 		return 0, false
 	}
-	return w.outputKind(p, placement)
+	return w.deriveKinds(p).outputKind(placement)
 }
 
 func copyPtr[T any](v *T) *T {
