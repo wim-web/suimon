@@ -184,7 +184,7 @@ func readDefinition(path string) (*suimon.Definition, error) {
 	return loadDefinition(data)
 }
 
-// loadDefinition decodes and validates a definition, from a file or from the header of a record.
+// loadDefinition decodes and validates a definition file.
 func loadDefinition(data []byte) (*suimon.Definition, error) {
 	p, err := suimon.ParseDefinition(data)
 	if err != nil {
@@ -204,9 +204,11 @@ func validate(out io.Writer, path string) error {
 	return nil
 }
 
-// check replays a record against the definition of its header, which is read like a definition
-// file. Like Lean, a file that is not UTF-8 is rejected, except that a partial last line may end
-// inside a character: a crash can cut the file there, and recovery discards it.
+// check replays a record against the definition of its header, which is read by the header's flag
+// (suimon.LoadHeader): decoded and validated like a definition file when the execution was started
+// with validation, decoded only when it was started without. Like Lean, a file that is not UTF-8 is
+// rejected, except that a partial last line may end inside a character: a crash can cut the file
+// there, and recovery discards it.
 func check(out io.Writer, trace string, opts []option) error {
 	data, err := readFile(trace)
 	if err != nil {
@@ -216,7 +218,7 @@ func check(out io.Writer, trace string, opts []option) error {
 	if !utf8.ValidString(text[:strings.LastIndexByte(text, '\n')+1]) {
 		return nonUTF8(trace)
 	}
-	checked, err := suimon.Check(text, loadDefinition)
+	checked, err := suimon.Check(text, suimon.LoadHeader)
 	if err != nil {
 		return err
 	}
@@ -268,8 +270,9 @@ func explore(out io.Writer, path string, opts []option) error {
 	return nil
 }
 
-// gen writes a random walk as an execution record: the header with the definition, then the records.
-// Payloads repeat the value identities.
+// gen writes a random walk as an execution record: the header, then the records. The definition is
+// validated before the walk, as run validates it, so the header says so. Payloads repeat the value
+// identities.
 func gen(out io.Writer, path string, opts []option) error {
 	p, err := readDefinition(path)
 	if err != nil {
@@ -284,7 +287,7 @@ func gen(out io.Writer, path string, opts []option) error {
 		return err
 	}
 	_, ops := suimon.Walk(p, suimon.DefaultConfig(), seed, int(steps))
-	if _, err := io.WriteString(out, suimon.EncodeHeader(p)+"\n"); err != nil {
+	if _, err := io.WriteString(out, suimon.EncodeHeader(p, true)+"\n"); err != nil {
 		return err
 	}
 	recorder := suimon.NewRecorder(p)

@@ -24,29 +24,27 @@ func genPayloads(t *testing.T, recorder *Recorder, op Op) []Payload {
 	return values
 }
 
-// loadHeader reads the definition of a header as suimon check does: decoded, then validated.
-func loadHeader(definition []byte) (*Definition, error) {
-	p, err := ParseDefinition(definition)
-	if err != nil {
-		return nil, err
-	}
-	return p, p.Validate()
+// header is the header line of a record of p whose execution was started with validation, with its
+// newline.
+func header(p *Definition) string { return EncodeHeader(p, true) + "\n" }
+
+// recorded is the record of a random walk, with a header that says the execution was started with
+// validation: its transitions with the payloads gen writes, the text (the header, then the records),
+// and the state before the first transition and after each committed one.
+func recorded(t *testing.T, p *Definition, seed uint64) ([]Transition, string, []*State) {
+	t.Helper()
+	return recordedAs(t, p, seed, true)
 }
 
-// header is the header line of a record of p, with its newline.
-func header(p *Definition) string { return EncodeHeader(p) + "\n" }
-
-// recorded is the record of a random walk: its transitions with the payloads gen writes, the text
-// (the header, then the records), and the state before the first transition and after each
-// committed one.
-func recorded(t *testing.T, p *Definition, seed uint64) ([]Transition, string, []*State) {
+// recordedAs is recorded with the header of an execution started with validation or without it.
+func recordedAs(t *testing.T, p *Definition, seed uint64, validated bool) ([]Transition, string, []*State) {
 	t.Helper()
 	_, ops := Walk(p, DefaultConfig(), seed, 10000)
 	recorder := NewRecorder(p)
 	states := []*State{recorder.State()}
 	var steps []Transition
 	var text strings.Builder
-	text.WriteString(header(p))
+	text.WriteString(EncodeHeader(p, validated) + "\n")
 	for _, op := range ops {
 		values := genPayloads(t, recorder, op)
 		records, err := recorder.Record(op, values)
@@ -88,7 +86,7 @@ func splitPayloads(values []Payload, keep func(Payload) bool) (kept, dropped []P
 
 func checkedText(t *testing.T, label, text string) Checked {
 	t.Helper()
-	c, err := Check(text, loadHeader)
+	c, err := Check(text, LoadHeader)
 	if err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}
@@ -97,7 +95,7 @@ func checkedText(t *testing.T, label, text string) Checked {
 
 func rejectedText(t *testing.T, label, fragment, text string) {
 	t.Helper()
-	_, err := Check(text, loadHeader)
+	_, err := Check(text, LoadHeader)
 	if err == nil {
 		t.Errorf("%s: accepted, expected %q", label, fragment)
 	} else if !hasFragment(err.Error(), fragment) {
@@ -116,6 +114,49 @@ func rejectedTrace(t *testing.T, label, fragment string, p *Definition, text str
 	rejectedText(t, label, fragment, header(p)+text)
 }
 
+// withoutInputs is p without the connections into its placement target.
+func withoutInputs(p *Definition, target string) *Definition {
+	for i := range p.Workflows {
+		w := &p.Workflows[i]
+		w.Connections = slices.DeleteFunc(slices.Clone(w.Connections), func(c Connection) bool { return c.Target == target })
+	}
+	return p
+}
+
+// withoutOutputs is p without a task of any concurrency in the output.
+func withoutOutputs(p *Definition) *Definition {
+	for i := range p.Workflows {
+		for j := range p.Workflows[i].Placements {
+			mapConcurrency(func(c *Concurrency) {
+				for k := range c.Tasks {
+					c.Tasks[k].Output = nil
+				}
+			})(&p.Workflows[i].Placements[j])
+		}
+	}
+	return p
+}
+
+// invalidDefinition is a definition that validation rejects, with the error, and that an execution
+// started without validation can run.
+type invalidDefinition struct {
+	name  string
+	p     *Definition
+	error string
+}
+
+// invalidDefinitions, as in Test/Trace.lean: a Merge without input connections, which the model
+// gives no kind, so that it never settles and the run concludes only after a stop or a
+// cancellation; and a concurrency without a task in the output, which runs its tasks but has no
+// result.
+func invalidDefinitions(t *testing.T) []invalidDefinition {
+	t.Helper()
+	return []invalidDefinition{
+		{"merge without inputs", withoutInputs(load(t, "merge"), "widgets"), "dashboard.widgets: Merge needs input connections"},
+		{"users without outputs", withoutOutputs(load(t, "users")), "users.perUser: at least one task must be in the output"},
+	}
+}
+
 // half is the first half of a line in characters, like Lean's line.take (line.length / 2).
 func half(line string) string {
 	runes := []rune(line)
@@ -125,123 +166,148 @@ func half(line string) string {
 func TestTraceReplay(t *testing.T) {
 	for _, name := range append(definitionNames, extraDefinitions...) {
 		p := load(t, name)
-		listCases := 0
-		for seed := uint64(1); seed <= 20; seed++ {
-			label := fmt.Sprintf("%s seed %d", name, seed)
-			steps, text, states := recorded(t, p, seed)
-			final := states[len(states)-1]
-			// Replaying a whole record reproduces the state of the run that wrote it, with its definition.
-			whole := checkedText(t, label, text)
-			if !whole.State.Equal(final) || whole.Committed+1 != len(states) || whole.Uncommitted {
-				t.Fatalf("%s: replay differs from the run", label)
-			}
-			if whole.Definition == nil || EncodeHeader(whole.Definition) != EncodeHeader(p) {
-				t.Fatalf("%s: another definition", label)
-			}
-			for _, v := range whole.State.Values() {
-				if !hasPayload(whole.Values, v) {
-					t.Fatalf("%s: a value without payload: %s", label, v)
-				}
-			}
-			// A commit needs the payload of each value its transition introduces, lists the engine
-			// builds included, and an op record carries payloads only for the values its transition
-			// introduces: neither an earlier record nor a later one may hold it. The header is line 1.
-			for i, step := range steps {
-				kept, lists := splitPayloads(step.Values, func(v Payload) bool { return !isList(v.Value) })
-				if len(lists) == 0 {
-					continue
-				}
-				with := func(j int, values []Payload) []Transition {
-					out := slices.Clone(steps)
-					out[i] = Transition{step.Op, kept}
-					out[j] = Transition{out[j].Op, append(slices.Clone(out[j].Values), values...)}
-					return out
-				}
-				stripped := with(i, nil)
-				rejectedTrace(t, label+" list payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), p, written(stripped))
-				if _, _, err := RecordTransitions(p, &State{}, stripped, nil, 1); err == nil || !hasFragment(err.Error(), "missing payloads") {
-					t.Fatalf("%s: recorder without a list payload: %v", label, err)
-				}
-				var listValues []string
-				for _, v := range lists {
-					listValues = append(listValues, v.Value)
-				}
-				early := with(0, lists)
-				rejectedTrace(t, label+" early payload",
-					fmt.Sprintf("line 3: payloads for %s, which the transition does not introduce", leanList(listValues)),
-					p, written(early))
-				if _, _, err := RecordTransitions(p, &State{}, early, nil, 1); err == nil ||
-					!hasFragment(err.Error(), "which the transition does not introduce") {
-					t.Fatalf("%s: recorder with an early payload: %v", label, err)
-				}
-				if i+1 < len(steps) {
-					rejectedTrace(t, label+" later payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), p, written(with(i+1, lists)))
-				}
-				listCases++
-				break
-			}
-			// Every op survives its encoding, and every line is canonical.
-			for i, line := range strings.Split(text, "\n") {
-				if line == "" || i == 0 {
-					continue
-				}
-				r, err := DecodeRecord(line)
-				if err != nil {
-					t.Fatalf("%s: %v", label, err)
-				}
-				if EncodeRecord(r) != line || strings.ContainsRune(line, '\n') {
-					t.Fatalf("%s: record codec changed %s", label, line)
-				}
-				if !r.Commit {
-					op, err := DecodeOp(EncodeOp(r.Op))
-					if err != nil || EncodeOp(op) != EncodeOp(r.Op) {
-						t.Fatalf("%s: op codec: %v", label, err)
-					}
-				}
-			}
-			// A crash may cut the record anywhere, the header included; recovery keeps exactly the
-			// committed transitions, and knows the definition once the header is complete.
-			lines := strings.Split(text, "\n")
-			lines = lines[:len(lines)-1]
-			for cut := 0; cut <= len(lines); cut++ {
-				prefix := strings.Join(lines[:cut], "\n")
-				if cut > 0 {
-					prefix += "\n"
-				}
-				torn := prefix
-				if cut < len(lines) {
-					torn += half(lines[cut])
-				}
-				committed := max(cut-1, 0) / 2
-				for _, text := range []string{prefix, torn} {
-					c := checkedText(t, fmt.Sprintf("%s cut %d", label, cut), text)
-					if c.Committed != committed || !c.State.Equal(states[committed]) {
-						t.Fatalf("%s cut %d: wrong recovered state", label, cut)
-					}
-					if (c.Definition == nil) != (cut == 0) {
-						t.Fatalf("%s cut %d: definition %v", label, cut, c.Definition)
-					}
-					if c.Uncommitted != ((cut > 0 && (cut-1)%2 == 1) || len(text) > len(prefix)) {
-						t.Fatalf("%s cut %d: uncommitted flag", label, cut)
-					}
-					if recovered, err := Recover(text, loadHeader); err != nil || !recovered.Equal(states[committed]) {
-						t.Fatalf("%s cut %d: recover", label, cut)
-					}
-				}
-			}
-			// Corruption before the last commit is an error, not a torn tail.
-			if len(lines) >= 5 {
-				corrupt := append([]string(nil), lines...)
-				corrupt[2] = `{"seq":2`
-				rejectedText(t, label+" corrupt", "line 3", strings.Join(corrupt, "\n")+"\n")
-				reordered := append([]string{lines[0], lines[2], lines[1]}, lines[3:]...)
-				rejectedText(t, label+" reordered", "line 2: expected sequence 1", strings.Join(reordered, "\n")+"\n")
-			}
-		}
-		if listCases == 0 {
+		if replayWalks(t, name, p, true, 20) == 0 {
 			t.Errorf("%s: no walk built a list", name)
 		}
+		replayWalks(t, name, p, false, 5)
 	}
+	// An execution started without validation may run a definition that validation rejects: its record
+	// checks without validation, cut anywhere, and the same record marked as validated is refused at
+	// line 1 with the error of validation.
+	for _, x := range invalidDefinitions(t) {
+		if err := x.p.Validate(); err == nil || err.Error() != x.error {
+			t.Fatalf("%s: validation gives %v, want %q", x.name, err, x.error)
+		}
+		replayWalks(t, x.name, x.p, false, 10)
+		for seed := uint64(1); seed <= 10; seed++ {
+			_, text, _ := recordedAs(t, x.p, seed, true)
+			if _, err := Check(text, LoadHeader); err == nil || err.Error() != "line 1: "+x.error {
+				t.Errorf("%s seed %d validated: %v", x.name, seed, err)
+			}
+		}
+	}
+}
+
+// replayWalks checks the records of random walks of p whose header says whether the execution was
+// started with validation: whole, cut anywhere and corrupted. It returns how many walks built a list.
+func replayWalks(t *testing.T, name string, p *Definition, validated bool, seeds uint64) int {
+	t.Helper()
+	listCases := 0
+	for seed := uint64(1); seed <= seeds; seed++ {
+		label := fmt.Sprintf("%s seed %d validated %t", name, seed, validated)
+		steps, text, states := recordedAs(t, p, seed, validated)
+		final := states[len(states)-1]
+		// Replaying a whole record reproduces the state of the run that wrote it, with its definition.
+		whole := checkedText(t, label, text)
+		if !whole.State.Equal(final) || whole.Committed+1 != len(states) || whole.Uncommitted {
+			t.Fatalf("%s: replay differs from the run", label)
+		}
+		if whole.Definition == nil || EncodeHeader(whole.Definition, validated) != EncodeHeader(p, validated) ||
+			whole.Validated != validated {
+			t.Fatalf("%s: another header", label)
+		}
+		for _, v := range whole.State.Values() {
+			if !hasPayload(whole.Values, v) {
+				t.Fatalf("%s: a value without payload: %s", label, v)
+			}
+		}
+		// A commit needs the payload of each value its transition introduces, lists the engine
+		// builds included, and an op record carries payloads only for the values its transition
+		// introduces: neither an earlier record nor a later one may hold it. The header is line 1.
+		for i, step := range steps {
+			kept, lists := splitPayloads(step.Values, func(v Payload) bool { return !isList(v.Value) })
+			if len(lists) == 0 {
+				continue
+			}
+			with := func(j int, values []Payload) []Transition {
+				out := slices.Clone(steps)
+				out[i] = Transition{step.Op, kept}
+				out[j] = Transition{out[j].Op, append(slices.Clone(out[j].Values), values...)}
+				return out
+			}
+			stripped := with(i, nil)
+			head := EncodeHeader(p, validated) + "\n"
+			rejectedText(t, label+" list payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), head+written(stripped))
+			if _, _, err := RecordTransitions(p, &State{}, stripped, nil, 1); err == nil || !hasFragment(err.Error(), "missing payloads") {
+				t.Fatalf("%s: recorder without a list payload: %v", label, err)
+			}
+			var listValues []string
+			for _, v := range lists {
+				listValues = append(listValues, v.Value)
+			}
+			early := with(0, lists)
+			rejectedText(t, label+" early payload",
+				fmt.Sprintf("line 3: payloads for %s, which the transition does not introduce", leanList(listValues)),
+				head+written(early))
+			if _, _, err := RecordTransitions(p, &State{}, early, nil, 1); err == nil ||
+				!hasFragment(err.Error(), "which the transition does not introduce") {
+				t.Fatalf("%s: recorder with an early payload: %v", label, err)
+			}
+			if i+1 < len(steps) {
+				rejectedText(t, label+" later payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), head+written(with(i+1, lists)))
+			}
+			listCases++
+			break
+		}
+		// Every op survives its encoding, and every line is canonical.
+		for i, line := range strings.Split(text, "\n") {
+			if line == "" || i == 0 {
+				continue
+			}
+			r, err := DecodeRecord(line)
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			if EncodeRecord(r) != line || strings.ContainsRune(line, '\n') {
+				t.Fatalf("%s: record codec changed %s", label, line)
+			}
+			if !r.Commit {
+				op, err := DecodeOp(EncodeOp(r.Op))
+				if err != nil || EncodeOp(op) != EncodeOp(r.Op) {
+					t.Fatalf("%s: op codec: %v", label, err)
+				}
+			}
+		}
+		// A crash may cut the record anywhere, the header included; recovery keeps exactly the
+		// committed transitions, and knows the definition once the header is complete.
+		lines := strings.Split(text, "\n")
+		lines = lines[:len(lines)-1]
+		for cut := 0; cut <= len(lines); cut++ {
+			prefix := strings.Join(lines[:cut], "\n")
+			if cut > 0 {
+				prefix += "\n"
+			}
+			torn := prefix
+			if cut < len(lines) {
+				torn += half(lines[cut])
+			}
+			committed := max(cut-1, 0) / 2
+			for _, text := range []string{prefix, torn} {
+				c := checkedText(t, fmt.Sprintf("%s cut %d", label, cut), text)
+				if c.Committed != committed || !c.State.Equal(states[committed]) {
+					t.Fatalf("%s cut %d: wrong recovered state", label, cut)
+				}
+				if (c.Definition == nil) != (cut == 0) || c.Validated != (cut > 0 && validated) {
+					t.Fatalf("%s cut %d: definition %v, validated %t", label, cut, c.Definition, c.Validated)
+				}
+				if c.Uncommitted != ((cut > 0 && (cut-1)%2 == 1) || len(text) > len(prefix)) {
+					t.Fatalf("%s cut %d: uncommitted flag", label, cut)
+				}
+				if recovered, err := Recover(text, LoadHeader); err != nil || !recovered.Equal(states[committed]) {
+					t.Fatalf("%s cut %d: recover", label, cut)
+				}
+			}
+		}
+		// Corruption before the last commit is an error, not a torn tail.
+		if len(lines) >= 5 {
+			corrupt := append([]string(nil), lines...)
+			corrupt[2] = `{"seq":2`
+			rejectedText(t, label+" corrupt", "line 3", strings.Join(corrupt, "\n")+"\n")
+			reordered := append([]string{lines[0], lines[2], lines[1]}, lines[3:]...)
+			rejectedText(t, label+" reordered", "line 2: expected sequence 1", strings.Join(reordered, "\n")+"\n")
+		}
+	}
+	return listCases
 }
 
 func TestTraceRejections(t *testing.T) {
@@ -270,9 +336,12 @@ func TestTraceRejections(t *testing.T) {
 		t.Errorf("torn start: %+v", torn)
 	}
 	// The header comes first and only there, and its definition must load.
-	if c := checkedText(t, "header only", header(merge)); c.Definition == nil || c.Committed != 0 || c.Uncommitted ||
-		!c.State.Equal(&State{}) || c.Length != len(header(merge)) {
-		t.Errorf("header only: %+v", c)
+	for _, validated := range []bool{true, false} {
+		text := EncodeHeader(merge, validated) + "\n"
+		if c := checkedText(t, "header only", text); c.Definition == nil || c.Validated != validated || c.Committed != 0 ||
+			c.Uncommitted || !c.State.Equal(&State{}) || c.Length != len(text) {
+			t.Errorf("header only: %+v", c)
+		}
 	}
 	if c := checkedText(t, "torn header", header(merge)[:30]); c.Definition != nil || c.Committed != 0 || !c.Uncommitted ||
 		!c.State.Equal(&State{}) || c.Length != 0 {
@@ -341,35 +410,54 @@ func TestTraceRejections(t *testing.T) {
 		if c.label == "rejected op" || c.label == "an op before the commit" {
 			p = merge
 		}
-		if _, err := Check(header(p)+c.text, loadHeader); err == nil || err.Error() != c.want {
+		if _, err := Check(header(p)+c.text, LoadHeader); err == nil || err.Error() != c.want {
 			t.Errorf("%s: got %v, want %q", c.label, err, c.want)
 		}
 	}
-	// The header is line 1, and its definition is read like a definition file.
+	// The header is line 1: it needs the definition, then the flag, a boolean. The definition of a
+	// header marked as validated is read like a definition file; that of a header marked as unchecked
+	// is only decoded, which still rejects what the definition file cannot express.
 	headers := []struct {
 		label, text, want string
 	}{
 		{"empty first line", "\n", "line 1: unexpected end of input at offset 0"},
 		{"not an object", "[]\n", "line 1: header: expected an object"},
 		{"without definition", "{}\n", "line 1: header: missing field definition"},
-		{"unknown field", "{\"definition\":{},\"seq\":0}\n", "line 1: header: unknown field seq"},
-		{"undecodable definition", "{\"definition\":{}}\n", "line 1: definition: missing field main"},
-		{"invalid definition", "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n", "line 1: unknown main workflow w"},
+		{"without definition, with the flag", "{\"validated\":true}\n", "line 1: header: missing field definition"},
+		{"without the flag", "{\"definition\":{}}\n", "line 1: header: missing field validated"},
+		{"flag string", "{\"definition\":{},\"validated\":\"true\"}\n", "line 1: header.validated: expected a boolean"},
+		{"flag null", "{\"definition\":{},\"validated\":null}\n", "line 1: header.validated: expected a boolean"},
+		{"flag number", "{\"definition\":{},\"validated\":1}\n", "line 1: header.validated: expected a boolean"},
+		{"unknown field", "{\"definition\":{},\"validated\":true,\"seq\":0}\n", "line 1: header: unknown field seq"},
+		{"undecodable definition", "{\"definition\":{},\"validated\":true}\n", "line 1: definition: missing field main"},
+		{"undecodable unchecked definition", "{\"definition\":{},\"validated\":false}\n", "line 1: definition: missing field main"},
+		{"invalid definition", "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":true}\n",
+			"line 1: unknown main workflow w"},
+		{"empty name", "{\"definition\":{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[{\"name\":\"\"}]}]},\"validated\":false}\n",
+			"line 1: workflows.w.placements.name: empty string"},
 		{"invalid UTF-8", "{\"definition\":\"\xff\"}\n", "line 1: invalid UTF-8"},
 		{"repeated definition key", "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n",
 			`line 1: duplicate key "main" at offset 32`},
 	}
 	for _, c := range headers {
-		if _, err := Check(c.text, loadHeader); err == nil || err.Error() != c.want {
+		if _, err := Check(c.text, LoadHeader); err == nil || err.Error() != c.want {
 			t.Errorf("header %s: got %v, want %q", c.label, err, c.want)
 		}
 	}
-	// Check gives the definition of the header to load as its canonical JSON, whatever the formatting.
+	unchecked := checkedText(t, "unchecked invalid definition", "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n")
+	if unchecked.Definition == nil || unchecked.Definition.Main != "w" || unchecked.Validated || unchecked.Committed != 0 {
+		t.Errorf("unchecked invalid definition: %+v", unchecked)
+	}
+	// Check gives the definition of the header to load as its canonical JSON, whatever the formatting,
+	// with the flag, and whatever the order of the fields.
 	var given string
-	if _, err := Check("{ \"definition\" : {\"workflows\":[], \"main\":\"w\", \"limit\":123456789012345678901234567890} }\n",
-		func(definition []byte) (*Definition, error) { given = string(definition); return merge, nil }); err != nil ||
-		given != `{"workflows":[],"main":"w","limit":123456789012345678901234567890}` {
-		t.Errorf("the definition given to load: %v %s", err, given)
+	var flag bool
+	if _, err := Check("{ \"validated\" : false, \"definition\" : {\"workflows\":[], \"main\":\"w\", \"limit\":123456789012345678901234567890} }\n",
+		func(definition []byte, validated bool) (*Definition, error) {
+			given, flag = string(definition), validated
+			return merge, nil
+		}); err != nil || given != `{"workflows":[],"main":"w","limit":123456789012345678901234567890}` || flag {
+		t.Errorf("the definition given to load: %v %s %t", err, given, flag)
 	}
 }
 
@@ -377,20 +465,20 @@ func TestTornTail(t *testing.T) {
 	merge := load(t, "merge")
 	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
 	// A crash inside a multi-byte character leaves invalid UTF-8 in the partial last line only.
-	c, err := Check(header(merge)+start+"{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3\x81", loadHeader)
+	c, err := Check(header(merge)+start+"{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3\x81", LoadHeader)
 	if err != nil || c.Committed != 1 || !c.Uncommitted {
 		t.Errorf("torn tail: %+v %v", c, err)
 	}
-	c, err = Check("{\"definition\":{\"main\":\"\xe3\x81", loadHeader)
+	c, err = Check("{\"definition\":{\"main\":\"\xe3\x81", LoadHeader)
 	if err != nil || c.Definition != nil || !c.Uncommitted {
 		t.Errorf("torn header: %+v %v", c, err)
 	}
 	// No object of a line may repeat a key, at any depth, the definition of the header included.
-	_, err = Check(header(merge)+"{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n", loadHeader)
+	_, err = Check(header(merge)+"{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n", LoadHeader)
 	if err == nil || err.Error() != `line 2: duplicate key "seq" at offset 14` {
 		t.Errorf("duplicate field: %v", err)
 	}
-	_, err = Check("{\"definition\":{\"main\":\"x\"},\"definition\":{}}\n", func([]byte) (*Definition, error) { return merge, nil })
+	_, err = Check("{\"definition\":{\"main\":\"x\"},\"definition\":{}}\n", func([]byte, bool) (*Definition, error) { return merge, nil })
 	if err == nil || err.Error() != `line 1: duplicate key "definition" at offset 39` {
 		t.Errorf("duplicate header field: %v", err)
 	}
@@ -541,7 +629,7 @@ func TestRecorder(t *testing.T) {
 		t.Fatalf("RecordTransitions: %v", err)
 	}
 	c := checked(t, "recorder", users, RecordsText(all))
-	if c.Definition == nil || EncodeHeader(c.Definition) != EncodeHeader(users) {
+	if c.Definition == nil || EncodeHeader(c.Definition, true) != EncodeHeader(users, true) || !c.Validated {
 		t.Errorf("check: definition %v", c.Definition)
 	}
 	if c.Committed != 2 || len(c.Values) != 1 || c.Values[0].Payload != `{"tenant":1}` {

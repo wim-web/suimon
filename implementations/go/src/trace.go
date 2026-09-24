@@ -9,9 +9,9 @@ import (
 )
 
 // The execution record of Suimon/Trace.lean (schema/trace.schema.json): one line per record. The
-// first line is the header, which holds the definition of the execution. Each accepted transition is
-// then an op record followed by a commit record; only committed transitions are part of the record
-// (§12.1).
+// first line is the header, which holds the definition of the execution and whether the execution
+// was started with validation of it. Each accepted transition is then an op record followed by a
+// commit record; only committed transitions are part of the record (§12.1).
 
 // Payload is the serialized payload of a value, keyed by the value's identity.
 type Payload struct {
@@ -462,52 +462,89 @@ func DecodeRecord(line string) (Record, error) {
 	return recordOfWire(w)
 }
 
-// The header holds the definition in its canonical form (definitionWire). It has no seq, so no other
-// line reads as a header, and it reads as no other line.
+// The header holds the definition in its canonical form (definitionWire), and whether the execution
+// was started with validation of it: by NewEngine (run), or by NewUncheckedEngine (runUnchecked,
+// §14). It has no seq, so no other line reads as a header, and it reads as no other line.
 
-func headerWire(definition wire) wire { return wireObj(field("definition", definition)) }
+// headerWire keeps the fields in a fixed order: definition, validated.
+func headerWire(definition wire, validated bool) wire {
+	return wireObj(field("definition", definition), field("validated", wireBool(validated)))
+}
 
-func headerOfWire(w wire) (wire, error) {
+func headerOfWire(w wire) (definition wire, validated bool, err error) {
 	if w.kind != wireObjKind {
-		return wire{}, errors.New("header: expected an object")
+		return wire{}, false, errors.New("header: expected an object")
 	}
-	if err := strictFields(w, []string{"definition"}, "header"); err != nil {
-		return wire{}, err
+	if err := strictFields(w, []string{"definition", "validated"}, "header"); err != nil {
+		return wire{}, false, err
 	}
 	definition, ok := w.lookup("definition")
 	if !ok {
-		return wire{}, errors.New("header: missing field definition")
+		return wire{}, false, errors.New("header: missing field definition")
 	}
-	return definition, nil
+	if validated, err = getBool(w, "validated", "header"); err != nil {
+		return wire{}, false, err
+	}
+	return definition, validated, nil
 }
 
 // EncodeHeader is the header of an execution record of p, its first line, without the newline: the
-// definition in its canonical form, so that equal definitions are recorded alike (§12.1).
-func EncodeHeader(p *Definition) string { return headerWire(definitionWire(p)).render() }
+// definition in its canonical form, so that equal definitions are recorded alike, and whether the
+// execution was started with validation of p (§12.1).
+func EncodeHeader(p *Definition, validated bool) string {
+	return headerWire(definitionWire(p), validated).render()
+}
 
-// readHeader reads the header line and has load read its definition.
-func readHeader(line string, load func(definition []byte) (*Definition, error)) (*Definition, error) {
+// A HeaderLoader reads the definition that the header of a record holds, given as JSON text, with
+// the flag of the header: whether the execution was started with validation of the definition. It
+// returns the definition to replay the record against, or an error.
+type HeaderLoader func(definition []byte, validated bool) (*Definition, error)
+
+// LoadHeader reads the definition of a header by its flag, as suimon check does (Lean
+// Trace.Header.load, §12.1). The definition of an execution that was started with validation is
+// decoded and validated, like a definition file, so that a record that says so is refused when its
+// definition fails validation. The definition of an execution that was started without validation
+// is decoded only, so that the record replays against the definition that ran, valid or not;
+// ParseDefinition still rejects what the definition file cannot express.
+func LoadHeader(definition []byte, validated bool) (*Definition, error) {
+	p, err := ParseDefinition(definition)
+	if err != nil {
+		return nil, err
+	}
+	if validated {
+		if err := p.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
+}
+
+// readHeader reads the header line and has load read its definition; it returns the flag too.
+func readHeader(line string, load HeaderLoader) (*Definition, bool, error) {
 	if !utf8.ValidString(line) {
-		return nil, errors.New("invalid UTF-8")
+		return nil, false, errors.New("invalid UTF-8")
 	}
 	w, err := parseWire(line)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	definition, err := headerOfWire(w)
+	definition, validated, err := headerOfWire(w)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return load([]byte(definition.render()))
+	p, err := load([]byte(definition.render()), validated)
+	return p, validated, err
 }
 
-// sameDefinition is a load function for Check that accepts only a record of p: the definition of the
-// header must read back to the canonical form of p, and the record replays against p itself. Lean's
-// Trace.resume replays against the definition of the header, which is p itself when p is valid
-// (resume_eq_ok_of_validate), so the two replay alike.
-func sameDefinition(p *Definition) func(definition []byte) (*Definition, error) {
+// sameDefinition is a HeaderLoader for Check that accepts only a record of p: the definition of the
+// header must read back to the canonical form of p, and the record replays against p itself. When
+// the header says that the execution was started with validation, p must pass validation too, or
+// the error wraps ErrInvalidDefinition and the validation error (§12.1). Lean's Trace.resume replays
+// against the definition of the header, which is p itself when the definition file can express p
+// (resume_eq_ok_of_expressible), so the two replay alike.
+func sameDefinition(p *Definition) HeaderLoader {
 	canonical := definitionWire(p).render()
-	return func(definition []byte) (*Definition, error) {
+	return func(definition []byte, validated bool) (*Definition, error) {
 		q, err := ParseDefinition(definition)
 		if err != nil {
 			return nil, err
@@ -515,16 +552,34 @@ func sameDefinition(p *Definition) func(definition []byte) (*Definition, error) 
 		if definitionWire(q).render() != canonical {
 			return nil, ErrDefinitionMismatch
 		}
+		if validated {
+			if err := p.Validate(); err != nil {
+				return nil, &invalidDefinitionError{err}
+			}
+		}
 		return p, nil
 	}
 }
+
+// invalidDefinitionError is the error of Resume for a journal marked validated whose definition fails
+// validation: it wraps ErrInvalidDefinition and the validation error.
+type invalidDefinitionError struct{ err error }
+
+func (e *invalidDefinitionError) Error() string {
+	return ErrInvalidDefinition.Error() + ": " + e.err.Error()
+}
+
+func (e *invalidDefinitionError) Unwrap() []error { return []error{ErrInvalidDefinition, e.err} }
 
 // Checked is what the committed transitions of a record establish.
 type Checked struct {
 	// Definition is the definition load gave for the header, which the record replays against; it is
 	// nil when the record has no complete line.
 	Definition *Definition
-	State      *State
+	// Validated is the flag of the header: whether the execution was started with validation of its
+	// definition (§12.1). It is false when the record has no complete line.
+	Validated bool
+	State     *State
 	// Committed is the number of committed transitions.
 	Committed int
 	// Uncommitted reports an operation or a partial line after the last commit, which recovery
@@ -659,21 +714,21 @@ func replayRecord(r *replay, line string) error {
 }
 
 // Check replays the committed transitions of a record. The first line is the header: load reads the
-// definition it holds, given as JSON text, and returns the definition to replay the other lines
-// against, or an error, which Check reports for line 1. Line numbers count the header. A crash may
-// leave an op without its commit, and a partial last line, which may be the header and may end inside
-// a UTF-8 sequence; both are reported as uncommitted and ignored. Anything else that is malformed,
-// out of order or rejected by Step is an error.
+// definition it holds, given as JSON text, with the flag of the header, and returns the definition to
+// replay the other lines against, or an error, which Check reports for line 1. Line numbers count the
+// header. A crash may leave an op without its commit, and a partial last line, which may be the
+// header and may end inside a UTF-8 sequence; both are reported as uncommitted and ignored. Anything
+// else that is malformed, out of order or rejected by Step is an error.
 //
-// A reader of a record loads the definition with ParseDefinition and Validate, as the CLI does;
-// Resume accepts only the definition of its engine.
-func Check(text string, load func(definition []byte) (*Definition, error)) (Checked, error) {
+// A reader of a record loads the definition with LoadHeader, as the CLI does; Resume accepts only the
+// definition of its engine.
+func Check(text string, load HeaderLoader) (Checked, error) {
 	lines := strings.Split(text, "\n")
 	complete, tail := lines[:len(lines)-1], lines[len(lines)-1]
 	if len(complete) == 0 {
 		return Checked{State: &State{}, Uncommitted: tail != ""}, nil
 	}
-	p, err := readHeader(complete[0], load)
+	p, validated, err := readHeader(complete[0], load)
 	if err != nil {
 		return Checked{}, fmt.Errorf("line 1: %w", err)
 	}
@@ -689,13 +744,13 @@ func Check(text string, load func(definition []byte) (*Definition, error)) (Chec
 			length = offset
 		}
 	}
-	return Checked{Definition: p, State: r.machine.s, Committed: r.committed, Uncommitted: r.pending != nil || tail != "",
-		Values: r.values, Length: length}, nil
+	return Checked{Definition: p, Validated: validated, State: r.machine.s, Committed: r.committed,
+		Uncommitted: r.pending != nil || tail != "", Values: r.values, Length: length}, nil
 }
 
 // Recover is the state a crashed run resumes from: the state after the committed transitions. load
 // is as for Check.
-func Recover(text string, load func(definition []byte) (*Definition, error)) (*State, error) {
+func Recover(text string, load HeaderLoader) (*State, error) {
 	c, err := Check(text, load)
 	if err != nil {
 		return nil, err
@@ -797,7 +852,7 @@ func NewRecorder(p *Definition) *Recorder {
 // NewRecorderFrom continues recording after the committed transitions of c, the result of Check
 // on a record of p: the next records follow them, and their payloads count as known. The text
 // after c.Length, if any, must be discarded before appending the new records, which follow the
-// header; a record without a complete line needs the header first (EncodeHeader).
+// header as it was written; a record without a complete line needs the header first (EncodeHeader).
 func NewRecorderFrom(p *Definition, c Checked) *Recorder {
 	r := &Recorder{definition: p, state: c.State, seen: map[string]struct{}{}, known: map[string]bool{},
 		seq: 2*c.Committed + 1}

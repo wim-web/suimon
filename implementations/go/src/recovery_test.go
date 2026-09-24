@@ -251,7 +251,7 @@ func TestRuntimeResumeErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	header := EncodeHeader(p) + "\n"
+	header := EncodeHeader(p, true) + "\n"
 	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n"
 	for label, text := range map[string]string{
 		"empty":       "",
@@ -277,7 +277,7 @@ func TestRuntimeResumeErrors(t *testing.T) {
 	_, journal, _ := runOnce(t, scenarioNamed(t, "merge"))
 	other := load(t, "merge")
 	setPolicy("dashboard", "archive", PolicyStop)(other)
-	if EncodeHeader(other) == EncodeHeader(p) {
+	if EncodeHeader(other, true) == EncodeHeader(p, true) {
 		t.Fatal("the definitions are the same")
 	}
 	otherEngine, err := NewEngine(other, mustRegistry(t, mergeBindings(mergeKnobs{})...))
@@ -311,7 +311,8 @@ func TestRuntimeResumeErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reformatted := "{ \"definition\" : " + strings.ReplaceAll(string(sorted), "\n", " ") + " }\n" + journal[len(header):]
+	reformatted := "{ \"validated\" : true, \"definition\" : " + strings.ReplaceAll(string(sorted), "\n", " ") + " }\n" +
+		journal[len(header):]
 	if reformatted == journal || strings.HasPrefix(reformatted, header) {
 		t.Fatal("the header was not reformatted")
 	}
@@ -389,5 +390,130 @@ func TestFileJournal(t *testing.T) {
 	}
 	if _, err := OpenJournal(filepath.Join(t.TempDir(), "missing.jsonl")); err == nil {
 		t.Error("OpenJournal needs an existing file")
+	}
+}
+
+// withFlag is journal with the flag of its header, the last field, set to validated.
+func withFlag(t *testing.T, journal string, validated bool) string {
+	t.Helper()
+	header, rest, ok := strings.Cut(journal, "\n")
+	flag := fmt.Sprintf(`,"validated":%t}`, !validated)
+	if !ok || !strings.HasSuffix(header, flag) {
+		t.Fatalf("the journal has no header with the flag %t: %.80s", !validated, header)
+	}
+	return strings.TrimSuffix(header, flag) + fmt.Sprintf(`,"validated":%t}`, validated) + "\n" + rest
+}
+
+// runUnchecked runs p with an engine made by NewUncheckedEngine and returns its journal and report.
+func runUnchecked(t *testing.T, p *Definition, bindings []Binding, input any) (*Engine, string, *Report) {
+	t.Helper()
+	e, err := NewUncheckedEngine(p, mustRegistry(t, bindings...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &memJournal{}
+	x, err := e.Start(context.Background(), input, WithJournal(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := wait(t, x)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	verifyJournalAs(t, p, false, j.text(), r)
+	return e, j.text(), r
+}
+
+// Resume reads the flag of the header (§12.1). A journal recorded without validation resumes without
+// it, whichever constructor made the engine, and keeps its header, flag included; one recorded with
+// validation resumes only if the engine's definition passes validation, and otherwise Resume
+// returns an error that wraps ErrInvalidDefinition and the validation error, and leaves the journal
+// as it is.
+func TestRuntimeResumeValidation(t *testing.T) {
+	invalid := withoutOutputs(load(t, "users"))
+	const invalidError = "users.perUser: at least one task must be in the output"
+	e, journal, want := runUnchecked(t, invalid, usersBindings(usersKnobs{}), tenant{Users: 2})
+	// Cut anywhere after the start, the journal of an invalid definition resumes without validation,
+	// to the report of the uncut run when no call was running at the cut.
+	compared := 0
+	for _, cut := range cutPoints(journal) {
+		prefix := journal[:cut]
+		c, err := Check(prefix, sameDefinition(invalid))
+		if err != nil {
+			t.Fatalf("cut %d: %v", cut, err)
+		}
+		if c.Committed == 0 {
+			continue
+		}
+		resumed := newMemJournal(prefix)
+		x, err := e.Resume(context.Background(), resumed)
+		if err != nil {
+			t.Fatalf("cut %d: %v", cut, err)
+		}
+		r, err := wait(t, x)
+		if err != nil {
+			t.Fatalf("cut %d: Wait: %v", cut, err)
+		}
+		verifyJournalAs(t, invalid, false, resumed.text(), r)
+		if !hasRunningCall(c.State) {
+			if diff := compareReports(want, r); diff != "" {
+				t.Errorf("cut %d: %s", cut, diff)
+			}
+			compared++
+		}
+	}
+	if compared == 0 {
+		t.Error("no cut point without a running call")
+	}
+	// Marked as validated, the same journal is refused, cut or not.
+	for _, text := range []string{withFlag(t, journal, true), withFlag(t, journal[:len(journal)/2], true)} {
+		j := newMemJournal(text)
+		_, err := e.Resume(context.Background(), j)
+		if !errors.Is(err, ErrInvalidDefinition) || err.Error() != ErrInvalidDefinition.Error()+": "+invalidError {
+			t.Errorf("a validated journal of an invalid definition: %v", err)
+		}
+		if j.text() != text {
+			t.Error("the refused journal changed")
+		}
+	}
+	if _, err := Check(withFlag(t, journal, true), LoadHeader); err == nil || err.Error() != "line 1: "+invalidError {
+		t.Errorf("a reader of the validated journal: %v", err)
+	}
+	// A valid definition: an engine made by NewEngine resumes a journal recorded without validation and
+	// keeps its flag, and an engine made by NewUncheckedEngine resumes one recorded with validation.
+	users := load(t, "users")
+	checked, err := NewEngine(users, mustRegistry(t, usersBindings(usersKnobs{})...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchecked, unrecorded, want := runUnchecked(t, users, usersBindings(usersKnobs{}), tenant{Users: 2})
+	recorded := withFlag(t, unrecorded, true)
+	for _, c := range []struct {
+		label     string
+		engine    *Engine
+		journal   string
+		validated bool
+	}{
+		{"NewEngine, unchecked journal", checked, unrecorded, false},
+		{"NewUncheckedEngine, validated journal", unchecked, recorded, true},
+		{"NewEngine, validated journal", checked, recorded, true},
+	} {
+		for _, cut := range []int{len(c.journal) / 3, len(c.journal) / 2, len(c.journal)} {
+			resumed := newMemJournal(c.journal[:cut])
+			x, err := c.engine.Resume(context.Background(), resumed)
+			if err != nil {
+				t.Fatalf("%s cut %d: %v", c.label, cut, err)
+			}
+			r, err := wait(t, x)
+			if err != nil {
+				t.Fatalf("%s cut %d: Wait: %v", c.label, cut, err)
+			}
+			verifyJournalAs(t, users, c.validated, resumed.text(), r)
+			if cut == len(c.journal) {
+				if diff := compareReports(want, r); diff != "" {
+					t.Errorf("%s: %s", c.label, diff)
+				}
+			}
+		}
 	}
 }

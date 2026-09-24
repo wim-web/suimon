@@ -554,6 +554,12 @@ func TestConformanceTorn(t *testing.T) {
 			check(baseName(path)+" reordered", lines[0]+lines[2]+lines[1]+strings.Join(lines[3:], ""))
 			check(baseName(path)+" commit twice", strings.Join(lines[:3], "")+strings.Replace(lines[2], "2", "3", 1))
 			check(baseName(path)+" no header", strings.Join(lines[1:], ""))
+			// The same records under the header of an execution started without validation.
+			if !strings.HasSuffix(lines[0], `,"validated":true}`+"\n") {
+				t.Fatalf("%s: the header has no flag: %s", baseName(path), lines[0])
+			}
+			unchecked := strings.TrimSuffix(lines[0], `,"validated":true}`+"\n") + `,"validated":false}` + "\n"
+			check(baseName(path)+" unchecked", unchecked+strings.Join(lines[1:], ""))
 			check(baseName(path)+" header twice", lines[0]+strings.Join(lines, ""))
 		}
 	}
@@ -621,31 +627,52 @@ var recordTexts = map[string]string{
 	"header again":          "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"definition\":{\"main\":\"x\"}}\n",
 }
 
-// headerTexts are whole records whose header is missing, torn, malformed, or holds a definition that
-// does not decode or validate, or is written in another form; both checkers must give the same
-// output for each.
+// headerTexts are whole records whose header is missing, torn, malformed, without its flag or with
+// another value, or holds a definition that does not decode, or does not validate while the flag says
+// the execution was started with validation, or is written in another form; both checkers must give
+// the same output for each.
 var headerTexts = map[string]string{
-	"empty":                "",
-	"torn header":          "{\"definition\":{\"main\":\"da",
-	"torn character":       "{\"definition\":{\"main\":\"\xe3\x81",
-	"no header":            "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"empty first line":     "\n",
-	"not an object":        "[]\n",
-	"without definition":   "{}\n",
-	"unknown field":        "{\"definition\":{},\"seq\":0}\n",
-	"null definition":      "{\"definition\":null}\n",
-	"empty definition":     "{\"definition\":{}}\n",
-	"invalid definition":   "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n",
-	"escaped name":         "{\"definition\":{\"main\":\"a\\nb\\u0001\\u00e9\\ud83d\\ude00\",\"workflows\":[]}}\n",
-	"duplicate definition": "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"definition\":{}}\n",
-	"duplicate main":       "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n",
-	"duplicate nested key": "{\"definition\":" + strings.TrimSuffix(limitDefinition("2"), "}]}]}") + ",\"policy\":\"stop\"}]}]}}\n" +
+	"empty":                 "",
+	"torn header":           "{\"definition\":{\"main\":\"da",
+	"torn character":        "{\"definition\":{\"main\":\"\xe3\x81",
+	"no header":             "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"empty first line":      "\n",
+	"not an object":         "[]\n",
+	"without definition":    "{}\n",
+	"only the flag":         "{\"validated\":true}\n",
+	"unknown field":         "{\"definition\":{},\"seq\":0}\n",
+	"unknown field, flag":   "{\"definition\":{},\"validated\":false,\"seq\":0}\n",
+	"null definition":       "{\"definition\":null,\"validated\":true}\n",
+	"without the flag":      "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n",
+	"flag string":           "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":\"true\"}\n",
+	"flag null":             "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":null}\n",
+	"flag number":           "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":0}\n",
+	"flag object":           "{\"definition\":{},\"validated\":{}}\n",
+	"empty definition":      "{\"definition\":{},\"validated\":true}\n",
+	"empty unchecked":       "{\"definition\":{},\"validated\":false}\n",
+	"invalid definition":    "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":true}\n",
+	"unchecked invalid":     "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n",
+	"unchecked invalid run": "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"flag first":            "{\"validated\":false,\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n",
+	"escaped name":          "{\"definition\":{\"main\":\"a\\nb\\u0001\\u00e9\\ud83d\\ude00\",\"workflows\":[]},\"validated\":true}\n",
+	"unchecked escaped":     "{\"definition\":{\"main\":\"a\\nb\\u0001\\u00e9\\ud83d\\ude00\",\"workflows\":[]},\"validated\":false}\n",
+	"duplicate definition":  "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"definition\":{}}\n",
+	"duplicate flag":        "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":true,\"validated\":false}\n",
+	"duplicate main":        "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n",
+	"duplicate nested key": "{\"definition\":" + strings.TrimSuffix(limitDefinition("2"), "}]}]}") + ",\"policy\":\"stop\"}]}]},\"validated\":true}\n" +
 		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"duplicate escaped key":  "{\"definition\":{\"main\":\"w\",\"workflows\":[],\"m\\u0061in\":\"w\"}}\n",
-	"unknown definition key": "{\"definition\":{\"z\":1,\"main\":\"w\",\"b\":2}}\n",
-	"huge limit": "{\"definition\":" + limitDefinition("99999999999999999999999") + "}\n" +
+	"duplicate escaped key":  "{\"definition\":{\"main\":\"w\",\"workflows\":[],\"m\\u0061in\":\"w\"},\"validated\":true}\n",
+	"unknown definition key": "{\"definition\":{\"z\":1,\"main\":\"w\",\"b\":2},\"validated\":false}\n",
+	"huge limit": "{\"definition\":" + limitDefinition("99999999999999999999999") + ",\"validated\":true}\n" +
 		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"spaced header": " { \"definition\" : " + limitDefinition("2") + " } \n" +
+	"unchecked huge limit": "{\"definition\":" + limitDefinition("99999999999999999999999") + ",\"validated\":false}\n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"unchecked empty name": "{\"definition\":{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[{\"name\":\"\"}]}]},\"validated\":false}\n",
+	"unchecked zero limit": "{\"definition\":" + limitDefinition("0") + ",\"validated\":false}\n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"validated zero limit": "{\"definition\":" + limitDefinition("0") + ",\"validated\":true}\n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"spaced header": " { \"definition\" : " + limitDefinition("2") + " , \"validated\" : true } \n" +
 		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
 }
 
@@ -687,6 +714,82 @@ func TestConformanceRecords(t *testing.T) {
 		lean := runLean(t, cli, args...)
 		t.Logf("%s: exit %d %s", label, lean.code, strings.TrimSpace(lean.stdout+lean.stderr))
 		sameResult(t, label, lean, runGo(args...))
+	}
+}
+
+// walkRecords are the records gen would write for a Go walk of p, a definition that validation need
+// not accept, without the header.
+func walkRecords(t *testing.T, p *suimon.Definition, seed uint64) string {
+	t.Helper()
+	_, ops := suimon.Walk(p, suimon.DefaultConfig(), seed, 10000)
+	recorder := suimon.NewRecorder(p)
+	var text strings.Builder
+	for _, op := range ops {
+		needs, err := recorder.Needs(op)
+		if err != nil {
+			t.Fatalf("%s: %v", suimon.EncodeOp(op), err)
+		}
+		values := make([]suimon.Payload, len(needs))
+		for i, v := range needs {
+			values[i] = suimon.Payload{Value: v, Payload: v}
+		}
+		records, err := recorder.Record(op, values)
+		if err != nil {
+			t.Fatalf("%s: %v", suimon.EncodeOp(op), err)
+		}
+		text.WriteString(suimon.RecordsText(records))
+	}
+	return text.String()
+}
+
+// Records of executions started without validation check without validation in both checkers, to
+// the same summary and state, whether validation accepts their definition or not; marked as
+// validated, the records of definitions that validation rejects are refused by both with the error of
+// validation (§12.1). The records are those of Go walks of the definitions of the tests and of the
+// mutations, which validation rejects.
+func TestConformanceUnchecked(t *testing.T) {
+	cli := leanCLI(t)
+	dir := t.TempDir()
+	type source struct {
+		data  []byte
+		seeds []uint64
+	}
+	sources := map[string]source{}
+	for _, path := range conformanceDefinitions(t) {
+		sources[baseName(path)] = source{mustRead(t, path), []uint64{1, 2, 3, 7}}
+	}
+	for label, mutate := range mutations() {
+		data, err := json.Marshal(mutate(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources["mutation "+label] = source{data, []uint64{1, 3, 7}}
+	}
+	for label, src := range sources {
+		p, err := suimon.ParseDefinition(src.data)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		for _, seed := range src.seeds {
+			records := walkRecords(t, p, seed)
+			for _, validated := range []bool{false, true} {
+				trace := filepath.Join(dir, fmt.Sprintf("%s-%d-%t.jsonl", strings.ReplaceAll(label, " ", "-"), seed, validated))
+				if err := os.WriteFile(trace, []byte(suimon.EncodeHeader(p, validated)+"\n"+records), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				for _, args := range [][]string{{"check", trace}, {"check", trace, "--state"}} {
+					lean := runLean(t, cli, args...)
+					if !validated && lean.code != 0 {
+						t.Errorf("%s seed %d: Lean refuses the unchecked record: %s", label, seed, lean.stderr)
+					}
+					if len(args) == 2 {
+						t.Logf("%s seed %d validated %t: exit %d %s", label, seed, validated, lean.code,
+							strings.TrimSpace(lean.stdout+lean.stderr))
+					}
+					sameResult(t, fmt.Sprintf("%s seed %d validated %t %v", label, seed, validated, args[2:]), lean, runGo(args...))
+				}
+			}
+		}
 	}
 }
 

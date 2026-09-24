@@ -108,8 +108,10 @@ func TestServerRun(t *testing.T) {
 	if p.Scenario != "branch" || p.Offset != 0 || len(p.Records) == 0 || len(p.Spans) != 2 {
 		t.Errorf("unexpected progress: %+v", p)
 	}
-	// The record starts with the header, which holds the definition of the scenario.
-	if !strings.HasPrefix(p.Records[0], `{"definition":{"main":"branch",`) || !strings.HasPrefix(p.Records[1], `{"seq":1,"op":{"type":"start"`) {
+	// The record starts with the header, which holds the definition of the scenario, validated by
+	// NewEngine.
+	if !strings.HasPrefix(p.Records[0], `{"definition":{"main":"branch",`) || !strings.HasSuffix(p.Records[0], `,"validated":true}`) ||
+		!strings.HasPrefix(p.Records[1], `{"seq":1,"op":{"type":"start"`) {
 		t.Errorf("first records %s %s", p.Records[0], p.Records[1])
 	}
 	if state := decode[map[string]any](t, p.State); state["status"] != "succeeded" {

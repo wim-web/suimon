@@ -232,7 +232,7 @@ func expectNoOutput(t *testing.T, r *Report, name string) {
 // replays against the definition of its header.
 func resultPayloads(t *testing.T, journal, placement string) []string {
 	t.Helper()
-	c, err := Check(journal, loadHeader)
+	c, err := Check(journal, LoadHeader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,11 +290,18 @@ func opsOf(t *testing.T, journal string) []Op {
 // firstOp is the index of the first operation that matches, or -1.
 func firstOp(ops []Op, match func(Op) bool) int { return slices.IndexFunc(ops, match) }
 
-// verifyJournal checks a journal against the report of its run: it records p, it replays completely
-// to the final state, and it is what the engine would write for its operations.
+// verifyJournal checks a journal of an engine made by NewEngine against the report of its run: it
+// records p, validated, it replays completely to the final state, and it is what the engine would
+// write for its operations.
 func verifyJournal(t *testing.T, p *Definition, journal string, r *Report) {
 	t.Helper()
-	if !strings.HasPrefix(journal, EncodeHeader(p)+"\n") {
+	verifyJournalAs(t, p, true, journal, r)
+}
+
+// verifyJournalAs is verifyJournal for a journal whose header records the flag validated.
+func verifyJournalAs(t *testing.T, p *Definition, validated bool, journal string, r *Report) {
+	t.Helper()
+	if !strings.HasPrefix(journal, EncodeHeader(p, validated)+"\n") {
 		t.Errorf("the journal does not start with the header of its definition")
 	}
 	c, err := Check(journal, sameDefinition(p))
@@ -1238,7 +1245,7 @@ func TestRuntimeJournalHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := EncodeHeader(p) + "\n{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"; !strings.HasPrefix(j.first, want) {
+	if want := EncodeHeader(p, true) + "\n{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"; !strings.HasPrefix(j.first, want) {
 		t.Errorf("the first sync made durable %q", j.first)
 	}
 	verifyJournal(t, p, j.text(), r)
@@ -1258,5 +1265,63 @@ func TestRuntimeNoLeaks(t *testing.T) {
 			t.Fatalf("%d goroutines, %d before:\n%s", runtime.NumGoroutine(), baseline, buf[:runtime.Stack(buf, true)])
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// An engine made by NewUncheckedEngine runs a definition that validation rejects, as far as Step
+// allows, and its journal records that the execution was started without validation (§12.1): a
+// reader checks it without validation, to the state of the report, and refuses it with the error of
+// validation when it is marked as validated.
+func TestRuntimeUnchecked(t *testing.T) {
+	// A concurrency without a task in the output runs its tasks but has no result: it settles as
+	// skipped, and so does the waitStream after it.
+	p := withoutOutputs(load(t, "users"))
+	if _, err := NewEngine(p, mustRegistry(t, usersBindings(usersKnobs{})...)); err == nil ||
+		err.Error() != "users.perUser: at least one task must be in the output" {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	_, journal, r := runUnchecked(t, p, usersBindings(usersKnobs{}), tenant{Users: 3})
+	expectStatusOf(t, r, StatusSkipped)
+	if len(r.State.TaskResults) != 6 {
+		t.Errorf("%d task results, want those of 2 tasks for 3 users", len(r.State.TaskResults))
+	}
+	expectEndpoint(t, r, "all", OutcomeSkipped)
+	c, err := Check(journal, LoadHeader)
+	if err != nil || c.Validated || !c.State.Equal(r.State) {
+		t.Errorf("a reader of the journal: %v", err)
+	}
+	if _, err := Check(withFlag(t, journal, true), LoadHeader); err == nil ||
+		err.Error() != "line 1: users.perUser: at least one task must be in the output" {
+		t.Errorf("a reader of the journal marked as validated: %v", err)
+	}
+	// The model gives a Merge without input connections no kind, so it never settles and the
+	// workflow cannot conclude: Wait returns ErrStuck once everything else has ended. The journal holds
+	// what was accepted, and a reader checks it.
+	merge := withoutInputs(load(t, "merge"), "widgets")
+	e, err := NewUncheckedEngine(merge, mustRegistry(t, mergeBindings(mergeKnobs{})...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &memJournal{}
+	x, err := e.Start(context.Background(), nil, WithJournal(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wait(t, x); !errors.Is(err, ErrStuck) {
+		t.Fatalf("Wait: %v", err)
+	}
+	c, err = Check(j.text(), LoadHeader)
+	if err != nil || c.Validated || c.Uncommitted || c.State.Status != StatusRunning {
+		t.Fatalf("a reader of the journal: %+v %v", c, err)
+	}
+	for _, name := range []string{"sales", "stock", "archive", "notify"} {
+		if _, ok := c.State.view().settledOf(Path{}, name); !ok {
+			t.Errorf("%s did not settle", name)
+		}
+	}
+	for _, name := range []string{"widgets", "page"} {
+		if _, ok := c.State.view().settledOf(Path{}, name); ok {
+			t.Errorf("%s settled", name)
+		}
 	}
 }

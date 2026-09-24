@@ -27,6 +27,11 @@ var (
 	// its header records does not have the canonical form of the engine's (§12.1). The Go functions
 	// of the registry are not part of the definition and are not compared.
 	ErrDefinitionMismatch = errors.New("suimon: the journal records another definition")
+	// ErrInvalidDefinition is wrapped by the error Resume returns for a journal whose header records
+	// that the execution was started with validation, when the engine's definition, which has the
+	// canonical form of the recorded one, fails validation (§12.1). The error wraps the validation
+	// error too, and its message ends with it. Only an engine made by NewUncheckedEngine can meet it.
+	ErrInvalidDefinition = errors.New("suimon: the journal records a validated execution, but the definition fails validation")
 	// ErrStuck is returned by Wait when no operation is possible and no call is running before the
 	// execution ends. A valid definition does not get there; a definition run without validation may.
 	ErrStuck = errors.New("suimon: the execution cannot progress")
@@ -59,7 +64,8 @@ type Engine struct {
 	derivation *derivation
 	registry   *Registry
 	plans      map[string]*workflowPlan
-	// header is the first line of the engine's journals, with its newline.
+	// header is the first line of the engine's journals, with its newline: the definition, and
+	// whether NewEngine validated it.
 	header string
 }
 
@@ -70,7 +76,8 @@ type Engine struct {
 //
 // Journals start with the definition (§12.1), so it must survive recording: read back from the
 // header, it must have the same canonical form. Only a definition built in code can fail this, such
-// as one with an empty id, which ParseDefinition rejects.
+// as one with an empty id, which ParseDefinition rejects. The header of its journals records that
+// the execution was started with validation.
 func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := p.representable(); err != nil {
 		return nil, err
@@ -79,24 +86,26 @@ func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := p.validate(d); err != nil {
 		return nil, err
 	}
-	return newEngine(p, d, r)
+	return newEngine(p, d, r, true)
 }
 
 // NewUncheckedEngine is NewEngine without validating the definition (runUnchecked, §14). The engine
 // still records, applies the policies, timeouts and limits, and checks each operation with Step,
 // but for a definition that validation would reject nothing guarantees that the execution ends: Wait
 // may return ErrStuck. It still refuses what a Go definition can hold but a Lean one cannot, as
-// Validate does first: the journal could not record such a definition faithfully.
+// Validate does first: the journal could not record such a definition faithfully. The header of its
+// journals records that the execution was started without validation, so that they are checked and
+// resumed without it (§12.1).
 func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := p.representable(); err != nil {
 		return nil, err
 	}
-	return newEngine(p, p.derive(), r)
+	return newEngine(p, p.derive(), r, false)
 }
 
-// newEngine is NewUncheckedEngine with d, a derivation of p.
-func newEngine(p *Definition, d *derivation, r *Registry) (*Engine, error) {
-	header, err := recordedHeader(p)
+// newEngine is NewUncheckedEngine with d, a derivation of p, and the flag its journals record.
+func newEngine(p *Definition, d *derivation, r *Registry, validated bool) (*Engine, error) {
+	header, err := recordedHeader(p, validated)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +117,7 @@ func newEngine(p *Definition, d *derivation, r *Registry) (*Engine, error) {
 
 // recordedHeader is the header of the journals of p, after checking that p survives recording: the
 // definition the header holds must read back to the same canonical form.
-func recordedHeader(p *Definition) (string, error) {
+func recordedHeader(p *Definition, validated bool) (string, error) {
 	canonical := definitionWire(p).render()
 	q, err := ParseDefinition([]byte(canonical))
 	if err == nil && definitionWire(q).render() != canonical {
@@ -117,7 +126,7 @@ func recordedHeader(p *Definition) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("suimon: the definition cannot be recorded: %w", err)
 	}
-	return EncodeHeader(p), nil
+	return EncodeHeader(p, validated), nil
 }
 
 // A StartOption configures Start and Run.
@@ -126,8 +135,9 @@ type StartOption func(*startOptions)
 type startOptions struct{ journal Journal }
 
 // WithJournal writes the execution record to j (§12.1), which must be empty, like a journal from
-// CreateJournal: the header with the definition, then the records. Without a journal the record is
-// kept only in memory, and the execution cannot be resumed after a crash.
+// CreateJournal: the header with the definition and whether the engine validated it, then the
+// records. Without a journal the record is kept only in memory, and the execution cannot be resumed
+// after a crash.
 func WithJournal(j Journal) StartOption { return func(o *startOptions) { o.journal = j } }
 
 // Start starts an execution of the main workflow with input, the value of the workflow's Input
@@ -180,8 +190,13 @@ func (e *Engine) Run(ctx context.Context, input any, opts ...StartOption) (*Repo
 
 // Resume continues the execution recorded in j after a crash (§12.1). It reads the definition from
 // the header of the journal, which must have the canonical form of the engine's definition, or
-// Resume returns ErrDefinitionMismatch. It then replays the committed transitions with Check, cuts
-// off an uncommitted tail, and restores the state and the payloads of its values.
+// Resume returns ErrDefinitionMismatch. When the header records that the execution was started with
+// validation, the engine's definition must also pass validation, which only a definition given to
+// NewUncheckedEngine can fail: Resume then returns an error that wraps ErrInvalidDefinition and the
+// validation error. A journal recorded without validation is resumed without it, whichever
+// constructor made the engine. Resume then replays the committed transitions with Check, cuts off
+// an uncommitted tail, and restores the state and the payloads of its values; the header is left as
+// it was written, flag included.
 //
 // Calls that were running at the crash are reported lost (§11.6) before anything else, and are
 // not called again: this engine runs user code in its own process, so the executor that held each
@@ -200,9 +215,12 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 		return nil, err
 	}
 	c, err := Check(string(data), sameDefinition(e.definition))
+	var invalid *invalidDefinitionError
 	switch {
 	case errors.Is(err, ErrDefinitionMismatch):
 		return nil, ErrDefinitionMismatch
+	case errors.As(err, &invalid):
+		return nil, invalid
 	case err != nil:
 		return nil, fmt.Errorf("suimon: the journal does not replay: %w", err)
 	case c.Committed == 0:

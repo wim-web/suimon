@@ -98,7 +98,7 @@ func TestCLI(t *testing.T) {
 		}
 		lines := strings.SplitAfter(generated.stdout, "\n")
 		lines = lines[:len(lines)-1]
-		if header := suimon.EncodeHeader(p) + "\n"; lines[0] != header {
+		if header := suimon.EncodeHeader(p, true) + "\n"; lines[0] != header {
 			t.Errorf("gen %s: the first line is not the header", name)
 		}
 		trace := writeTemp(t, name+".jsonl", generated.stdout)
@@ -119,7 +119,7 @@ func TestCLI(t *testing.T) {
 			}
 		}
 		// --state prints the replayed state as JSON.
-		expected, err := suimon.Check(generated.stdout, loadDefinition)
+		expected, err := suimon.Check(generated.stdout, suimon.LoadHeader)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,10 +137,15 @@ func TestCLI(t *testing.T) {
 	cli(t, 2, "check", definition(t, "users"), "--states")
 	cli(t, 2, "check", "x.jsonl", "--definition", definition(t, "users"))
 	cli(t, 2, "explore", definition(t, "users"), "--seeds")
-	// The definition of the header is read like a definition file: decoded, then validated.
-	invalidHeader := writeTemp(t, "invalid.jsonl", "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n")
+	// The definition of a header marked as validated is read like a definition file: decoded, then
+	// validated. That of a header marked as unchecked is only decoded.
+	invalidHeader := writeTemp(t, "invalid.jsonl", "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":true}\n")
 	if r := cli(t, 1, "check", invalidHeader); r.stderr != "line 1: unknown main workflow w\n" {
 		t.Errorf("invalid header: %q", r.stderr)
+	}
+	uncheckedHeader := writeTemp(t, "unchecked.jsonl", "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n")
+	if r := cli(t, 0, "check", uncheckedHeader); r.stdout != `{"committed":0,"status":"running","uncommitted":false}`+"\n" {
+		t.Errorf("unchecked invalid header: %q", r.stdout)
 	}
 	cli(t, 1, "validate", filepath.Join(repoRoot(t), "Test", "definitions", "missing.json"))
 	cli(t, 2)
@@ -168,7 +173,7 @@ func TestCLIOutputs(t *testing.T) {
 		{[]string{"explore", merge, "--seeds", "1__0"}, 1, "", "--seeds expects a natural number\n"},
 		{[]string{"explore", merge, "--bogus", "1"}, 2, "", "unknown option --bogus\n"},
 		{[]string{"explore", merge, "--seeds", "1", "--bogus"}, 2, "", "missing value for --bogus\n"},
-		{[]string{"gen", merge, "--steps", "0"}, 0, suimon.EncodeHeader(p) + "\n", ""},
+		{[]string{"gen", merge, "--steps", "0"}, 0, suimon.EncodeHeader(p, true) + "\n", ""},
 		{[]string{"check", "x.jsonl"}, 1, "", "no such file or directory (error code: 2)\n  file: x.jsonl\n"},
 		{[]string{"check", "x.jsonl", "--definition", merge}, 2, "", "unknown option --definition\n"},
 		{[]string{"check", "x.jsonl", "--state", "--definition"}, 2, "", "missing value for --definition\n"},
@@ -202,7 +207,7 @@ func TestCLICheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	header := suimon.EncodeHeader(merge) + "\n"
+	header := suimon.EncodeHeader(merge, true) + "\n"
 	start := header + "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
 	cases := []struct {
 		trace          string
@@ -219,7 +224,10 @@ func TestCLICheck(t *testing.T) {
 		{header[:40] + "\xe3", 0, `{"committed":0,"status":"running","uncommitted":true}` + "\n", ""},
 		{start[len(header):], 1, "", "line 1: header: unknown field seq\n"},
 		{start + header, 1, "", "line 4: record: missing field seq\n"},
-		{"{\"definition\":{\"main\":\"w\"}}\n", 1, "", "line 1: unknown main workflow w\n"},
+		{"{\"definition\":{\"main\":\"w\"},\"validated\":true}\n", 1, "", "line 1: unknown main workflow w\n"},
+		{"{\"definition\":{\"main\":\"w\"},\"validated\":false}\n", 0, `{"committed":0,"status":"running","uncommitted":false}` + "\n", ""},
+		{"{\"definition\":{\"main\":\"w\"}}\n", 1, "", "line 1: header: missing field validated\n"},
+		{"{\"definition\":{\"main\":\"w\"},\"validated\":0}\n", 1, "", "line 1: header.validated: expected a boolean\n"},
 	}
 	for _, c := range cases {
 		r := runGo("check", writeTemp(t, "trace.jsonl", c.trace))

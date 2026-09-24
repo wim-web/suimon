@@ -101,7 +101,7 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	done, runErr, changed := r.done, r.err, r.changed
 	r.mu.Unlock()
 	offset = min(max(offset, 0), len(lines))
-	checked, err := suimon.Check(strings.Join(lines, "\n")+"\n", readDefinition)
+	checked, err := suimon.Check(strings.Join(lines, "\n")+"\n", suimon.LoadHeader)
 	if err != nil {
 		return progress{}, nil, fmt.Errorf("replaying the record: %w", err)
 	}
@@ -112,16 +112,6 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	return progress{ID: r.id, Scenario: r.scenario.ID, Definition: r.scenario.Definition, State: state, Offset: offset,
 		Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(), ElapsedMs: r.env.now(), Done: done,
 		Error: runErr}, changed, nil
-}
-
-// readDefinition reads the definition of the header of a record, as a reader of a journal file would:
-// decoded, then validated.
-func readDefinition(data []byte) (*suimon.Definition, error) {
-	p, err := suimon.ParseDefinition(data)
-	if err != nil {
-		return nil, err
-	}
-	return p, p.Validate()
 }
 
 // wait waits for the run to finish.

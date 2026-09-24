@@ -2,6 +2,7 @@ package suimon
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -154,4 +155,71 @@ func TestConformanceLongStreams(t *testing.T) {
 		journal, r := runUsers(t, e, 20)
 		leanAgrees(t, cli, t.TempDir(), p, journal, r.State)
 	})
+}
+
+// The journals of engines made by NewUncheckedEngine conform too, for definitions that validation
+// rejects: Lean checks them without validation, to the runtime's final state, after a crash and a
+// resumption too, and refuses them, as Go does, with the error of validation when they are marked as
+// validated (§12.1).
+func TestConformanceUnchecked(t *testing.T) {
+	cli := leanCLI(t)
+	dir := t.TempDir()
+	p := withoutOutputs(load(t, "users"))
+	e, journal, r := runUnchecked(t, p, usersBindings(usersKnobs{}), tenant{Users: 3})
+	leanAgrees(t, cli, dir, p, journal, r.State)
+	cuts := cutPoints(journal)
+	for i, cut := range cuts {
+		if i%4 != 0 {
+			continue
+		}
+		prefix := journal[:cut]
+		leanAgrees(t, cli, dir, p, prefix, nil)
+		c, err := Check(prefix, sameDefinition(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Committed == 0 {
+			continue
+		}
+		resumed := newMemJournal(prefix)
+		x, err := e.Resume(context.Background(), resumed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := wait(t, x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leanAgrees(t, cli, dir, p, resumed.text(), r.State)
+	}
+	validated := writeTemp(t, dir, "validated.jsonl", []byte(withFlag(t, journal, true)))
+	code, stdout, stderr := leanRun(t, cli, "check", validated)
+	_, err := Check(withFlag(t, journal, true), LoadHeader)
+	if code != 1 || stdout != "" || err == nil || stderr != err.Error()+"\n" {
+		t.Errorf("a journal marked as validated: Lean exit %d %q %q, Go %v", code, stdout, stderr, err)
+	}
+	// The model gives a Merge without input connections no kind, so the execution gets stuck; Lean
+	// checks what the journal holds to the state Go replays it to.
+	merge := withoutInputs(load(t, "merge"), "widgets")
+	stuck, err := NewUncheckedEngine(merge, mustRegistry(t, mergeBindings(mergeKnobs{})...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &memJournal{}
+	x, err := stuck.Start(context.Background(), nil, WithJournal(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wait(t, x); !errors.Is(err, ErrStuck) {
+		t.Fatalf("Wait: %v", err)
+	}
+	c, err := Check(j.text(), sameDefinition(merge))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leanAgrees(t, cli, dir, merge, j.text(), c.State)
+	// A valid definition run without validation.
+	users := load(t, "users")
+	_, journal, r = runUnchecked(t, users, usersBindings(usersKnobs{}), tenant{Users: 2})
+	leanAgrees(t, cli, dir, users, journal, r.State)
 }

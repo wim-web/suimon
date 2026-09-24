@@ -162,7 +162,7 @@ func TestRecordersAgree(t *testing.T) {
 			pure, owned := NewRecorder(p), newOwnedRecorder(p, p.derive(), &State{}, nil, 0)
 			s, known := &State{}, []Payload(nil)
 			var text strings.Builder
-			text.WriteString(EncodeHeader(p) + "\n")
+			text.WriteString(EncodeHeader(p, true) + "\n")
 			for i, op := range ops {
 				identity := func(v string) (string, error) { return v, nil }
 				records, err := pure.RecordWith(op, identity)
