@@ -34,7 +34,7 @@ it('accumulates the records of progress messages and rejects a gap', () => {
 });
 
 it('parses a report', () => {
-  const report = parseReport({ status: 'failed', outputs: { collect: [1] }, endpoints: { collect: 'normal' }, failures: [{ run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' }] });
+  const report = parseReport({ status: 'failed', outputs: { collect: '[1]' }, endpoints: { collect: 'normal' }, failures: [{ run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' }] });
   expect(report.failures[0]).toEqual({ run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' });
   expect(() => parseReport({ status: 'x', outputs: {}, endpoints: { a: 1 }, failures: [] })).toThrow(/endpoints/);
 });

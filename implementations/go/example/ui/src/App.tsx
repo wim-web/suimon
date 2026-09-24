@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChartGantt, LoaderCircle, Play, Square } from 'lucide-react';
-import { WorkflowWorkbench } from '@suimon/ui-kit';
+import { WorkflowWorkbench, formatPayload } from '@suimon/ui-kit';
 import type { JsonValue } from '@suimon/ui-kit';
 import { applyProgress, cancelRun, followRun, loadReport, loadScenarios, startRun } from './api';
 import type { Progress, Report, RunView, Scenario } from './api';
@@ -108,7 +108,7 @@ export function App() {
       </section>}
       {report && <section className="sui-sidebar-section">
         <div className="sui-sidebar-group"><span>Report</span><span className="sui-muted">{report.status}</span></div>
-        {Object.entries(report.outputs).map(([name, value]) => <div key={name} className="app-output"><b>{name}</b><pre>{JSON.stringify(value, null, 2)}</pre></div>)}
+        {Object.entries(report.outputs).map(([name, value]) => <div key={name} className="app-output"><b>{name}</b><pre>{formatPayload(value)}</pre></div>)}
         {Object.keys(report.outputs).length === 0 && <p className="app-description">No endpoint has a value.</p>}
         {report.failures.map((f, i) => <p key={i} className="app-failure">{f.placement}{f.task ? `/${f.task}` : ''}: {f.cause}{f.error ? ` · ${f.error}` : ''}</p>)}
       </section>}

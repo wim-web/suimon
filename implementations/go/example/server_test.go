@@ -125,7 +125,7 @@ func TestServerRun(t *testing.T) {
 	}
 	report := decode[reportJSON](t, data)
 	var decisions []decision
-	if err := json.Unmarshal(report.Outputs["decide"], &decisions); err != nil {
+	if err := json.Unmarshal([]byte(report.Outputs["decide"]), &decisions); err != nil {
 		t.Fatal(err)
 	}
 	if report.Status != "succeeded" || len(decisions) != 1 || decisions[0].By != "review" {

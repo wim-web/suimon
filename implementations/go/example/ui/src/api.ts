@@ -8,7 +8,8 @@ export interface Span { function: string; detail: string; startMs: number; endMs
 /** One progress message: the records from `offset` on, and the state they establish. */
 export interface Progress { id: string; scenario: string; state: RuntimeState; offset: number; records: string[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
 export interface FailureReport { run: string[]; placement: string; task?: string; cause: string; error?: string }
-export interface Report { status: string; outputs: Record<string, JsonValue>; endpoints: Record<string, string>; failures: FailureReport[] }
+/** outputs holds the JSON text of each endpoint value. */
+export interface Report { status: string; outputs: Record<string, string>; endpoints: Record<string, string>; failures: FailureReport[] }
 
 type Obj = Record<string, unknown>;
 function object(value: unknown, at: string): Obj {
@@ -67,7 +68,7 @@ export function parseReport(value: unknown): Report {
   const o = object(value, 'report');
   return {
     status: string(o.status, 'report.status'),
-    outputs: object(o.outputs, 'report.outputs') as Record<string, JsonValue>,
+    outputs: Object.fromEntries(Object.entries(object(o.outputs, 'report.outputs')).map(([k, v]) => [k, string(v, `report.outputs.${k}`)])),
     endpoints: Object.fromEntries(Object.entries(object(o.endpoints, 'report.endpoints')).map(([k, v]) => [k, string(v, `report.endpoints.${k}`)])),
     failures: array(o.failures, 'report.failures').map((f, i) => {
       const at = `report.failures[${i}]`, x = object(f, at);

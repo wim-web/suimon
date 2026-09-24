@@ -133,12 +133,14 @@ func (r *run) result() (*reportJSON, string, bool) {
 	return r.report, r.err, r.done
 }
 
-// reportJSON is suimon.Report without the state, which progress already carries.
+// reportJSON is suimon.Report without the state, which progress already carries. Outputs hold the
+// JSON text of each value, so that the UI shows it as written: parsing it in JavaScript would round
+// large integers.
 type reportJSON struct {
-	Status    string                     `json:"status"`
-	Outputs   map[string]json.RawMessage `json:"outputs"`
-	Endpoints map[string]string          `json:"endpoints"`
-	Failures  []failureJSON              `json:"failures"`
+	Status    string            `json:"status"`
+	Outputs   map[string]string `json:"outputs"`
+	Endpoints map[string]string `json:"endpoints"`
+	Failures  []failureJSON     `json:"failures"`
 }
 
 type failureJSON struct {
@@ -150,7 +152,10 @@ type failureJSON struct {
 }
 
 func newReportJSON(r *suimon.Report) *reportJSON {
-	out := &reportJSON{Status: r.Status.String(), Outputs: r.Outputs, Endpoints: map[string]string{}, Failures: []failureJSON{}}
+	out := &reportJSON{Status: r.Status.String(), Outputs: map[string]string{}, Endpoints: map[string]string{}, Failures: []failureJSON{}}
+	for name, value := range r.Outputs {
+		out.Outputs[name] = string(value)
+	}
 	for name, outcome := range r.Endpoints {
 		out.Endpoints[name] = outcome.String()
 	}
