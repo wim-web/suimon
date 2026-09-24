@@ -798,29 +798,14 @@ theorem replayLines_distinct {c : Codec} (hc : c.DecodesDistinct) {p : Definitio
     payloads of an op record have distinct keys, a commit accepts payloads only for values its
     transition introduces, which the state before does not mention, and a step never makes the state
     forget a value; so a value with a payload is never introduced again. --/
-theorem check_values_nodup {c : Codec} (hc : c.DecodesDistinct) {load : Wire → Except String Definition}
+theorem check_values_nodup {c : Codec} (hc : c.DecodesDistinct) {load : Header → Except String Definition}
     {text : String} {checked : Checked} (h : check c load text = .ok checked) :
     (checked.values.map (·.1)).Nodup := by
-  simp only [check] at h
-  split at h
-  · simp only [pure, Except.pure, Except.ok.injEq] at h
-    subst h
+  rcases check_eq_ok h with ⟨-, -, -, hvalues⟩ | ⟨header, p, lines, r, -, hr, -, -, -, hvalues⟩
+  · rw [hvalues]
     exact List.nodup_nil
-  · rename_i header lines _
-    cases hp : (c.decodeHeader (String.ofList header) >>= load).mapError (s!"line 1: {·}") with
-    | error e =>
-      simp only [hp] at h
-      simp [bind, Except.bind] at h
-    | ok p =>
-      simp only [hp] at h
-      cases hr : replayLines c p {} 1 lines with
-      | error e =>
-        simp only [bind, Except.bind, hr] at h
-        simp at h
-      | ok r =>
-        simp only [bind, Except.bind, hr, pure, Except.pure, Except.ok.injEq] at h
-        subst h
-        exact (replayLines_distinct hc (Replay.distinct_empty p) hr).nodup
+  · rw [hvalues]
+    exact (replayLines_distinct hc (Replay.distinct_empty p) hr).nodup
 
 private theorem eq_of_nodup_map_fst {α β : Type} : ∀ {l : List (α × β)}, (l.map (·.1)).Nodup →
     ∀ x ∈ l, ∀ y ∈ l, x.1 = y.1 → x = y
@@ -836,13 +821,13 @@ private theorem eq_of_nodup_map_fst {α β : Type} : ∀ {l : List (α × β)}, 
     · exact eq_of_nodup_map_fst h.2 x hxs y hys hxy
 
 /-- The committed payloads of a checked record never give one value two payloads. --/
-theorem check_payload_unique {c : Codec} (hc : c.DecodesDistinct) {load : Wire → Except String Definition}
+theorem check_payload_unique {c : Codec} (hc : c.DecodesDistinct) {load : Header → Except String Definition}
     {text : String} {checked : Checked} (h : check c load text = .ok checked) {v : Value} {a b : String}
     (ha : (v, a) ∈ checked.values) (hb : (v, b) ∈ checked.values) : a = b :=
   (Prod.mk.inj (eq_of_nodup_map_fst (check_values_nodup hc h) _ ha _ hb rfl)).2
 
 /-- In a record that `suimon check` accepts, each value has at most one committed payload. --/
-theorem check_values_nodup_wire {load : Wire → Except String Definition} {text : String} {checked : Checked}
+theorem check_values_nodup_wire {load : Header → Except String Definition} {text : String} {checked : Checked}
     (h : check wireCodec load text = .ok checked) : (checked.values.map (·.1)).Nodup :=
   check_values_nodup wireCodec_decodesDistinct h
 

@@ -65,12 +65,17 @@ def main : IO Unit := do
     (Schema.compile · [("definition.schema.json", definitionSchema)]))
   for name in ["users", "branch", "merge"] do
     let p ← Validate.load name
-    liftError s!"{name} header"
-      (Codec.parse (Trace.wireCodec.encodeHeader (Codec.definitionWire p)) >>= trace.validate)
+    for validated in [true, false] do
+      liftError s!"{name} header {validated}"
+        (Codec.parse (Trace.wireCodec.encodeHeader (.of p validated)) >>= trace.validate)
     for seed in List.range 10 do
       let recorded ← Test.Trace.recorded p (seed + 1)
       for record in recorded.records do
         liftError s!"{name} seed {seed + 1}" (Codec.parse (Trace.wireCodec.encode record) >>= trace.validate)
+  -- The header of an execution started without validation may hold a definition that validation
+  -- rejects.
+  for (name, invalid, _) in ← Test.Trace.invalidDefinitions do
+    liftError s!"{name} header" (Codec.parse (Trace.wireCodec.encodeHeader (.of invalid false)) >>= trace.validate)
   -- The order the Wire form fixes is accepted too.
   liftError "ordered fields"
     (Codec.parse "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}" >>=
@@ -90,9 +95,14 @@ def main : IO Unit := do
   for text in ["-1", "-3e0"] do
     rejected trace s!"connection {text}" (deliver text)
   let definition := "{\"main\":\"w\",\"workflows\":[]}"
-  liftError "header" (Codec.parse ("{\"definition\":" ++ definition ++ "}") >>= trace.validate)
-  rejected trace "header with seq" ("{\"seq\":1,\"definition\":" ++ definition ++ "}")
-  rejected trace "header field" ("{\"definition\":" ++ definition ++ ",\"version\":1}")
-  rejected trace "header without definition" "{}"
-  rejected trace "header with an invalid definition" "{\"definition\":{\"main\":\"w\"}}"
+  for validated in ["true", "false"] do
+    liftError s!"header {validated}"
+      (Codec.parse ("{\"definition\":" ++ definition ++ s!",\"validated\":{validated}}") >>= trace.validate)
+  rejected trace "header with seq" ("{\"seq\":1,\"definition\":" ++ definition ++ ",\"validated\":true}")
+  rejected trace "header field" ("{\"definition\":" ++ definition ++ ",\"validated\":true,\"version\":1}")
+  rejected trace "header without definition" "{\"validated\":true}"
+  rejected trace "header without validated" ("{\"definition\":" ++ definition ++ "}")
+  for value in ["\"true\"", "null", "1"] do
+    rejected trace s!"header with validated {value}" ("{\"definition\":" ++ definition ++ s!",\"validated\":{value}}")
+  rejected trace "header with an invalid definition" "{\"definition\":{\"main\":\"w\"},\"validated\":true}"
   IO.println "schema: ok"

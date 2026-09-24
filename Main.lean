@@ -58,11 +58,12 @@ private def readRecord (path : String) : IO (String × Bool) := do
   | some text => return (text, cut < bytes.size)
   | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
 
-/-- Replays a record against the definition of its header, which is read like a definition file
-    (`Codec.load`). --/
+/-- Replays a record against the definition of its header, which is read by the header's flag
+    (`Trace.Header.load`): decoded and validated like a definition file when the execution was started
+    with validation, decoded only when it was started without. --/
 private def checkFile (trace : String) (opts : List (String × String)) : IO UInt32 := run do
   let (text, torn) ← readRecord trace
-  match (Trace.check Trace.wireCodec Codec.load text).map fun c =>
+  match (Trace.check Trace.wireCodec Trace.Header.load text).map fun c =>
       { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.
@@ -88,9 +89,9 @@ private def explore (path : String) (opts : List (String × String)) : IO UInt32
   IO.println (Json.mkObj (counts.map fun (name, n) => (name, toJson n))).compress
   return 0
 
-/-- A random walk written as an execution record: the header with the definition, then the records.
-    Each op record carries the payloads of the values its transition introduces, and a payload
-    repeats its value identity. --/
+/-- A random walk written as an execution record: the header, then the records. The definition is
+    validated before the walk, as run validates it, so the header says so. Each op record carries the
+    payloads of the values its transition introduces, and a payload repeats its value identity. --/
 private def gen (path : String) (opts : List (String × String)) : IO UInt32 := run do
   let definition ← readDefinition path
   let seed ← IO.ofExcept (natOption opts "--seed" 1)
@@ -103,7 +104,7 @@ private def gen (path : String) (opts : List (String × String)) : IO UInt32 := 
     transactions := transactions.push (o, (Trace.introduced state next).map fun v => (v, v))
     state := next
   let (_, records) ← IO.ofExcept (Trace.record definition {} transactions.toList [] 1)
-  IO.print (Trace.recording Trace.wireCodec (Codec.definitionWire definition) records)
+  IO.print (Trace.recording Trace.wireCodec (.of definition true) records)
   return 0
 
 def main (args : List String) : IO UInt32 := do

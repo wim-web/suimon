@@ -5,9 +5,10 @@ import Suimon.Json
 namespace Suimon.Trace
 
 /-! An execution record is a sequence of lines. The first line is the header, which holds the
-    definition of the execution. Each accepted transition is then one `op` record followed by one
-    `commit` record; only committed transitions are part of the record (§12.1). A record is first
-    written as a `Wire` value, and a `Codec` turns it into one line of text. -/
+    definition of the execution and whether the execution validated it before it started. Each
+    accepted transition is then one `op` record followed by one `commit` record; only committed
+    transitions are part of the record (§12.1). A record is first written as a `Wire` value, and a
+    `Codec` turns it into one line of text. -/
 
 /-- Values the transition from `before` to `after` introduces: those `after` mentions and `before`
     does not, each once. This includes lists the engine builds. Their payloads are stored by the
@@ -218,17 +219,44 @@ def recordOfWire (wire : Wire) : Except String Record := do
   | _, _ => throw "record: either an op or a commit"
 
 /-! The header holds the definition of the execution, which a recorder writes in the canonical form
-    of the definition file (`Codec.definitionWire`). It has no sequence number, so no other line reads
-    as a header, and it reads as no other line. -/
+    of the definition file (`Codec.definitionWire`), and whether the execution validated the
+    definition before it started (§12.1, §14). It has no sequence number, so no other line reads as a
+    header, and it reads as no other line. -/
 
-def headerWire (definition : Wire) : Wire := .obj [("definition", definition)]
+/-- The first line of a record. --/
+structure Header where
+  /-- The definition of the execution, in the canonical form of the definition file. --/
+  definition : Wire
+  /-- Whether the execution was started with validation of the definition (`run`), or without it
+      (`runUnchecked`) (§14). --/
+  validated : Bool
 
-def headerOfWire (wire : Wire) : Except String Wire := do
+/-- Fields keep a fixed order: `definition, validated`. --/
+def headerWire (header : Header) : Wire :=
+  .obj [("definition", header.definition), ("validated", .bool header.validated)]
+
+def headerOfWire (wire : Wire) : Except String Header := do
   let .obj fields := wire | throw "header: expected an object"
-  strict fields ["definition"] "header"
-  match fields.lookup "definition" with
-  | some definition => pure definition
-  | none => throw "header: missing field definition"
+  strict fields ["definition", "validated"] "header"
+  let definition ← match fields.lookup "definition" with
+    | some definition => pure definition
+    | none => throw "header: missing field definition"
+  return { definition, validated := ← getBool fields "validated" "header" }
+
+/-- Reads the definition a header holds, by the header's flag (§12.1). The definition of an execution
+    that was started with validation is decoded and validated, as a definition file is read
+    (`Codec.load`), so a record that says so and holds a definition that validation rejects is
+    refused. The definition of an execution that was started without validation is decoded only
+    (`Codec.loadUnchecked`), so the record replays against the definition that ran, valid or not; the
+    decoder still rejects what the definition file cannot express. `suimon check` reads headers
+    with it. --/
+def Header.load (header : Header) : Except String Definition :=
+  if header.validated then Codec.load header.definition else Codec.loadUnchecked header.definition
+
+/-- The header a recorder writes for an execution of `p`: the canonical form of `p`, and whether the
+    execution was started with validation of `p`. --/
+def Header.of (p : Definition) (validated : Bool) : Header :=
+  { definition := Codec.definitionWire p, validated }
 
 /-! ## Text form -/
 
@@ -238,23 +266,25 @@ def headerOfWire (wire : Wire) : Except String Wire := do
 structure Codec where
   encode : Record → String
   decode : String → Except String Record
-  /-- The header holds a definition as a `Wire` value; `check` leaves reading it to its caller. --/
-  encodeHeader : Wire → String
-  decodeHeader : String → Except String Wire
+  /-- The header holds a definition as a `Wire` value, with its flag; `check` leaves reading the
+      definition to its caller. --/
+  encodeHeader : Header → String
+  decodeHeader : String → Except String Header
 
 /-- Decoding inverts encoding for the records and headers without repeated keys, which are all a
     recorder writes (`transaction`, `Codec.definitionWire_distinctKeys`), and a line has no newline. --/
 structure Codec.Lawful (c : Codec) : Prop where
   decode_encode : ∀ r, r.DistinctKeys → c.decode (c.encode r) = .ok r
   newline_not_mem_encode : ∀ r, '\n' ∉ (c.encode r).toList
-  decodeHeader_encodeHeader : ∀ w, w.DistinctKeys → c.decodeHeader (c.encodeHeader w) = .ok w
-  newline_not_mem_encodeHeader : ∀ w, '\n' ∉ (c.encodeHeader w).toList
+  decodeHeader_encodeHeader : ∀ header : Header, header.definition.DistinctKeys →
+    c.decodeHeader (c.encodeHeader header) = .ok header
+  newline_not_mem_encodeHeader : ∀ header, '\n' ∉ (c.encodeHeader header).toList
 
 /-- A codec from a text form of `Wire` values. --/
 def Codec.ofWire (render : Wire → String) (parse : String → Except String Wire) : Codec where
   encode r := render (recordWire r)
   decode line := parse line >>= recordOfWire
-  encodeHeader w := render (headerWire w)
+  encodeHeader header := render (headerWire header)
   decodeHeader line := parse line >>= headerOfWire
 
 /-- The text form of the header and the records: compact JSON with the fields in the order
@@ -277,6 +307,9 @@ structure Checked where
   /-- The definition of the header, which the record replays against; `none` while the record has
       no complete line. --/
   definition : Option Definition
+  /-- Whether the header says that the execution was started with validation of its definition,
+      which `Header.load` then validates too; `none` while the record has no complete line. --/
+  validated : Option Bool
   state : State
   /-- The number of committed transitions. --/
   committed : Nat
@@ -331,32 +364,34 @@ def replayLines (c : Codec) (p : Definition) : Replay → Nat → List (List Cha
   | r, index, line :: rest => do
     replayLines c p (← replayLine c p r index (String.ofList line)) (index + 1) rest
 
-/-- Replay the committed transitions of a record. `load` reads the definition of the header, the first
-    line, and the other lines replay against it; line numbers count the header. A crash may leave an
-    op without its commit, and a partial last line, which may be the header; both are reported as
-    uncommitted and ignored. --/
-def check (c : Codec) (load : Wire → Except String Definition) (text : String) : Except String Checked := do
+/-- Replay the committed transitions of a record. The first line is the header, whose definition
+    `load` reads, and the other lines replay against that definition; line numbers count the header.
+    A crash may leave an op without its commit, and a partial last line, which may be the header;
+    both are reported as uncommitted and ignored. --/
+def check (c : Codec) (load : Header → Except String Definition) (text : String) : Except String Checked := do
   let split := splitLines text.toList []
   match split.1 with
-  | [] => return { definition := none, state := {}, committed := 0, uncommitted := !split.2.isEmpty, values := [] }
-  | header :: lines =>
-    let p ← (c.decodeHeader (String.ofList header) >>= load).mapError (s!"line 1: {·}")
+  | [] => return { definition := none, validated := none, state := {}, committed := 0,
+                   uncommitted := !split.2.isEmpty, values := [] }
+  | line :: lines =>
+    let header ← (c.decodeHeader (String.ofList line)).mapError (s!"line 1: {·}")
+    let p ← (load header).mapError (s!"line 1: {·}")
     let r ← replayLines c p {} 1 lines
-    return { definition := some p, state := r.state, committed := r.committed,
-             uncommitted := r.pending.isSome || !split.2.isEmpty, values := r.values }
+    return { definition := some p, validated := some header.validated, state := r.state,
+             committed := r.committed, uncommitted := r.pending.isSome || !split.2.isEmpty, values := r.values }
 
 /-- The state a crashed run resumes from (§12.1). --/
-def recover (c : Codec) (load : Wire → Except String Definition) (text : String) : Except String State :=
+def recover (c : Codec) (load : Header → Except String Definition) (text : String) : Except String State :=
   (check c load text).map (·.state)
 
 /-! ## Resumption -/
 
 /-- Reads the definition of a header with `load`, and accepts it only when it has the canonical form
-    of `p` (`Codec.definitionWire`). With the loader of the CLI and a valid `p`, the definition it
-    accepts is `p` itself (`agreeing_load_eq_ok`). --/
-def agreeing (load : Wire → Except String Definition) (p : Definition) (w : Wire) :
+    of `p` (`Codec.definitionWire`). With the loader of the CLI and a `p` that the definition file
+    can express, valid or not, the definition it accepts is `p` itself (`agreeing_load_eq_ok`). --/
+def agreeing (load : Header → Except String Definition) (p : Definition) (header : Header) :
     Except String Definition := do
-  let q ← load w
+  let q ← load header
   unless (Codec.definitionWire q).render == (Codec.definitionWire p).render do
     throw "the record holds another definition"
   return q
@@ -364,10 +399,13 @@ def agreeing (load : Wire → Except String Definition) (p : Definition) (w : Wi
 /-- The state from which the definition `p` resumes a crashed run (§12.1): only a record whose header
     holds a definition with the canonical form of `p` resumes, from the state `recover` gives, and a
     record without a complete header does not. The implementations of user processes are not part
-    of the definition, so they are not compared (§14). The record replays against the definition of
-    its header, which is `p` itself when `p` is valid (`resume_eq_ok_of_validate`); Go's `Resume`
-    replays against the engine's definition. --/
-def resume (c : Codec) (load : Wire → Except String Definition) (p : Definition) (text : String) :
+    of the definition, so they are not compared (§14). `load` reads the definition of the header, so
+    with `Header.load` a record that says its execution was started with validation resumes only if
+    the definition validates, and one that says it was started without resumes without validation.
+    The record replays against the definition of its header, which is `p` itself when the definition
+    file can express `p` (`resume_eq_ok_of_expressible`); Go's `Resume` replays against the engine's
+    definition. --/
+def resume (c : Codec) (load : Header → Except String Definition) (p : Definition) (text : String) :
     Except String State := do
   let checked ← check c (agreeing load p) text
   match checked.definition with
@@ -406,8 +444,8 @@ def record (p : Definition) : State → List (Op × List (Value × String)) → 
 
 def text (c : Codec) (rs : List Record) : String := String.join (rs.map (c.encode · ++ "\n"))
 
-/-- The whole text a recorder writes: the header with the definition, then the records. --/
-def recording (c : Codec) (header : Wire) (rs : List Record) : String :=
+/-- The whole text a recorder writes: the header, then the records. --/
+def recording (c : Codec) (header : Header) (rs : List Record) : String :=
   c.encodeHeader header ++ "\n" ++ text c rs
 
 end Suimon.Trace

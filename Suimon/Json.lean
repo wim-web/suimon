@@ -2,9 +2,10 @@ import Suimon.Validate
 import Suimon.Wire
 
 /-! A definition is read from Lean's `Json`, which the definition file and the header of an execution
-    record give, and validated (`Codec.loadJson`, `Codec.load`). It is written as a `Wire` value,
-    whose fields keep the order of the definition file (`Codec.definitionWire`); its `Json` is that
-    value's. -/
+    record give, and validated (`Codec.loadJson`, `Codec.load`), except the definition of a record
+    whose execution was started without validation, which is only decoded (`Codec.loadUnchecked`).
+    It is written as a `Wire` value, whose fields keep the order of the definition file
+    (`Codec.definitionWire`); its `Json` is that value's. -/
 
 namespace Suimon
 open Lean
@@ -468,11 +469,21 @@ def loadJson (json : Json) : Except String Definition := do
   p.validate
   return p
 
-/-- Reads the definition that the header of an execution record holds, as a definition file is read.
-    `suimon check` replays a record against it, and the recovery theorems are about this loader
+/-- Reads the definition that the header of an execution record holds, as a definition file is read:
+    decoded, then validated. The header of an execution that was started with validation (run, §14)
+    is read so (`Trace.Header.load`); the recovery theorems for such records are about this loader
     (`Trace.check_text_of_validate`). --/
 def load (w : Wire) : Except String Definition :=
   loadJson w.toJson
+
+/-- Reads the definition that the header of an execution record holds without validating it: the
+    header of an execution that was started without validation (runUnchecked, §14), which is replayed
+    against the definition as it ran (§12.1, `Trace.Header.load`). The decoder still rejects what the
+    definition file cannot express, so the definition it reads is expressible
+    (`Codec.expressible_of_loadUnchecked`); the recovery theorems for such records are about this
+    loader (`Trace.check_text_unchecked`). --/
+def loadUnchecked (w : Wire) : Except String Definition :=
+  definition w.toJson
 
 end Codec
 

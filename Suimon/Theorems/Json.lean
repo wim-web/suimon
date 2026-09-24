@@ -120,7 +120,8 @@ end Suimon.Codec
 /-! ## The canonical form of a normal definition decodes back to it
 
 The header of a record holds `definitionWire p`, and the loader `Codec.load` decodes its `Json` with
-`Codec.definition` and then validates it. The decoder reads fields by key and rejects what the definition
+`Codec.definition` and then validates it; `Codec.loadUnchecked`, for the records of executions started
+without validation, only decodes it. The decoder reads fields by key and rejects what the definition
 file cannot express: an empty string or type name, a number above `maxNat`. `Definition.Expressible`
 states what it can express; every normal definition is expressible (`Definition.Normal.expressible`),
 and so is every definition the decoder reads (`Codec.expressible_of_definition`). The canonical form of
@@ -757,8 +758,8 @@ theorem definitionWire_inj_of_expressible {p q : Definition} (hp : p.Expressible
 
 The decoder rejects an empty string or type name and a number above `maxNat`, and reads the name
 `discard` as the library's transform, so every definition it reads is expressible
-(`expressible_of_definition`). The canonical form determines such a definition
-(`definitionWire_inj_of_expressible`). -/
+(`expressible_of_definition`). The header of a record whose execution was started without validation
+is read so (`loadUnchecked`), and the canonical form determines such a definition too. -/
 
 private theorem bind_eq_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {b : β} :
     x >>= f = .ok b ↔ ∃ a, x = .ok a ∧ f a = .ok b := by
@@ -1032,5 +1033,20 @@ theorem expressible_of_definition {json : Json} {p : Definition} (h : definition
     exact transformDecl_expressible hjson
   · obtain ⟨json, -, hjson⟩ := mem_of_mapM_ok hworkflows w hw
     exact workflow_expressible hjson
+
+/-- The definition that `loadUnchecked` reads from the header of a record is expressible. --/
+theorem expressible_of_loadUnchecked {w : Wire} {q : Definition} (h : loadUnchecked w = .ok q) : q.Expressible :=
+  expressible_of_definition h
+
+/-- The header a recorder writes for an execution of an expressible definition that was started without
+    validation reads back to the definition, valid or not. --/
+theorem loadUnchecked_definitionWire {p : Definition} (h : p.Expressible) : loadUnchecked (definitionWire p) = .ok p :=
+  definition_definitionWire_of_expressible h
+
+/-- A header whose definition `loadUnchecked` reads with the canonical form of an expressible definition
+    `p` holds `p` itself. --/
+theorem loadUnchecked_eq_of_definitionWire {p q : Definition} (hp : p.Expressible) {w : Wire}
+    (h : loadUnchecked w = .ok q) (hw : definitionWire q = definitionWire p) : q = p :=
+  (definitionWire_inj_of_expressible (expressible_of_loadUnchecked h) hp).1 hw
 
 end Suimon.Codec

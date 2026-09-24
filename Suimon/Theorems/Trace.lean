@@ -65,8 +65,9 @@ theorem recordOfWire_recordWire (r : Record) : recordOfWire (recordWire r) = .ok
       simp [recordWire, recordOfWire, optional, valuesWire, hne, getNat, strict, List.lookup, List.find?,
         opOfWire_opWire, payloads_valuesWire, ok_bind, map_ok]
 
-theorem headerOfWire_headerWire (w : Wire) : headerOfWire (headerWire w) = .ok w := by
-  simp [headerWire, headerOfWire, strict, List.lookup, List.find?, ok_bind, pure_ok]
+theorem headerOfWire_headerWire (header : Header) : headerOfWire (headerWire header) = .ok header := by
+  obtain ⟨definition, validated⟩ := header
+  simp [headerWire, headerOfWire, strict, getBool, List.lookup, List.find?, ok_bind, pure_ok]
 
 /-! ## Keys -/
 
@@ -102,8 +103,9 @@ theorem recordWire_distinctKeys {r : Record} (hr : r.DistinctKeys) : (recordWire
     by_cases hv : values = [] <;>
       simp [recordWire, optional, hv, Wire.distinctKeys_obj_iff, Wire.DistinctKeys.nat, opWire_distinctKeys, hvalues]
 
-theorem headerWire_distinctKeys {w : Wire} (hw : w.DistinctKeys) : (headerWire w).DistinctKeys := by
-  simp [headerWire, Wire.distinctKeys_obj_iff, hw]
+theorem headerWire_distinctKeys {header : Header} (hw : header.definition.DistinctKeys) :
+    (headerWire header).DistinctKeys := by
+  simp [headerWire, Wire.distinctKeys_obj_iff, hw, Wire.DistinctKeys.bool]
 
 /-- A text form of `Wire` values that reads back what it renders, when no key repeats, on one line,
     gives a lawful codec. --/
@@ -113,9 +115,9 @@ theorem Codec.ofWire_lawful {render : Wire → String} {parse : String → Excep
   decode_encode r hr := by
     simp [Codec.ofWire, hparse _ (recordWire_distinctKeys hr), ok_bind, recordOfWire_recordWire]
   newline_not_mem_encode r := hline (recordWire r)
-  decodeHeader_encodeHeader w hw := by
+  decodeHeader_encodeHeader header hw := by
     simp [Codec.ofWire, hparse _ (headerWire_distinctKeys hw), ok_bind, headerOfWire_headerWire]
-  newline_not_mem_encodeHeader w := hline (headerWire w)
+  newline_not_mem_encodeHeader header := hline (headerWire header)
 
 /-- The header and the records are written and read back through the verified text form of `Wire`
     values, whose one side condition, that no key repeats, `Codec.Lawful` carries. --/
@@ -244,13 +246,13 @@ theorem text_toList (c : Codec) (rs : List Record) :
   simp [text, String.toList_join, List.flatMap_map]
 
 /-- A recording is the lines of the header and the records, each ended by a newline. --/
-theorem recording_toList (c : Codec) (header : Wire) (rs : List Record) :
+theorem recording_toList (c : Codec) (header : Header) (rs : List Record) :
     (recording c header rs).toList =
       ((c.encodeHeader header).toList :: rs.map fun r => (c.encode r).toList).flatMap (· ++ ['\n']) := by
   simp [recording, text_toList]
 
 /-- The lines of a recording have no newline of their own. --/
-theorem newline_not_mem_lines {c : Codec} (hc : c.Lawful) (header : Wire) (rs : List Record) :
+theorem newline_not_mem_lines {c : Codec} (hc : c.Lawful) (header : Header) (rs : List Record) :
     ∀ l ∈ (c.encodeHeader header).toList :: rs.map fun r => (c.encode r).toList, '\n' ∉ l := by
   intro l hl
   rcases List.mem_cons.1 hl with rfl | hl
@@ -393,7 +395,7 @@ theorem record_append {p : Definition} :
 theorem text_append (c : Codec) (rs₁ rs₂ : List Record) : text c (rs₁ ++ rs₂) = text c rs₁ ++ text c rs₂ := by
   simp [text, String.join_append]
 
-theorem recording_append (c : Codec) (header : Wire) (rs₁ rs₂ : List Record) :
+theorem recording_append (c : Codec) (header : Header) (rs₁ rs₂ : List Record) :
     recording c header rs₁ ++ text c rs₂ = recording c header (rs₁ ++ rs₂) := by
   simp [recording, text_append, String.append_assoc]
 
@@ -522,18 +524,18 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Definition} :
 
 /-! ## Replay and crash recovery (§12.1, §15.2) -/
 
-/-- The header of a recording loads the definition that `load` gives for it. --/
-theorem decodeHeader_encodeHeader_load {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition}
-    {w : Wire} (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) :
-    (c.decodeHeader (String.ofList (c.encodeHeader w).toList) >>= load).mapError (s!"line 1: {·}") = .ok p := by
-  simp [hc.decodeHeader_encodeHeader w hw, hload, ok_bind, mapError_ok]
+/-- The header line of a recording reads back to its header. --/
+theorem decodeHeader_line {c : Codec} (hc : c.Lawful) {header : Header} (hw : header.definition.DistinctKeys) :
+    (c.decodeHeader (String.ofList (c.encodeHeader header).toList)).mapError (s!"line 1: {·}") = .ok header := by
+  simp [hc.decodeHeader_encodeHeader header hw, mapError_ok]
 
 /-- A crash inside the header, the first line, leaves no complete line: nothing is committed, and the
     record names no definition yet. --/
-theorem check_torn_header (c : Codec) (load : Wire → Except String Definition) {tail : String}
+theorem check_torn_header (c : Codec) (load : Header → Except String Definition) {tail : String}
     (htail : '\n' ∉ tail.toList) :
     check c load tail =
-      .ok { definition := none, state := {}, committed := 0, uncommitted := decide (tail ≠ ""), values := [] } := by
+      .ok { definition := none, validated := none, state := {}, committed := 0, uncommitted := decide (tail ≠ ""),
+            values := [] } := by
   have hsplit : splitLines tail.toList [] = ([], tail.toList) := by simpa using splitLines_of_not_mem htail []
   have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
     rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
@@ -542,24 +544,25 @@ theorem check_torn_header (c : Codec) (load : Wire → Except String Definition)
 
 /-- A crash after the header leaves it, the first `k` records a recorder wrote, and possibly the start
     of the next line. Checking such a text loads the definition of the header, replays exactly the
-    committed transitions, the first `k / 2`, and reports the rest as uncommitted. With
-    `check_torn_header`, this covers a crash anywhere in a recording. The header repeats no key; a
-    recorder writes the canonical form of its definition, which has none
+    committed transitions, the first `k / 2`, and reports the rest as uncommitted, and the flag of the
+    header. With `check_torn_header`, this covers a crash anywhere in a recording. The definition of
+    the header repeats no key; a recorder writes the canonical form of its definition, which has none
     (`Codec.definitionWire_distinctKeys`). --/
-theorem check_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
-    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
-    {tail : String} (htail : '\n' ∉ tail.toList) :
+theorem check_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
+    (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      check c load (recording c w (rs.take k) ++ tail) =
-        .ok { definition := some p, state := u, committed := k / 2,
+      check c load (recording c header (rs.take k) ++ tail) =
+        .ok { definition := some p, validated := some header.validated, state := u, committed := k / 2,
               uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
   obtain ⟨u, hu, hreplay⟩ := replayLines_take hc h {} 1 k rfl rfl rfl rfl hk
   refine ⟨u, hu, ?_⟩
-  have hsplit : splitLines (recording c w (rs.take k) ++ tail).toList [] =
-      ((c.encodeHeader w).toList :: (rs.take k).map fun x => (c.encode x).toList, tail.toList) := by
+  have hsplit : splitLines (recording c header (rs.take k) ++ tail).toList [] =
+      ((c.encodeHeader header).toList :: (rs.take k).map fun x => (c.encode x).toList, tail.toList) := by
     rw [String.toList_append, recording_toList]
-    exact splitLines_lines (newline_not_mem_lines hc w (rs.take k)) htail
+    exact splitLines_lines (newline_not_mem_lines hc header (rs.take k)) htail
   have hlen := record_length h
   have hpending : (if k % 2 = 1 then steps[k / 2]? else none).isSome = decide (k % 2 = 1) := by
     by_cases hodd : k % 2 = 1
@@ -568,17 +571,18 @@ theorem check_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String De
     · simp [hodd]
   have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
     rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
-  simp only [check, hsplit, decodeHeader_encodeHeader_load hc hw hload, hreplay, ok_bind, pure_ok, hpending,
+  simp only [check, hsplit, decodeHeader_line hc hw, hload, mapError_ok, hreplay, ok_bind, pure_ok, hpending,
     htailEmpty]
   simp
 
 /-- Replaying a whole record reproduces the state of the run that wrote it. --/
-theorem check_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
-    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
-    check c load (recording c w rs) =
-      .ok { definition := some p, state := t, committed := steps.length, uncommitted := false,
-            values := steps.flatMap (·.2) } := by
+theorem check_text {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) :
+    check c load (recording c header rs) =
+      .ok { definition := some p, validated := some header.validated, state := t, committed := steps.length,
+            uncommitted := false, values := steps.flatMap (·.2) } := by
   have hlen := record_length h
   obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h (Nat.le_refl rs.length) (tail := "") (by simp)
   have hhalf : rs.length / 2 = steps.length := by omega
@@ -588,34 +592,37 @@ theorem check_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String De
   rw [List.take_length, String.append_empty, hhalf, hmod, List.take_length] at hcheck
   simpa using hcheck
 
-theorem recover_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
-    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
-    recover c load (recording c w rs) = .ok t := by
+theorem recover_text {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) :
+    recover c load (recording c header rs) = .ok t := by
   simp [recover, check_text hc hw hload h, Except.map]
 
 /-- After a crash, recovery resumes from the state of the committed transitions. --/
-theorem recover_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
-    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
-    {tail : String} (htail : '\n' ∉ tail.toList) :
+theorem recover_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
+    (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      recover c load (recording c w (rs.take k) ++ tail) = .ok u := by
+      recover c load (recording c header (rs.take k) ++ tail) = .ok u := by
   obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h hk htail
   exact ⟨u, hu, by simp [recover, hcheck, Except.map]⟩
 
-/-- After a crash the runtime keeps the header and the committed lines, resumes from the recovered
-    state with the committed payloads, and appends the records of new transactions; the result
-    replays like an uninterrupted record. --/
-theorem check_resume {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps more : List (Op × List (Value × String))} {t : State}
-    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
-    {tail : String} (htail : '\n' ∉ tail.toList) {u t' : State} {rs' : List Record}
-    (hu : recover c load (recording c w (rs.take k) ++ tail) = .ok u)
+/-- After a crash the runtime keeps the header as it was written and the committed lines, resumes from
+    the recovered state with the committed payloads, and appends the records of new transactions; the
+    result replays like an uninterrupted record. --/
+theorem check_resume {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps more : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
+    (htail : '\n' ∉ tail.toList) {u t' : State} {rs' : List Record}
+    (hu : recover c load (recording c header (rs.take k) ++ tail) = .ok u)
     (hmore : record p u more ((steps.take (k / 2)).flatMap (·.2)) (2 * (k / 2) + 1) = .ok (t', rs')) :
-    check c load (recording c w (rs.take (2 * (k / 2))) ++ text c rs') =
-      .ok { definition := some p, state := t', committed := k / 2 + more.length, uncommitted := false,
-            values := (steps.take (k / 2) ++ more).flatMap (·.2) } := by
+    check c load (recording c header (rs.take (2 * (k / 2))) ++ text c rs') =
+      .ok { definition := some p, validated := some header.validated, state := t', committed := k / 2 + more.length,
+            uncommitted := false, values := (steps.take (k / 2) ++ more).flatMap (·.2) } := by
   obtain ⟨u₀, hu₀, hrecover⟩ := recover_torn hc hw hload h hk htail
   rw [hu] at hrecover
   obtain rfl := (Except.ok.inj hrecover).symm
@@ -657,7 +664,7 @@ theorem prefix_lines : ∀ {lines : List (List Char)}, (∀ l ∈ lines, '\n' �
 
 /-- What a crash leaves of a recording: a part of the header, without a newline, or the header, the
     first `k` records and a part of the next line. --/
-theorem prefix_recording {c : Codec} (hc : c.Lawful) (header : Wire) (rs : List Record) {pre : String}
+theorem prefix_recording {c : Codec} (hc : c.Lawful) (header : Header) (rs : List Record) {pre : String}
     (h : pre.toList <+: (recording c header rs).toList) :
     '\n' ∉ pre.toList ∨
       ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c header (rs.take k) ++ tail := by
@@ -673,29 +680,30 @@ theorem prefix_recording {c : Codec} (hc : c.Lawful) (header : Wire) (rs : List 
 /-- A crash anywhere in a recording, the header included, leaves a text that checks: before the header
     is complete, to nothing; after it, to exactly the transitions whose commit records are complete,
     which are the first `k / 2` when the text holds the first `k` records. --/
-theorem check_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
-    (hpre : pre.toList <+: (recording c w rs).toList) :
+theorem check_prefix {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ('\n' ∉ pre.toList ∧
       check c load pre =
-        .ok { definition := none, state := {}, committed := 0, uncommitted := decide (pre ≠ ""), values := [] }) ∨
-    ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c w (rs.take k) ++ tail ∧
+        .ok { definition := none, validated := none, state := {}, committed := 0, uncommitted := decide (pre ≠ ""),
+              values := [] }) ∨
+    ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c header (rs.take k) ++ tail ∧
       ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
         check c load pre =
-          .ok { definition := some p, state := u, committed := k / 2,
+          .ok { definition := some p, validated := some header.validated, state := u, committed := k / 2,
                 uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
-  rcases prefix_recording hc w rs hpre with hnl | ⟨k, hk, tail, htail, rfl⟩
+  rcases prefix_recording hc header rs hpre with hnl | ⟨k, hk, tail, htail, rfl⟩
   · exact Or.inl ⟨hnl, check_torn_header c load hnl⟩
   · obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h hk htail
     exact Or.inr ⟨k, hk, tail, htail, rfl, u, hu, hcheck⟩
 
 /-- After a crash anywhere in a recording, recovery gives the state after the first `n` transitions,
     those whose commit records survived (`check_prefix`). --/
-theorem recover_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
-    (hpre : pre.toList <+: (recording c w rs).toList) :
+theorem recover_prefix {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
       recover c load pre = .ok u := by
   rcases check_prefix hc hw hload h hpre with ⟨-, hcheck⟩ | ⟨k, hk, tail, -, -, u, hu, hcheck⟩
@@ -703,27 +711,43 @@ theorem recover_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except Strin
   · have hlen := record_length h
     exact ⟨k / 2, by omega, u, hu, by simp [recover, hcheck, Except.map]⟩
 
-/-- After a crash anywhere in a recording, the runtime keeps the header and the committed lines
-    (writing the header again if the crash cut it), resumes from the recovered state with the committed
-    payloads, and appends the records of new transactions; the result replays like an uninterrupted
-    record. --/
-theorem check_resume_prefix {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String}
-    (hpre : pre.toList <+: (recording c w rs).toList) :
+/-- After a crash anywhere in a recording, the runtime keeps the header as it was written (writing it
+    again if the crash cut it) and the committed lines, resumes from the recovered state with the
+    committed payloads, and appends the records of new transactions; the result replays like an
+    uninterrupted record. --/
+theorem check_resume_prefix {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition}
+    {header : Header} (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
       recover c load pre = .ok u ∧
       ∀ {more : List (Op × List (Value × String))} {t' : State} {rs' : List Record},
         record p u more ((steps.take n).flatMap (·.2)) (2 * n + 1) = .ok (t', rs') →
-        check c load (recording c w (rs.take (2 * n)) ++ text c rs') =
-          .ok { definition := some p, state := t', committed := n + more.length, uncommitted := false,
-                values := (steps.take n ++ more).flatMap (·.2) } := by
+        check c load (recording c header (rs.take (2 * n)) ++ text c rs') =
+          .ok { definition := some p, validated := some header.validated, state := t', committed := n + more.length,
+                uncommitted := false, values := (steps.take n ++ more).flatMap (·.2) } := by
   obtain ⟨n, hn, u, hu, hrecover⟩ := recover_prefix hc hw hload h hpre
   refine ⟨n, hn, u, hu, hrecover, fun {more t' rs'} hmore => ?_⟩
   have htake : (steps.take n).length = n := by simp; omega
   have hall : record p {} (steps.take n ++ more) [] 1 = .ok (t', rs.take (2 * n) ++ rs') :=
     record_append hu (by rw [htake, Nat.add_comm]; simpa using hmore)
   rw [recording_append, check_text hc hw hload hall, List.length_append, htake]
+
+/-- The lines of a text that starts with a header line are that line and the lines after it. --/
+theorem splitLines_header (c : Codec) (hc : c.Lawful) (header : Header) (rest : String) :
+    (splitLines (c.encodeHeader header ++ "\n" ++ rest).toList []).1 =
+      (c.encodeHeader header).toList :: (splitLines rest.toList []).1 := by
+  rw [String.toList_append, String.toList_append, List.append_assoc,
+    splitLines_append_of_not_mem (hc.newline_not_mem_encodeHeader header)]
+  simp [splitLines]
+
+/-- A record whose header holds a definition that `load` refuses is refused at line 1, with the error
+    of `load`, whatever follows the header. --/
+theorem check_load_error {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {e : String} (hload : load header = .error e) (rest : String) :
+    check c load (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
+  simp only [check, splitLines_header c hc header rest]
+  simp only [decodeHeader_line hc hw, hload, mapError_error, ok_bind, error_bind]
 
 /-! ## Payloads of a recovered state (§12.1) -/
 
@@ -790,51 +814,64 @@ theorem replayLines_covered {c : Codec} {p : Definition} :
       rw [hl, ok_bind] at h
       exact ih (replayLine_covered hr hl) h
 
+/-- A record that checks has a header that `load` read, unless it has no complete line; the checked
+    record replays its other lines against the definition that `load` gave. --/
+theorem check_eq_ok {c : Codec} {load : Header → Except String Definition} {text : String} {checked : Checked}
+    (h : check c load text = .ok checked) :
+    (checked.definition = none ∧ checked.validated = none ∧ checked.state = {} ∧ checked.values = []) ∨
+      ∃ header p lines r, load header = .ok p ∧ replayLines c p {} 1 lines = .ok r ∧ checked.definition = some p ∧
+        checked.validated = some header.validated ∧ checked.state = r.state ∧ checked.values = r.values := by
+  simp only [check] at h
+  split at h
+  · simp only [pure_ok, Except.ok.injEq] at h
+    subst h
+    exact Or.inl ⟨rfl, rfl, rfl, rfl⟩
+  · rename_i line lines _
+    cases hd : c.decodeHeader (String.ofList line) with
+    | error e => simp [hd, mapError_error, error_bind] at h
+    | ok header =>
+      cases hl : load header with
+      | error e => simp [hd, hl, mapError_ok, mapError_error, ok_bind, error_bind] at h
+      | ok p =>
+        cases hr : replayLines c p {} 1 lines with
+        | error e => simp [hd, hl, hr, mapError_ok, ok_bind, map_error] at h
+        | ok r =>
+          simp only [hd, hl, hr, mapError_ok, ok_bind, pure_ok, Except.ok.injEq] at h
+          subst h
+          exact Or.inr ⟨header, p, lines, r, hl, hr, rfl, rfl, rfl, rfl⟩
+
 /-- Every value a checked state mentions has its payload among the committed ones, so a recovered
     state never names a lost value (§12.1). --/
-theorem check_payloads {c : Codec} {load : Wire → Except String Definition} {text : String}
+theorem check_payloads {c : Codec} {load : Header → Except String Definition} {text : String}
     {checked : Checked} (h : check c load text = .ok checked) :
     ∀ v ∈ checked.state.values, checked.values.any (·.1 == v) = true := by
   have hempty : Replay.Covered {} := fun v hv => by simp [State.values] at hv
-  simp only [check] at h
-  split at h
-  · simp only [pure_ok, Except.ok.injEq] at h
-    subst h
+  rcases check_eq_ok h with ⟨-, -, hstate, hvalues⟩ | ⟨header, p, lines, r, -, hr, -, -, hstate, hvalues⟩
+  · rw [hstate, hvalues]
     exact hempty
-  · rename_i header lines _
-    cases hp : (c.decodeHeader (String.ofList header) >>= load).mapError (s!"line 1: {·}") with
-    | error e => simp only [hp, error_bind, reduceCtorEq] at h
-    | ok p =>
-      cases hr : replayLines c p {} 1 lines with
-      | error e => simp only [hp, hr, ok_bind, error_bind, reduceCtorEq] at h
-      | ok r =>
-        simp only [hp, hr, ok_bind, pure_ok, Except.ok.injEq] at h
-        subst h
-        exact replayLines_covered hempty hr
+  · rw [hstate, hvalues]
+    exact replayLines_covered hempty hr
 
-/-- The definition a checked record names is one that `load` read, from the header. --/
-theorem check_definition {c : Codec} {load : Wire → Except String Definition} {text : String} {checked : Checked}
+/-- The definition a checked record names is one that `load` read from its header, and the record
+    reports the flag of that header. --/
+theorem check_definition {c : Codec} {load : Header → Except String Definition} {text : String} {checked : Checked}
     {q : Definition} (h : check c load text = .ok checked) (hq : checked.definition = some q) :
-    ∃ w, load w = .ok q := by
-  simp only [check] at h
-  split at h
-  · simp only [pure_ok, Except.ok.injEq] at h
-    subst h
-    simp at hq
-  · rename_i header lines _
-    cases hd : c.decodeHeader (String.ofList header) with
-    | error e => simp [hd, error_bind, mapError_error] at h
-    | ok w =>
-      cases hl : load w with
-      | error e => simp [hd, hl, ok_bind, error_bind, mapError_error] at h
-      | ok q' =>
-        cases hr : replayLines c q' {} 1 lines with
-        | error e => simp [hd, hl, hr, ok_bind, mapError_ok, map_error] at h
-        | ok r =>
-          simp only [hd, hl, hr, ok_bind, mapError_ok, pure_ok, Except.ok.injEq] at h
-          subst h
-          simp only [Option.some.injEq] at hq
-          exact ⟨w, hq ▸ hl⟩
+    ∃ header, load header = .ok q ∧ checked.validated = some header.validated := by
+  rcases check_eq_ok h with ⟨hnone, -⟩ | ⟨header, p, lines, r, hl, -, hp, hv, -⟩
+  · rw [hnone] at hq
+    cases hq
+  · rw [hp, Option.some.injEq] at hq
+    exact ⟨header, hq ▸ hl, hv⟩
+
+/-- A checked record names a definition exactly when it reports the flag of a header. --/
+theorem check_validated_isSome {c : Codec} {load : Header → Except String Definition} {text : String}
+    {checked : Checked} (h : check c load text = .ok checked) :
+    checked.validated.isSome = checked.definition.isSome := by
+  rcases check_eq_ok h with ⟨hd, hv, -⟩ | ⟨header, p, lines, r, -, -, hp, hv, -⟩
+  · rw [hd, hv]
+    rfl
+  · rw [hp, hv]
+    rfl
 
 /-! ## Resuming under a definition (§12.1)
 
@@ -852,10 +889,10 @@ theorem definitionWire_eq_of_render {p q : Definition}
 
 /-- The definition `agreeing load p` reads is the one `load` reads, when it has the canonical form
     of `p`. --/
-theorem agreeing_eq_ok {load : Wire → Except String Definition} {p q : Definition} {w : Wire} :
-    agreeing load p w = .ok q ↔ load w = .ok q ∧ Codec.definitionWire q = Codec.definitionWire p := by
+theorem agreeing_eq_ok {load : Header → Except String Definition} {p q : Definition} {header : Header} :
+    agreeing load p header = .ok q ↔ load header = .ok q ∧ Codec.definitionWire q = Codec.definitionWire p := by
   simp only [agreeing]
-  cases hl : load w with
+  cases hl : load header with
   | error e => simp [error_bind]
   | ok q' =>
     simp only [ok_bind, Except.ok.injEq]
@@ -872,9 +909,14 @@ theorem agreeing_eq_ok {load : Wire → Except String Definition} {p q : Definit
       rintro rfl hw
       exact hr (congrArg Wire.render hw)
 
+/-- `agreeing load p` refuses what `load` refuses, with the same error. --/
+theorem agreeing_of_error {load : Header → Except String Definition} {p : Definition} {header : Header} {e : String}
+    (h : load header = .error e) : agreeing load p header = .error e := by
+  simp [agreeing, h, error_bind]
+
 /-- A record checks with `agreeing load p` exactly when it checks with `load` and the definition of
     its header, once complete, has the canonical form of `p`; both checks then agree. --/
-theorem check_agreeing {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+theorem check_agreeing {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {checked : Checked} :
     check c (agreeing load p) text = .ok checked ↔
       check c load text = .ok checked ∧
@@ -885,13 +927,13 @@ theorem check_agreeing {c : Codec} {load : Wire → Except String Definition} {p
     simp only [pure_ok, Except.ok.injEq] at h
     subst h
     simp at hq
-  · rename_i header lines _
-    cases hd : c.decodeHeader (String.ofList header) with
-    | error e => simp [error_bind, mapError_error]
-    | ok w =>
-      simp only [ok_bind]
-      cases hl : load w with
-      | error e => simp [agreeing, hl, error_bind, mapError_error]
+  · rename_i line lines _
+    cases hd : c.decodeHeader (String.ofList line) with
+    | error e => simp [mapError_error, error_bind]
+    | ok header =>
+      simp only [mapError_ok, ok_bind]
+      cases hl : load header with
+      | error e => simp [agreeing_of_error hl, error_bind, mapError_error]
       | ok q =>
         by_cases hr : Codec.definitionWire q = Codec.definitionWire p
         · simp only [agreeing_eq_ok.2 ⟨hl, hr⟩]
@@ -903,11 +945,11 @@ theorem check_agreeing {c : Codec} {load : Wire → Except String Definition} {p
             subst h
             simp only [Option.some.injEq] at hq'
             exact hq' ▸ hr
-        · have hag : ∀ q', agreeing load p w ≠ .ok q' := fun q' h => by
+        · have hag : ∀ q', agreeing load p header ≠ .ok q' := fun q' h => by
             obtain ⟨hq', hw⟩ := agreeing_eq_ok.1 h
             rw [hl, Except.ok.injEq] at hq'
             exact hr (hq' ▸ hw)
-          cases ha : agreeing load p w with
+          cases ha : agreeing load p header with
           | ok q' => exact absurd ha (hag q')
           | error e =>
             simp only [mapError_error, mapError_ok, error_bind, ok_bind, reduceCtorEq, false_iff, not_and]
@@ -921,7 +963,7 @@ theorem check_agreeing {c : Codec} {load : Wire → Except String Definition} {p
 
 /-- A record resumes under `p` exactly when it checks, its header is complete, and the definition
     the header holds has the canonical form of `p`; it resumes from the checked state. --/
-theorem resume_eq_ok {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+theorem resume_eq_ok {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {s : State} :
     resume c load p text = .ok s ↔
       ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
@@ -956,7 +998,7 @@ theorem resume_eq_ok {c : Codec} {load : Wire → Except String Definition} {p :
 
 /-- A record resumes only under a definition of the canonical form of the one its header holds
     (§12.1). --/
-theorem resume_definitionWire {c : Codec} {load : Wire → Except String Definition} {p : Definition}
+theorem resume_definitionWire {c : Codec} {load : Header → Except String Definition} {p : Definition}
     {text : String} {s : State} (h : resume c load p text = .ok s) :
     ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
       Codec.definitionWire q = Codec.definitionWire p := by
@@ -964,37 +1006,46 @@ theorem resume_definitionWire {c : Codec} {load : Wire → Except String Definit
   exact ⟨checked, q, hcheck, hq, hw⟩
 
 /-- A resumed run continues from the state `recover` gives. --/
-theorem resume_recover {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+theorem resume_recover {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {s : State} (h : resume c load p text = .ok s) : recover c load text = .ok s := by
   obtain ⟨checked, q, hcheck, -, -, rfl⟩ := resume_eq_ok.1 h
   simp [recover, hcheck, Except.map]
 
 /-- A record without a complete line, which a crash inside the header leaves, does not resume. --/
-theorem resume_torn_header (c : Codec) (load : Wire → Except String Definition) (p : Definition) {tail : String}
+theorem resume_torn_header (c : Codec) (load : Header → Except String Definition) (p : Definition) {tail : String}
     (htail : '\n' ∉ tail.toList) : resume c load p tail = .error "the record has no header" := by
   simp [resume, check_torn_header c (agreeing load p) htail, ok_bind, throw_error]
 
+/-- A record whose header holds a definition that `load` refuses resumes under no definition: it is
+    refused at line 1, with the error of `load`. --/
+theorem resume_load_error {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {e : String} (hload : load header = .error e) (p : Definition)
+    (rest : String) : resume c load p (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
+  simp [resume, check_load_error hc hw (agreeing_of_error (p := p) hload) rest, error_bind]
+
 /-- A header whose definition `load` reads as `p` agrees with `p`. --/
-theorem agreeing_of_load {load : Wire → Except String Definition} {p : Definition} {w : Wire}
-    (hload : load w = .ok p) : agreeing load p w = .ok p :=
+theorem agreeing_of_load {load : Header → Except String Definition} {p : Definition} {header : Header}
+    (hload : load header = .ok p) : agreeing load p header = .ok p :=
   agreeing_eq_ok.2 ⟨hload, rfl⟩
 
 /-- A definition resumes a whole recording whose header it loads from, from the state of the run that
     wrote it. --/
-theorem resume_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
-    resume c load p (recording c w rs) = .ok t := by
+theorem resume_text {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) :
+    resume c load p (recording c header rs) = .ok t := by
   simp [resume, check_text hc hw (agreeing_of_load hload) h, ok_bind, pure_ok]
 
 /-- After a crash that left the header complete, the definition resumes from the state of the
     committed transitions. --/
-theorem resume_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
-    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
-    {tail : String} (htail : '\n' ∉ tail.toList) :
+theorem resume_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
+    (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
+    {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
+    (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
+    (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      resume c load p (recording c w (rs.take k) ++ tail) = .ok u := by
+      resume c load p (recording c header (rs.take k) ++ tail) = .ok u := by
   obtain ⟨u, hu, hcheck⟩ := check_torn hc hw (agreeing_of_load hload) h hk htail
   exact ⟨u, hu, by simp [resume, hcheck, ok_bind, pure_ok]⟩
 
