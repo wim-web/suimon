@@ -1,0 +1,30 @@
+{
+  "main": "shipping",
+  "functions": [
+    {"id": "listOrders", "output": {"stream": "Order"}},
+    {"id": "ship", "input": "Order", "output": {"single": "Receipt"}}
+  ],
+  "judges": [
+    {"id": "isPaid", "input": "Order"}
+  ],
+  "transforms": [
+    {"id": "order", "input": "Order", "output": "Order"},
+    {"id": "receipt", "input": "Receipt", "output": "Receipt"}
+  ],
+  "workflows": [
+    {
+      "id": "shipping",
+      "placements": [
+        {"name": "list", "node": {"type": "function", "function": "listOrders"}, "policy": "stop", "timeout": {"callMs": 60000, "elementMs": 5000}},
+        {"name": "paid", "node": {"type": "branch", "judge": "isPaid", "arms": ["paid", "unpaid"]}, "policy": "continue", "timeout": {"callMs": 1000}},
+        {"name": "ship", "node": {"type": "function", "function": "ship"}, "policy": "continue"},
+        {"name": "receipts", "node": {"type": "waitStream", "element": "Receipt"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "list", "target": "paid", "transform": "order"},
+        {"source": "paid", "arm": "paid", "target": "ship", "transform": "order"},
+        {"source": "ship", "target": "receipts", "transform": "receipt"}
+      ]
+    }
+  ]
+}

@@ -1,234 +1,350 @@
 package suimon
 
-import "unicode/utf8"
+import "strconv"
 
+// Exploration of Suimon/Explore.lean: the operations that might be accepted in a state, and a
+// reproducible random walk over them. The candidate order and the choices are those of Lean, so a
+// seed produces the same operations in both.
+
+// Config bounds an exploration. The zero value is not the Lean default; use DefaultConfig.
 type Config struct {
-	Depth     Nat `json:"depth"`
-	Workers   Nat `json:"workers"`
-	Tick      Nat `json:"tick"`
-	MaxItems  Nat `json:"maxItems"`
-	MaxStates Nat `json:"maxStates"`
+	// MaxYields is the number of elements a Stream function yields at most.
+	MaxYields int
+	// Failures includes failures, timeouts and lost calls among the reports of user processes.
+	Failures bool
+	// Cancel includes cancellation by the caller.
+	Cancel bool
+	// Disruption: a random walk picks a disruptive operation once in this many choices, when one
+	// is accepted.
+	Disruption uint64
 }
 
-func DefaultConfig() Config { return Config{N(8), N(1), N(1), N(2), N(100000)} }
-func InputValues(g Graph) List[Input] {
-	return mapped(g.Entries, func(p PortRef) Input { return Input{p, List[string]{Identity([]string{"input", p.Node, p.Port})}} })
+// DefaultConfig is Lean's Explore.Config default.
+func DefaultConfig() Config {
+	return Config{MaxYields: 2, Failures: true, Cancel: true, Disruption: 40}
 }
-func Outputs(i Instance, n Node) List[Output] {
-	return mapped(filter(n.Outputs, func(p Port) bool { return p.Kind == "plain" }), func(p Port) Output {
-		items := append([]string{p.Name}, mapped(i.Inputs, func(p [2]string) string { return p[1] })...)
-		return Output{p.Name, List[string]{DerivedItem("leaf", i.Path, i.Node, items)}}
-	})
+
+// ExploreValue derives a value from where it comes from, so a run is reproducible.
+func ExploreValue(parts ...string) string {
+	return Identity(append([]string{"value"}, parts...)...)
 }
-func freshID(tag string, used []string) string {
-	longest := ""
-	for _, id := range used {
-		if utf8.RuneCountInString(id) >= utf8.RuneCountInString(longest) {
-			longest = id
-		}
-	}
-	return tag + ":" + longest
-}
-func ClaimCredentials(s State, i Instance) Credentials {
-	return Credentials{i.ID, freshID("attempt", mapped(s.Attempts, func(a Attempt) string { return a.ID })), freshID("lease", mapped(s.Attempts, func(a Attempt) string { return a.Token })), s.Now}
-}
-func pendingCandidates(path Path, n Node, c Channel) List[Op] {
-	ts := c.Pending()
-	if len(ts) == 0 || ts[0].EOS {
+
+func armsOf(p *Definition, v view, c *Call) []string {
+	i, ok := v.invocation(c.Owner)
+	if !ok {
 		return nil
 	}
-	o := Op{Path: path, Node: n.ID, Item: ts[0].Item, Edge: c.ID}
-	switch n.Kind.Type {
-	case "coalesce":
-		o.Kind = "fireCoalesce"
-	case "merge":
-		o.Kind = "fireMerge"
-	case "forEach":
-		o.Kind = "spawn"
-	case "filter":
-		o.Kind = "fireFilter"
-		o.Keep = true
-		other := o
-		other.Keep = false
-		return List[Op]{o, other}
-	default:
+	w, ok := v.workflow(p, i.Run)
+	if !ok {
 		return nil
 	}
-	return List[Op]{o}
-}
-func nodeCandidates(s State, path Path, n Node) List[Op] {
-	ops := List[Op]{{Kind: "skip", Path: path, Node: n.ID}}
-	o := Op{Path: path, Node: n.ID}
-	switch n.Kind.Type {
-	case "leaf", "subworkflow", "loop":
-		o.Kind = "activate"
-		ops = append(ops, o)
-	case "waitAll":
-		o.Kind = "fireWaitAll"
-		ops = append(ops, o)
-	case "branch":
-		for _, arm := range n.Kind.Arms {
-			o.Kind = "fireBranch"
-			o.Arm = arm
-			ops = append(ops, o)
-		}
-	case "collect":
-		o.Kind = "fireCollect"
-		ops = append(ops, o)
-	case "coalesce", "filter", "merge", "forEach":
-		if n.Kind.Type != "coalesce" {
-			o.Kind = "propagateEos"
-			ops = append(ops, o)
-		}
-		for _, c := range s.Incoming(path, n.ID) {
-			ops = append(ops, pendingCandidates(path, n, c)...)
-		}
+	pl, ok := w.placement(i.Placement)
+	if !ok {
+		return nil
 	}
-	return ops
-}
-func instanceCandidates(cfg Config, s State, i Instance) List[Op] {
-	switch i.Status {
-	case "ready":
-		ops := List[Op]{}
-		for w := (Nat{}); w.Cmp(cfg.Workers) < 0; w = w.Inc() {
-			ops = append(ops, Op{Kind: "claim", Auth: ClaimCredentials(s, i), Worker: w.String()})
-		}
-		return ops
-	case "running":
-		if i.Lease == nil {
-			return nil
-		}
-		auth := Credentials{i.ID, i.Lease.Attempt, i.Lease.Token, s.Now}
-		renew := auth
-		renew.Now = s.Now.Add(cfg.Tick)
-		ops := List[Op]{{Kind: "fail", Auth: auth, Code: "TRANSIENT", Retryable: true}, {Kind: "fail", Auth: auth, Code: "PERMANENT"}, {Kind: "expireLease", Inst: i.ID, Now: maxNat(s.Now.Add(cfg.Tick), i.Lease.Until)}, {Kind: "renew", Auth: renew}}
-		n := s.Node(i.Path, i.Node)
-		if n == nil {
-			return ops
-		}
-		ops = append(ops, Op{Kind: "complete", Auth: auth, Outputs: Outputs(i, *n)})
-		for _, p := range n.Outputs {
-			if p.Kind == "stream" {
-				for idx := (Nat{}); idx.Cmp(cfg.MaxItems) < 0; idx = idx.Inc() {
-					ops = append(ops, Op{Kind: "emit", Auth: auth, Port: p.Name, Item: DerivedItem("emit", i.Path, i.Node, []string{p.Name, idx.String()})})
-				}
-			}
-		}
-		return ops
-	case "retryWait":
-		return List[Op]{{Kind: "promoteRetry", Inst: i.ID, Now: maxNat(s.Now, value(i.RetryAt, s.Now.Add(cfg.Tick)))}}
-	case "failed":
-		return List[Op]{{Kind: "manualRetry", Inst: i.ID}}
-	case "waitingInputs":
-		return List[Op]{{Kind: "finishSubworkflow", Inst: i.ID}, {Kind: "loopIterate", Inst: i.ID, Done: true}, {Kind: "loopIterate", Inst: i.ID}}
+	if branch, ok := pl.Control.(BranchControl); ok {
+		return branch.Arms
 	}
 	return nil
 }
 
-// Candidates returns the same finite operation domain and order as Lean.
-func Candidates(cfg Config, s State) List[Op] {
-	if terminal(s.Status) {
-		return nil
-	}
-	if !s.Started {
-		f := s.Frame(nil)
-		if f == nil {
+func callCandidates(p *Definition, cfg Config, s *State, c *Call) []Op {
+	failures := func(fetching bool) []Op {
+		if !cfg.Failures {
 			return nil
 		}
-		return List[Op]{{Kind: "start", Inputs: InputValues(f.Graph)}, {Kind: "cancel"}}
+		ops := []Op{OpFailed{c.ID}, OpTimedOut{c.ID, false}, OpLost{c.ID}}
+		if fetching {
+			ops = append(ops, OpTimedOut{c.ID, true})
+		}
+		return ops
 	}
-	ops := List[Op]{{Kind: "idle"}, {Kind: "cancel"}}
-	for _, f := range s.Frames {
-		if !f.Closed {
-			for _, n := range f.Graph.Nodes {
-				ops = append(ops, nodeCandidates(s, f.Path, n)...)
+	var ops []Op
+	switch c.Status {
+	case CallRunning:
+		if c.Target.Judge {
+			for _, arm := range armsOf(p, s.view(), c) {
+				ops = append(ops, OpJudged{c.ID, arm})
+			}
+		} else if c.Stream {
+			ops = append(ops, OpFetch{c.ID})
+		} else {
+			ops = append(ops, OpReturned{c.ID, ExploreValue("return", c.ID)})
+		}
+		return append(ops, failures(false)...)
+	case CallFetching:
+		if c.Yields < cfg.MaxYields {
+			ops = append(ops, OpYielded{c.ID, ExploreValue("yield", c.ID, strconv.Itoa(c.Yields))})
+		}
+		return append(append(ops, OpEnded{c.ID}), failures(true)...)
+	case CallCancelling:
+		return []Op{OpTerminated{c.ID}, OpLost{c.ID}}
+	}
+	return nil
+}
+
+// invokeCandidates are the invocations of the placement name of w, whose kinds are k.
+func invokeCandidates(s *State, path Path, w *Workflow, k kindTable, name string) []Op {
+	sh, ok := w.shape(k, name)
+	if !ok {
+		return nil
+	}
+	switch sh.kind {
+	case shapeNone, shapeEntry:
+		return []Op{OpInvoke{Run: path, Placement: name}}
+	case shapeSingle:
+		if r := s.view().resolveSingle(path, sh.index, sh.connection); r.kind == resolutionValue {
+			return []Op{OpInvoke{Run: path, Placement: name, Trigger: ptr(r.source)}}
+		}
+	case shapeStream:
+		var ops []Op
+		for d := range s.view().deliveriesOn(path, sh.index) {
+			if d.Outcome.Kind != DeliveredFailed {
+				ops = append(ops, OpInvoke{Run: path, Placement: name, Trigger: ptr(d.Source)})
 			}
 		}
+		return ops
 	}
-	for _, i := range s.Instances {
-		ops = append(ops, instanceCandidates(cfg, s, i)...)
+	return nil
+}
+
+func deliveryCandidates(p *Definition, cfg Config, s *State, r *Result) []Op {
+	w, ok := s.workflow(p, r.Run)
+	if !ok {
+		return nil
+	}
+	var ops []Op
+	for i, c := range w.Connections {
+		if c.Source != r.Placement || (c.Arm != nil && !equalPtr(c.Arm, r.Arm)) {
+			continue
+		}
+		if _, delivered := s.view().delivery(r.Run, i, r.ID); delivered {
+			continue
+		}
+		if c.Transform.Discard {
+			ops = append(ops, OpDeliver{Run: r.Run, Connection: i, Source: r.ID})
+			continue
+		}
+		ops = append(ops, OpDeliver{Run: r.Run, Connection: i, Source: r.ID,
+			Value: ptr(ExploreValue("transform", strconv.Itoa(i), r.ID))})
+		if cfg.Failures {
+			ops = append(ops, OpTransformFailed{Run: r.Run, Connection: i, Source: r.ID})
+		}
 	}
 	return ops
 }
 
-type Failure struct {
-	Reason string   `json:"reason"`
-	Trace  List[Op] `json:"trace"`
-	State  State    `json:"state"`
-}
-type Report struct {
-	States      Nat      `json:"states"`
-	Transitions Nat      `json:"transitions"`
-	Depth       Nat      `json:"depth"`
-	Complete    bool     `json:"complete"`
-	Failure     *Failure `json:"failure"`
+func taskCandidates(p *Definition, cfg Config, s *State, e *Execution) []Op {
+	ops := []Op{OpCloseExecution{e.ID}}
+	for _, t := range e.Tasks {
+		spec, err := s.view().taskSpec(p, e, t.Name)
+		if err != nil {
+			continue
+		}
+		switch t.Status {
+		case TaskPending:
+			switch {
+			case spec.Input == nil:
+			case spec.Input.Discard:
+				ops = append(ops, OpTaskInput{Execution: e.ID, Task: t.Name})
+			default:
+				ops = append(ops, OpTaskInput{Execution: e.ID, Task: t.Name, Value: ptr(ExploreValue("input", e.ID, t.Name))})
+				if cfg.Failures {
+					ops = append(ops, OpTaskInputFailed{e.ID, t.Name})
+				}
+			}
+		case TaskReady:
+			ops = append(ops, OpBeginTask{e.ID, t.Name})
+		}
+	}
+	for _, r := range s.TaskResults {
+		if r.Execution != e.ID || r.Output.Kind != TaskOutputPending {
+			continue
+		}
+		ops = append(ops, OpTaskOutput{Execution: e.ID, Task: r.Task, Index: r.Index,
+			Value: ExploreValue("output", e.ID, r.Task, strconv.Itoa(r.Index))})
+		if cfg.Failures {
+			ops = append(ops, OpTaskOutputFailed{Execution: e.ID, Task: r.Task, Index: r.Index})
+		}
+	}
+	return ops
 }
 
-func Search(g Graph, cfg Config) Report {
-	type entry struct {
-		s   State
-		ops List[Op]
-	}
-	initial := Initial(g)
-	visited := map[string]bool{compact(initial): true}
-	frontier := []entry{{initial, nil}}
-	transitions := Nat{}
-	for depth := (Nat{}); depth.Cmp(cfg.Depth) < 0; depth = depth.Inc() {
-		nextFrontier := []entry{}
-		for _, current := range frontier {
-			for _, o := range Candidates(cfg, current.s) {
-				next, r := Step(current.s, o)
-				if r != nil {
-					if r.Code == "INVARIANT" {
-						trace := append(append(List[Op]{}, current.ops...), o)
-						return Report{N(uint64(len(visited))), transitions, depth, false, &Failure{r.Message, trace, current.s}}
-					}
-					continue
-				}
-				transitions = transitions.Inc()
-				key := compact(next)
-				if !visited[key] {
-					if N(uint64(len(visited))).Cmp(cfg.MaxStates) >= 0 {
-						return Report{N(uint64(len(visited))), transitions, depth, false, nil}
-					}
-					visited[key] = true
-					nextFrontier = append(nextFrontier, entry{next, append(append(List[Op]{}, current.ops...), o)})
-				}
-			}
-		}
-		frontier = nextFrontier
-	}
-	return Report{N(uint64(len(visited))), transitions, cfg.Depth, true, nil}
+// Candidates are every operation that might be accepted; Step decides which ones are.
+func Candidates(p *Definition, cfg Config, s *State) []Op {
+	return candidatesWith(p, p.derive(), cfg, s)
 }
-func NextSeed(seed Nat) Nat { return seed.Mul(N(1664525)).Add(N(1013904223)).mod(N(4294967296)) }
-func Generate(g Graph, cfg Config, seed, count Nat) (State, List[Event], *Reject) {
-	s := Initial(g)
-	events := List[Event]{}
-	for idx := (Nat{}); idx.Cmp(count) < 0; idx = idx.Inc() {
-		choices := List[Op]{}
-		for _, o := range Candidates(cfg, s) {
-			next, r := Step(s, o)
-			if r != nil {
-				if r.Code == "INVARIANT" {
-					return s, nil, r
-				}
+
+// candidatesWith is Candidates with d, a derivation of p.
+func candidatesWith(p *Definition, d *derivation, cfg Config, s *State) []Op {
+	if !s.Started {
+		var input *string
+		if w, ok := p.workflow(p.Main); ok && w.Input != nil {
+			input = ptr(ExploreValue("input"))
+		}
+		return []Op{OpStart{Input: input}}
+	}
+	switch s.Status {
+	case StatusRunning:
+		ops := []Op{OpConclude{}}
+		if cfg.Cancel {
+			ops = append(ops, OpCancel{})
+		}
+		for _, r := range s.Runs {
+			if r.Complete {
 				continue
 			}
-			if !equal(s, next) {
-				choices = append(choices, o)
+			w, ok := p.workflow(r.Workflow)
+			if !ok {
+				continue
+			}
+			if len(r.Path) != 0 {
+				ops = append(ops, OpCloseRun{Run: r.Path})
+			}
+			kinds := d.kinds(w)
+			for _, pl := range w.Placements {
+				ops = append(ops, OpSettle{Run: r.Path, Placement: pl.Name})
+				ops = append(ops, invokeCandidates(s, r.Path, w, kinds, pl.Name)...)
 			}
 		}
+		for i := range s.Results {
+			ops = append(ops, deliveryCandidates(p, cfg, s, &s.Results[i])...)
+		}
+		for i := range s.Calls {
+			ops = append(ops, callCandidates(p, cfg, s, &s.Calls[i])...)
+		}
+		for i := range s.Executions {
+			if !s.Executions[i].Complete {
+				ops = append(ops, taskCandidates(p, cfg, s, &s.Executions[i])...)
+			}
+		}
+		return ops
+	case StatusStopping:
+		ops := []Op{OpConclude{}}
+		if cfg.Cancel && !s.Cancelled {
+			ops = append(ops, OpCancel{})
+		}
+		for _, c := range s.Calls {
+			if c.Status == CallCancelling {
+				ops = append(ops, OpTerminated{c.ID}, OpLost{c.ID})
+			}
+		}
+		return ops
+	}
+	return nil
+}
+
+// Choice is an accepted operation and the state it leads to.
+type Choice struct {
+	Op   Op
+	Next *State
+}
+
+// Accepted are the candidates that Step accepts and that change the state.
+func Accepted(p *Definition, cfg Config, s *State) []Choice {
+	return acceptedWith(p, p.derive(), cfg, s)
+}
+
+// acceptedWith is Accepted with d, a derivation of p.
+func acceptedWith(p *Definition, d *derivation, cfg Config, s *State) []Choice {
+	var choices []Choice
+	for _, op := range candidatesWith(p, d, cfg, s) {
+		next, err := stepWith(p, d, s, op)
+		if err == nil && !next.Equal(s) {
+			choices = append(choices, Choice{op, next})
+		}
+	}
+	return choices
+}
+
+// NextSeed is a portable generator, so that a failing seed reproduces anywhere: SplitMix64 (Steele,
+// Lea and Flood, 2014), whose seed advances by a fixed odd constant and which draws mix(seed).
+func NextSeed(seed uint64) uint64 {
+	return seed + 0x9e3779b97f4a7c15
+}
+
+// mix makes every bit of the number drawn depend on every bit of the seed, so that remainders by
+// small numbers vary independently from one draw to the next (Lean's Explore.mix).
+func mix(seed uint64) uint64 {
+	z := (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
+}
+
+// disruptive: failures, cancellation and short streams end work early, so a walk picks them rarely.
+// A cancellation after a stop ends nothing early: the stop has already cancelled the calls and left
+// the waiting tasks unstarted, and the cancellation only marks the run cancelled, so a walk does not
+// keep it rare.
+func disruptive(cfg Config, s *State, op Op) bool {
+	switch op := op.(type) {
+	case OpFailed, OpTimedOut, OpLost, OpTransformFailed, OpTaskInputFailed, OpTaskOutputFailed:
+		return true
+	case OpCancel:
+		return s.Status == StatusRunning
+	case OpEnded:
+		c, ok := s.call(op.Call)
+		return ok && c.Yields < cfg.MaxYields
+	}
+	return false
+}
+
+// Lean's natural number division and remainder, where n / 0 = 0 and n % 0 = n.
+func natDiv(a, b uint64) uint64 {
+	if b == 0 {
+		return 0
+	}
+	return a / b
+}
+
+func natMod(a, b uint64) uint64 {
+	if b == 0 {
+		return a
+	}
+	return a % b
+}
+
+// Pick chooses among the accepted operations with the number drawn at seed, usually a
+// non-disruptive one: the remainder of the number by cfg.Disruption decides whether to take a
+// disruptive operation, and the quotient which one of the pool.
+func Pick(cfg Config, s *State, seed uint64, choices []Choice) (Choice, bool) {
+	n := mix(seed)
+	var bad, good []Choice
+	for _, c := range choices {
+		if disruptive(cfg, s, c.Op) {
+			bad = append(bad, c)
+		} else {
+			good = append(good, c)
+		}
+	}
+	pool := good
+	if len(good) == 0 || (len(bad) > 0 && natMod(n, cfg.Disruption) == 0) {
+		pool = bad
+	}
+	if len(pool) == 0 {
+		return Choice{}, false
+	}
+	return pool[natMod(natDiv(n, cfg.Disruption), uint64(len(pool)))], true
+}
+
+// Walk is a random walk from the state before the start until no operation is accepted, or limit
+// operations were taken. It returns the final state and the operations. Lean's walk takes the seed
+// modulo 2^64, as a uint64 is.
+func Walk(p *Definition, cfg Config, seed uint64, limit int) (*State, []Op) {
+	d := p.derive()
+	state := &State{}
+	var trace []Op
+	for range limit {
+		choices := acceptedWith(p, d, cfg, state)
 		if len(choices) == 0 {
 			break
 		}
 		seed = NextSeed(seed)
-		o := choices[seed.mod(natLen(choices)).index(len(choices))]
-		next, records, r := RecordTransaction(s, []Op{o}, natLen(events).Inc(), "txn-"+idx.Inc().String(), s.Now)
-		if r != nil {
-			return s, nil, r
+		choice, ok := Pick(cfg, state, seed, choices)
+		if !ok {
+			break
 		}
-		s = next
-		events = append(events, records...)
+		trace = append(trace, choice.Op)
+		state = choice.Next
 	}
-	return s, events, nil
+	return state, trace
 }

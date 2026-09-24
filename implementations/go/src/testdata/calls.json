@@ -1,0 +1,54 @@
+{
+  "main": "orders",
+  "functions": [
+    {"id": "loadOrder", "output": {"single": "Order"}},
+    {"id": "lines", "input": "Order", "output": {"stream": "Line"}},
+    {"id": "price", "input": "Line", "output": {"single": "Price"}},
+    {"id": "audit", "input": "Order", "output": {"single": "Audit"}},
+    {"id": "notify", "output": {"single": "Ack"}}
+  ],
+  "judges": [
+    {"id": "isLarge", "input": "Order"}
+  ],
+  "transforms": [
+    {"id": "order", "input": "Order", "output": "Order"},
+    {"id": "line", "input": "Line", "output": "Line"},
+    {"id": "price", "input": "Price", "output": "Price"},
+    {"id": "pricesSummary", "input": {"list": "Price"}, "output": "Summary"},
+    {"id": "auditSummary", "input": "Audit", "output": "Summary"}
+  ],
+  "workflows": [
+    {
+      "id": "orders",
+      "placements": [
+        {"name": "load", "node": {"type": "function", "function": "loadOrder"}, "policy": "continue", "timeout": {"callMs": 100}},
+        {"name": "size", "node": {"type": "branch", "judge": "isLarge", "arms": ["large", "small", "ignored"]}, "policy": "continue", "timeout": {"callMs": 50}},
+        {"name": "priceAll", "node": {"type": "subworkflow", "workflow": "pricing", "output": "all"}, "policy": "continue"},
+        {"name": "audit", "node": {"type": "function", "function": "audit"}, "policy": "stop"},
+        {"name": "done", "node": {"type": "merge", "element": "Summary"}, "policy": "continue"},
+        {"name": "notify", "node": {"type": "function", "function": "notify"}, "policy": "continue"}
+      ],
+      "connections": [
+        {"source": "load", "target": "size", "transform": "order"},
+        {"source": "size", "arm": "large", "target": "priceAll", "transform": "order"},
+        {"source": "size", "arm": "small", "target": "audit", "transform": "order"},
+        {"source": "priceAll", "target": "done", "transform": "pricesSummary"},
+        {"source": "audit", "target": "done", "transform": "auditSummary"},
+        {"source": "done", "target": "notify", "transform": "discard"}
+      ]
+    },
+    {
+      "id": "pricing",
+      "input": {"type": "Order", "placement": "lines"},
+      "placements": [
+        {"name": "lines", "node": {"type": "function", "function": "lines"}, "policy": "continue", "timeout": {"elementMs": 10}},
+        {"name": "price", "node": {"type": "function", "function": "price"}, "policy": "continue"},
+        {"name": "all", "node": {"type": "waitStream", "element": "Price"}, "policy": "continue"}
+      ],
+      "connections": [
+        {"source": "lines", "target": "price", "transform": "line"},
+        {"source": "price", "target": "all", "transform": "price"}
+      ]
+    }
+  ]
+}

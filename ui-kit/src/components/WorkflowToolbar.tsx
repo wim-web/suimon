@@ -1,24 +1,24 @@
-import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronDown, Download, Workflow } from 'lucide-react';
+import { TriangleAlert, Workflow as WorkflowIcon } from 'lucide-react';
+import { statusLabel, statusTone } from './StatusBadge';
 
 export interface WorkflowToolbarProps {
   title: string;
   subtitle?: string;
+  /** The overall status of the state, or a host-defined word such as `ready`. */
   status?: string;
+  failures?: number;
+  onShowFailures?: () => void;
   actions?: ReactNode;
-  onExport?: (kind: 'graph' | 'trace' | 'snapshot') => void;
 }
-export function WorkflowToolbar({ title, subtitle, status = 'ready', actions, onExport }: WorkflowToolbarProps) {
-  const [menu, setMenu] = useState(false);
+export function WorkflowToolbar({ title, subtitle, status = 'ready', failures = 0, onShowFailures, actions }: WorkflowToolbarProps) {
   return <header className="sui-toolbar">
-    <div className="sui-brand" role="img" aria-label="suimon"><Workflow size={21} aria-hidden="true" /></div>
-    <div className="sui-workflow-title"><span>{subtitle ?? 'Workspace'}</span><h1>{title}</h1></div>
-    <span className="sui-version">WORKFLOW</span>
-    <div className="sui-toolbar-actions"><span className={`sui-status sui-status-${status}`}><i />{status}</span>{actions}
-      {onExport && <div className="sui-export"><button className="sui-button" aria-expanded={menu} onClick={() => setMenu(!menu)}><Download size={14} />Export<ChevronDown size={12} /></button>
-        {menu && <><button className="sui-menu-dismiss" aria-label="エクスポートメニューを閉じる" onClick={() => setMenu(false)} /><div className="sui-menu">{(['graph', 'trace', 'snapshot'] as const).map(kind => <button key={kind} onClick={() => { onExport(kind); setMenu(false); }}>{kind}.{kind === 'trace' ? 'jsonl' : 'json'}</button>)}</div></>}
-      </div>}
+    <div className="sui-brand" role="img" aria-label="suimon"><WorkflowIcon size={21} aria-hidden="true" /></div>
+    <div className="sui-workflow-title"><span>{subtitle ?? 'Workflow'}</span><h1>{title}</h1></div>
+    <div className="sui-toolbar-actions">
+      {failures > 0 && <button className="sui-button sui-tone-danger" onClick={onShowFailures} disabled={!onShowFailures}><TriangleAlert size={13} />{failures} {failures === 1 ? 'failure' : 'failures'}</button>}
+      <span className={`sui-status sui-tone-${statusTone(status)}`}><i />{statusLabel(status)}</span>
+      {actions}
     </div>
   </header>;
 }

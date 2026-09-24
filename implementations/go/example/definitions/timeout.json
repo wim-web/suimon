@@ -1,0 +1,26 @@
+{
+  "main": "timeout",
+  "functions": [
+    {"id": "produce", "input": "Request", "output": {"stream": "Item"}},
+    {"id": "lookup", "input": "Item", "output": {"single": "Done"}}
+  ],
+  "transforms": [
+    {"id": "item", "input": "Item", "output": "Item"},
+    {"id": "done", "input": "Done", "output": "Done"}
+  ],
+  "workflows": [
+    {
+      "id": "timeout",
+      "input": {"type": "Request", "placement": "produce"},
+      "placements": [
+        {"name": "produce", "node": {"type": "function", "function": "produce"}, "policy": "stop"},
+        {"name": "lookup", "node": {"type": "function", "function": "lookup"}, "policy": "continue", "timeout": {"callMs": 2000}},
+        {"name": "collect", "node": {"type": "waitStream", "element": "Done"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "produce", "target": "lookup", "transform": "item"},
+        {"source": "lookup", "target": "collect", "transform": "done"}
+      ]
+    }
+  ]
+}

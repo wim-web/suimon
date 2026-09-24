@@ -1,49 +1,101 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, it } from 'vitest';
-import { EventInspector } from '../src/components/EventInspector';
-import { NodeSidebar } from '../src/components/NodeSidebar';
-import { NodeIOPanel } from '../src/components/NodeIOPanel';
+import { PlacementInspector } from '../src/components/PlacementInspector';
+import { RecordInspector } from '../src/components/RecordInspector';
+import { RecordPanel } from '../src/components/RecordPanel';
+import { RunSelector } from '../src/components/RunSelector';
 import { WorkflowToolbar } from '../src/components/WorkflowToolbar';
-import type { TraceEvent } from '../src/types';
+import { WorkflowWorkbench } from '../src/components/WorkflowWorkbench';
+import { parseRecordLog, parseRecords } from '../src/lib/parse';
+import { recordTransitions, recordValues } from '../src/lib/records';
+import { runTree } from '../src/lib/status';
+import { valueIndex } from '../src/lib/values';
+import { definition, recordText, records, state } from './helpers';
 
-it('renders untrusted values as text in the standalone inspector', () => {
-  const event: TraceEvent = { schema_version: 2, sequence: 1, recorded_at: 0, txn: 'tx', type: 'token.placed', op: null, data: { token: { item: { id: 'payload' } } } };
-  const html = renderToStaticMarkup(<EventInspector event={event} values={{ payload: '<script>alert(1)</script>' }} />);
-  expect(html).toContain('&lt;script&gt;');
-  expect(html).not.toContain('<script>');
-  expect(html).toContain('Event JSON');
+it('inspects a placement with its definition, connections, invocations and results', () => {
+  const p = definition('users'), s = state('users-a');
+  const values = valueIndex(p, s, { ...recordValues(recordTransitions(records('users-a'))), '5:value5:input': '<tenant>' });
+  const html = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="perUser" state={s} run={[]} values={values} onSelectRun={() => undefined} onOpenWorkflow={() => undefined} />);
+  expect(html).toContain('Concurrency');
+  expect(html).toContain('profileFlow → format');
+  expect(html).toContain('fetchAllUsers');
+  expect(html).toContain('summaries');
+  expect(html).toContain('Invocations<span> 2</span>');
+  expect(html).toContain('run profileFlow');
+  expect(html).toContain('#2');
+  expect(html).toContain('result');
+  expect(html).not.toContain('payload not provided');
+  const entry = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="fetchAllUsers" state={s} run={[]} values={values} />);
+  expect(entry).toContain('&lt;tenant&gt;');
+  expect(entry).not.toContain('<tenant>');
+  expect(entry).toContain('Stream&lt;User&gt;');
+  const endpoint = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="all" />);
+  expect(endpoint).toContain('endpoint');
+  expect(endpoint).not.toContain('Invocations');
 });
 
-it('gives the toolbar logo an accessible image role', () => {
-  expect(renderToStaticMarkup(<WorkflowToolbar title="Example" />)).toContain('role="img" aria-label="suimon"');
+it('shows task outputs as transformed, failed or pending, and each List under its execution', () => {
+  const p = definition('users');
+  const b = state('users-b');
+  const failed = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="perUser" state={b} run={[]} values={valueIndex(p, b, recordValues(recordTransitions(records('users-b'))))} />);
+  expect(failed).toContain('output transform failed');
+  expect(failed).not.toContain('output transform pending');
+  expect(failed).toContain('outputs');
+  expect(failed).toContain('transformed<b>2</b>');
+  expect(failed.match(/sui-invocation-results/g)).toHaveLength(2);
+  const c = state('users-c');
+  const running = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="perUser" state={c} run={[]} />);
+  expect(running).toContain('output transform pending');
+  expect(running).toContain('No results');
 });
 
-it('shows input and output values together with their connections in a standalone panel', () => {
-  const html = renderToStaticMarkup(<NodeIOPanel data={{
-    inputs: [{ port: { name: 'in', kind: 'plain' }, connections: ['trim.out'], items: [{ id: 'input', instance: 'uppercase', sequence: 19, available: true, value: '<hello>' }] }],
-    outputs: [{ port: { name: 'out', kind: 'plain' }, connections: ['Workflow output'], items: [{ id: 'output', instance: 'uppercase', sequence: 24, available: true, value: '<HELLO>' }] }],
-  }} />);
-  expect(html).toContain('入力 in');
-  expect(html).toContain('出力 out');
-  expect(html).toContain('trim.out');
-  expect(html).toContain('&lt;hello&gt;');
-  expect(html).toContain('&lt;HELLO&gt;');
-  expect(html).not.toContain('<hello>');
+it('lists runs as a tree and records with their commit state and relation', () => {
+  const p = definition('users'), s = state('users-a');
+  const runs = renderToStaticMarkup(<RunSelector state={s} run={runTree(s)[2]!.run.path} onSelectRun={() => undefined} />);
+  expect(runs).toContain('perUser.profile #2 → profileFlow');
+  expect(runs.match(/aria-pressed="true"/g)).toHaveLength(1);
+  const lines = recordText('users-a').split('\n');
+  const transitions = recordTransitions(parseRecords(lines.slice(0, 14).join('\n') + '\n'));
+  const panel = renderToStaticMarkup(<RecordPanel transitions={transitions} definition={p} state={s} />);
+  expect(panel).toContain('1 uncommitted');
+  expect(panel).toContain('fetchAllUsers');
+  expect(panel.match(/sui-record-row/g)).toHaveLength(7);
+  const filtered = renderToStaticMarkup(<RecordPanel transitions={transitions} definition={p} state={s} filter={{ run: [], placement: 'perUser' }} />);
+  expect(filtered.match(/sui-record-row/g)?.length).toBe(1);
+  expect(renderToStaticMarkup(<RecordPanel transitions={[]} definition={p} />)).toContain('No execution records');
+  const log = parseRecordLog(recordText('users-c'));
+  const torn = renderToStaticMarkup(<RecordPanel transitions={recordTransitions(log.records)} tail={log.tail} definition={p} state={state('users-c')} />);
+  expect(torn).toContain('1 uncommitted');
+  expect(torn).toContain('partial last line');
+  expect(torn).toContain('never committed');
 });
 
-it('supports composing the sidebar without a workbench or runtime connection', () => {
-  const html = renderToStaticMarkup(<NodeSidebar graph={{ nodes: [], edges: [], entries: [], exits: [] }} onSelectNode={() => undefined}><label>Custom input</label></NodeSidebar>);
-  expect(html).toContain('Custom input');
-  expect(html).toContain('一致するノードがありません');
+it('shows a record with its fields and payloads as text', () => {
+  const html = renderToStaticMarkup(<RecordInspector transition={{ seq: 7, committed: false, op: { type: 'returned', call: 'c', value: 'v' }, values: { v: '<b>done</b>' } }} relation={{ run: [], placement: 'ship' }} />);
+  expect(html).toContain('uncommitted');
+  expect(html).toContain('&lt;b&gt;done&lt;/b&gt;');
+  expect(html).not.toContain('<b>done</b>');
+  expect(html).toContain('ship');
 });
 
-it('distinguishes arrived, pending and consumed stream inputs before EOS', () => {
-  const html = renderToStaticMarkup(<NodeIOPanel data={{ inputs: [{
-    port: { name: 'in', kind: 'stream' }, connections: ['each.out'], channels: [{ id: 'channel', closed: false }],
-    items: [{ id: 'one', channel: 'channel', tokenIndex: 0, sequence: 12, consumed: false, available: true, value: 'ONE' }],
-  }], outputs: [{ port: { name: 'out', kind: 'plain' }, connections: [], items: [] }] }} />);
-  expect(html).toContain('到着 1件 · 消費 0件 · 待機 1件');
-  expect(html).toContain('EOS 未到着');
-  expect(html).toContain('待機中');
-  expect(html).toContain('ONE');
+it('shows a payload with its numbers as written', () => {
+  const html = renderToStaticMarkup(<RecordInspector transition={{ seq: 1, committed: true, op: { type: 'start', input: 'v' }, values: { v: '{"id":9007199254740993}' } }} />);
+  expect(html).toContain('&quot;id&quot;: 9007199254740993');
+  expect(html).not.toContain('9007199254740992');
+});
+
+it('renders the toolbar status and failure count', () => {
+  const html = renderToStaticMarkup(<WorkflowToolbar title="users" status="failed" failures={2} />);
+  expect(html).toContain('role="img" aria-label="suimon"');
+  expect(html).toContain('2 failures');
+  expect(html).toContain('sui-tone-danger');
+});
+
+it('composes the workbench from a definition alone or with a state and records', () => {
+  const p = definition('users');
+  expect(renderToStaticMarkup(<WorkflowWorkbench definition={p} />)).toContain('No runtime state');
+  const html = renderToStaticMarkup(<WorkflowWorkbench definition={p} state={state('users-a')} records={records('users-a')} title="Users" />);
+  expect(html).toContain('Users');
+  expect(html).toContain('perUser.profile #1 → profileFlow');
+  expect(html).toContain('Records <b>50</b>');
 });

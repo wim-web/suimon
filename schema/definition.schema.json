@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wim-web.github.io/suimon/schema/definition.schema.json",
+  "title": "suimon workflow definition",
+  "description": "Workflows and the type contracts of the functions, judges and transforms they reference. References, types and Single/Stream kinds are checked by `suimon validate`, not by this schema. No object may repeat a key, which JSON Schema cannot express; readers reject a repeated key.",
+  "type": "object",
+  "properties": {
+    "main": {"$ref": "#/$defs/name"},
+    "functions": {"type": "array", "items": {"$ref": "#/$defs/function"}},
+    "judges": {"type": "array", "items": {"$ref": "#/$defs/judge"}},
+    "transforms": {"type": "array", "items": {"$ref": "#/$defs/transform"}},
+    "workflows": {"type": "array", "items": {"$ref": "#/$defs/workflow"}}
+  },
+  "required": ["main", "workflows"],
+  "additionalProperties": false,
+  "$defs": {
+    "name": {"type": "string", "minLength": 1},
+    "valueType": {
+      "description": "A type name, or {\"list\": type} for List<type>.",
+      "oneOf": [
+        {"$ref": "#/$defs/name"},
+        {
+          "type": "object",
+          "properties": {"list": {"$ref": "#/$defs/valueType"}},
+          "required": ["list"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "contract": {
+      "description": "The output of one call: return one value, or yield each element.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {"single": {"$ref": "#/$defs/valueType"}},
+          "required": ["single"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {"stream": {"$ref": "#/$defs/valueType"}},
+          "required": ["stream"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "function": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/name"},
+        "input": {"$ref": "#/$defs/valueType"},
+        "output": {"$ref": "#/$defs/contract"}
+      },
+      "required": ["id", "output"],
+      "additionalProperties": false
+    },
+    "judge": {
+      "description": "A branch judge receives the branch input and names one arm.",
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/name"},
+        "input": {"$ref": "#/$defs/valueType"}
+      },
+      "required": ["id", "input"],
+      "additionalProperties": false
+    },
+    "transform": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/name"},
+        "input": {"$ref": "#/$defs/valueType"},
+        "output": {"$ref": "#/$defs/valueType"}
+      },
+      "required": ["id", "input", "output"],
+      "additionalProperties": false
+    },
+    "policy": {"enum": ["stop", "continue"]},
+    "timeout": {
+      "description": "Milliseconds. elementMs limits the wait for the next element of a Stream function.",
+      "type": "object",
+      "properties": {
+        "callMs": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "elementMs": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
+      },
+      "additionalProperties": false
+    },
+    "functionBody": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "function"},
+        "function": {"$ref": "#/$defs/name"}
+      },
+      "required": ["type", "function"],
+      "additionalProperties": false
+    },
+    "subworkflowBody": {
+      "description": "output names the endpoint of the called workflow whose result is the call's output.",
+      "type": "object",
+      "properties": {
+        "type": {"const": "subworkflow"},
+        "workflow": {"$ref": "#/$defs/name"},
+        "output": {"$ref": "#/$defs/name"}
+      },
+      "required": ["type", "workflow", "output"],
+      "additionalProperties": false
+    },
+    "task": {
+      "description": "Without outputTransform, the task's results are left out of the concurrency output. A body without input takes discard as its inputTransform when the concurrency has an input.",
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "body": {"oneOf": [{"$ref": "#/$defs/functionBody"}, {"$ref": "#/$defs/subworkflowBody"}]},
+        "inputTransform": {"$ref": "#/$defs/name"},
+        "outputTransform": {"$ref": "#/$defs/name"},
+        "policy": {"$ref": "#/$defs/policy"},
+        "timeout": {"$ref": "#/$defs/timeout"}
+      },
+      "required": ["name", "body", "policy"],
+      "additionalProperties": false
+    },
+    "branch": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "branch"},
+        "judge": {"$ref": "#/$defs/name"},
+        "arms": {"type": "array", "items": {"$ref": "#/$defs/name"}, "minItems": 1, "uniqueItems": true}
+      },
+      "required": ["type", "judge", "arms"],
+      "additionalProperties": false
+    },
+    "waitStream": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "waitStream"},
+        "element": {"$ref": "#/$defs/valueType"}
+      },
+      "required": ["type", "element"],
+      "additionalProperties": false
+    },
+    "merge": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "merge"},
+        "element": {"$ref": "#/$defs/valueType"}
+      },
+      "required": ["type", "element"],
+      "additionalProperties": false
+    },
+    "concurrency": {
+      "type": "object",
+      "properties": {
+        "type": {"const": "concurrency"},
+        "input": {"$ref": "#/$defs/valueType"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}, "minItems": 1},
+        "output": {"enum": ["list", "stream"]},
+        "element": {"$ref": "#/$defs/valueType"}
+      },
+      "required": ["type", "limit", "tasks", "output", "element"],
+      "additionalProperties": false
+    },
+    "placement": {
+      "type": "object",
+      "properties": {
+        "name": {"$ref": "#/$defs/name"},
+        "node": {
+          "oneOf": [
+            {"$ref": "#/$defs/functionBody"},
+            {"$ref": "#/$defs/subworkflowBody"},
+            {"$ref": "#/$defs/branch"},
+            {"$ref": "#/$defs/waitStream"},
+            {"$ref": "#/$defs/merge"},
+            {"$ref": "#/$defs/concurrency"}
+          ]
+        },
+        "policy": {"$ref": "#/$defs/policy"},
+        "timeout": {"$ref": "#/$defs/timeout"}
+      },
+      "required": ["name", "node", "policy"],
+      "additionalProperties": false
+    },
+    "connection": {
+      "description": "arm is required exactly when the source is a branch. transform names a declared transform, or discard, which the library provides for a target without input: it passes no value.",
+      "type": "object",
+      "properties": {
+        "source": {"$ref": "#/$defs/name"},
+        "arm": {"$ref": "#/$defs/name"},
+        "target": {"$ref": "#/$defs/name"},
+        "transform": {"$ref": "#/$defs/name"}
+      },
+      "required": ["source", "target", "transform"],
+      "additionalProperties": false
+    },
+    "workflow": {
+      "description": "input names the placement that receives the value passed to run.",
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/$defs/name"},
+        "input": {
+          "type": "object",
+          "properties": {
+            "type": {"$ref": "#/$defs/valueType"},
+            "placement": {"$ref": "#/$defs/name"}
+          },
+          "required": ["type", "placement"],
+          "additionalProperties": false
+        },
+        "placements": {"type": "array", "items": {"$ref": "#/$defs/placement"}, "minItems": 1},
+        "connections": {"type": "array", "items": {"$ref": "#/$defs/connection"}}
+      },
+      "required": ["id", "placements"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,67 +1,146 @@
-import Suimon.Trace.Check
-import Std.Data.HashSet
+import Suimon.Step
+
 namespace Suimon.Explore
 open Lean
 
-structure Failure where
-  reason : String
-  trace : List Op
-  state : Json
-  deriving ToJson
-structure Report where
-  states : Nat
-  transitions : Nat
-  depth : Nat
-  complete : Bool
-  failure : Option Failure := none
-  deriving ToJson
-structure SearchState where
-  state : State
-  trace : List Op
+structure Config where
+  /-- A Stream function yields at most this many elements. --/
+  maxYields : Nat := 2
+  /-- Include failures, timeouts and lost calls among the reports of user processes. --/
+  failures : Bool := true
+  /-- Include cancellation by the caller. --/
+  cancel : Bool := true
+  /-- A random walk picks a disruptive operation once in this many choices, when one is accepted. --/
+  disruption : Nat := 40
+  deriving Repr, ToJson, FromJson
 
-/-- Invariant guard rejections are counterexamples too; they are never silently discarded. --/
-def search (g : Graph) (cfg : Config) : Report := Id.run do
-  let initial := State.initial g
-  let mut visited : Std.HashSet String := ({} : Std.HashSet String).insert (toJson initial).compress
-  let mut frontier := [{ state := initial, trace := [] : SearchState }]
-  let mut transitions := 0
-  for depth in List.range cfg.depth do
-    let mut nextFrontier := []
-    for current in frontier do
-      for op in candidates cfg current.state do
-        match step current.state op with
-        | .error r =>
-          if r.code == "INVARIANT" then
-            return { states := visited.size, transitions, depth, complete := false, failure := some { reason := r.message, trace := current.trace ++ [op], state := toJson current.state } }
-        | .ok next =>
-          transitions := transitions + 1
-          let key := (toJson next).compress
-          if !visited.contains key then
-            if visited.size ≥ cfg.maxStates then
-              return { states := visited.size, transitions, depth, complete := false }
-            visited := visited.insert key
-            nextFrontier := { state := next, trace := current.trace ++ [op] } :: nextFrontier
-    frontier := nextFrontier.reverse
-  return { states := visited.size, transitions, depth := cfg.depth, complete := true }
+/-- Values in exploration are derived from where they come from, so a run is reproducible. --/
+def value (parts : List String) : Value := identity ("value" :: parts)
 
-/-- Reproducible random walk, with a fixed portable generator. --/
-def nextSeed (seed : Nat) : Nat := (1664525 * seed + 1013904223) % 4294967296
+def armsOf (p : Definition) (s : State) (c : Call) : List String :=
+  match (s.invocation? c.owner).bind fun i => (s.workflow? p i.run).bind (·.placement? i.placement) with
+  | some { control := .branch _ arms, .. } => arms
+  | _ => []
 
-def generate (g : Graph) (cfg : Config) (seed count : Nat) : Result (State × List Trace.Event) := do
-  let mut state := State.initial g
-  let mut seed := seed
-  let mut events := []
-  for idx in List.range count do
-    let mut choices := []
-    for op in candidates cfg state do
-      match step state op with
-      | .ok next => if next != state then choices := choices ++ [op]
-      | .error r => if r.code == "INVARIANT" then throw r
+def callCandidates (p : Definition) (cfg : Config) (s : State) (c : Call) : List Op :=
+  let failures (fetching : Bool) : List Op :=
+    if cfg.failures then
+      [.failed c.id, .timedOut c.id false, .lost c.id] ++ (if fetching then [.timedOut c.id true] else [])
+    else []
+  match c.status with
+  | .running => match c.target with
+    | .judge _ => (armsOf p s c).map (.judged c.id ·) ++ failures false
+    | .function _ =>
+      (if c.stream then [.fetch c.id] else [.returned c.id (value ["return", c.id])]) ++ failures false
+  | .fetching =>
+    (if c.yields < cfg.maxYields then [.yielded c.id (value ["yield", c.id, toString c.yields])] else []) ++
+      [.ended c.id] ++ failures true
+  | .cancelling => [.terminated c.id, .lost c.id]
+  | _ => []
+
+def invokeCandidates (p : Definition) (s : State) (path : Path) (w : Workflow) (name : String) : List Op :=
+  match w.shape? p name with
+  | some .none | some .entry => [.invoke path name none]
+  | some (.single i c) => match s.resolveSingle path i c with
+    | .value source _ => [.invoke path name (some source)]
+    | _ => []
+  | some (.stream i _) => (s.deliveriesOn path i).filterMap fun d =>
+    if d.outcome == .failed then none else some (.invoke path name (some d.source))
+  | _ => []
+
+def deliveryCandidates (p : Definition) (cfg : Config) (s : State) (r : Result) : List Op :=
+  match s.workflow? p r.run with
+  | none => []
+  | some w => w.connections.zipIdx.flatMap fun (c, i) =>
+    if c.source != r.placement || (c.arm.isSome && c.arm != r.arm) || (s.delivery? r.run i r.id).isSome then []
+    else match c.transform with
+      | .declared _ => [.deliver r.run i r.id (some (value ["transform", toString i, r.id]))] ++
+          (if cfg.failures then [.transformFailed r.run i r.id] else [])
+      | .discard => [.deliver r.run i r.id none]
+
+def taskCandidates (p : Definition) (cfg : Config) (s : State) (e : Execution) : List Op :=
+  let tasks := e.tasks.flatMap fun t =>
+    match (s.taskSpec p e t.name).toOption, t.status with
+    | some spec, .pending => match spec.input with
+      | some (.declared _) => [.taskInput e.id t.name (some (value ["input", e.id, t.name]))] ++
+          (if cfg.failures then [.taskInputFailed e.id t.name] else [])
+      | some .discard => [.taskInput e.id t.name none]
+      | none => []
+    | some _, .ready => [.beginTask e.id t.name]
+    | _, _ => []
+  let outputs := (s.taskResults.filter fun r => r.execution == e.id && r.output == .pending).flatMap fun r =>
+    [.taskOutput e.id r.task r.index (value ["output", e.id, r.task, toString r.index])] ++
+      (if cfg.failures then [.taskOutputFailed e.id r.task r.index] else [])
+  .closeExecution e.id :: tasks ++ outputs
+
+/-- Every operation that might be accepted; the step decides which ones are. --/
+def candidates (p : Definition) (cfg : Config) (s : State) : List Op :=
+  if !s.started then
+    [.start (if ((p.workflow? p.main).bind (·.input)).isSome then some (value ["input"]) else none)]
+  else match s.status with
+  | .running =>
+    let runs := (s.runs.filter (!·.complete)).flatMap fun r =>
+      match p.workflow? r.workflow with
+      | none => []
+      | some w => (if r.path.isEmpty then [] else [.closeRun r.path]) ++
+          w.placements.flatMap fun pl => .settle r.path pl.name :: invokeCandidates p s r.path w pl.name
+    .conclude :: (if cfg.cancel then [.cancel] else []) ++ runs ++ s.results.flatMap (deliveryCandidates p cfg s) ++
+      s.calls.flatMap (callCandidates p cfg s) ++
+      (s.executions.filter (!·.complete)).flatMap (taskCandidates p cfg s)
+  | .stopping =>
+    .conclude :: (if cfg.cancel && !s.cancelled then [.cancel] else []) ++
+      (s.calls.filter (·.status == .cancelling)).flatMap fun c => [.terminated c.id, .lost c.id]
+  | _ => []
+
+def accepted (p : Definition) (cfg : Config) (s : State) : List (Op × State) :=
+  (candidates p cfg s).filterMap fun op => match step p s op with
+    | .ok next => if next == s then none else some (op, next)
+    | .error _ => none
+
+/-- A portable generator, so that a failing seed reproduces anywhere: SplitMix64 (Steele, Lea and
+    Flood, 2014), whose seed advances by a fixed odd constant and which draws `mix seed`. --/
+def nextSeed (seed : UInt64) : UInt64 := seed + 0x9e3779b97f4a7c15
+
+/-- Every bit of the number drawn depends on every bit of the seed, so that remainders by small
+    numbers vary independently from one draw to the next. With a linear congruential generator,
+    whose low bits cycle, a remainder by 40 repeats every 8 draws, and a walk never picks two
+    disruptive operations within 8 steps. --/
+def mix (seed : UInt64) : UInt64 :=
+  let z := (seed ^^^ (seed >>> 30)) * 0xbf58476d1ce4e5b9
+  let z := (z ^^^ (z >>> 27)) * 0x94d049bb133111eb
+  z ^^^ (z >>> 31)
+
+/-- Failures, cancellation and short streams end work early, so a walk picks them rarely. A
+    cancellation after a stop ends nothing early: the stop has already cancelled the calls and left
+    the waiting tasks unstarted, and the cancellation only marks the run cancelled, so a walk does
+    not keep it rare. --/
+def disruptive (cfg : Config) (s : State) : Op → Bool
+  | .failed _ | .timedOut .. | .lost _ | .transformFailed .. | .taskInputFailed .. | .taskOutputFailed .. => true
+  | .cancel => s.status == .running
+  | .ended id => (s.call? id).any (·.yields < cfg.maxYields)
+  | _ => false
+
+/-- Chooses with the number drawn at `seed`: its remainder by `cfg.disruption` decides whether to
+    take a disruptive operation, and its quotient which one of the pool. --/
+def pick (cfg : Config) (s : State) (seed : UInt64) (choices : List (Op × State)) : Option (Op × State) :=
+  let n := (mix seed).toNat
+  let (bad, good) := choices.partition (disruptive cfg s ·.1)
+  let pool := if good.isEmpty || (!bad.isEmpty && n % cfg.disruption == 0) then bad else good
+  pool[(n / cfg.disruption) % pool.length]?
+
+/-- A random walk until no operation is accepted, or the limit is reached. The walk uses the seed
+    modulo 2^64. --/
+def walk (p : Definition) (cfg : Config) (seed limit : Nat) : State × List Op := Id.run do
+  let mut state : State := {}
+  let mut trace : Array Op := #[]
+  let mut seed : UInt64 := .ofNat seed
+  for _ in List.range limit do
+    let choices := accepted p cfg state
     if choices.isEmpty then break
     seed := nextSeed seed
-    let op := choices[seed % choices.length]?.getD .idle
-    let (next, records) ← Trace.recordTransaction state [op] (events.length + 1) (s!"txn-{idx + 1}") state.now
-    events := events ++ records
+    let some (op, next) := pick cfg state seed choices | break
+    trace := trace.push op
     state := next
-  return (state, events)
+  return (state, trace.toList)
+
 end Suimon.Explore

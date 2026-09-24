@@ -1,40 +1,79 @@
-import type { Graph, GraphNode } from '../types';
+import type { Connection, Definition, Placement, ValueType, Workflow } from '../types';
+import { deriveKinds, findWorkflow, isEndpoint, isEntry } from './definition';
+import type { Kind } from './definition';
+import { lookup } from './dictionary';
 
-export function nodeDisplayHeight(node: GraphNode) { return 100 + (node.inputs.length + node.outputs.length) * 24; }
+export interface Point { x: number; y: number }
+export interface LayoutNode { name: string; placement: Placement; kind: Kind | null; entry: boolean; endpoint: boolean; position: Point; height: number }
+/** An edge is one connection; `kind` is the Single/Stream kind of its source's output. */
+export interface LayoutEdge { index: number; connection: Connection; kind: Kind | null }
+export interface WorkflowLayout {
+  workflow: Workflow;
+  nodes: LayoutNode[];
+  edges: LayoutEdge[];
+  /** Where the value passed to run enters, when the workflow takes an input. */
+  input?: { type: ValueType; placement: string; position: Point };
+}
 
-export function layoutGraph(graph: Graph): Map<string, { x: number; y: number }> {
-  const ranks = new Map(graph.nodes.map(node => [node.id, 0]));
-  const incoming = new Map(graph.nodes.map(node => [node.id, 0]));
-  const outgoing = new Map(graph.nodes.map(node => [node.id, [] as string[]]));
-  for (const edge of graph.edges) {
-    if (!incoming.has(edge.dst.node) || !outgoing.has(edge.src.node)) continue;
-    incoming.set(edge.dst.node, (incoming.get(edge.dst.node) ?? 0) + 1);
-    outgoing.get(edge.src.node)?.push(edge.dst.node);
+export const NODE_WIDTH = 280;
+const COLUMN = NODE_WIDTH + 64, GAP = 92, ROW = 22;
+
+/** Estimated rendered height of a placement node, used to space ranks before React Flow measures. */
+export function placementHeight(placement: Placement): number {
+  const node = placement.node;
+  const rows = node.type === 'concurrency' ? 1 + node.tasks.length : node.type === 'branch' ? 1 + node.arms.length : 1;
+  return 62 + 12 + rows * ROW + 30;
+}
+
+/** A layered top-down layout of one workflow; `positions` overrides computed positions by placement name. */
+export function layoutWorkflow(definition: Definition, workflow: Workflow | string, positions: Record<string, Point | undefined> = {}): WorkflowLayout {
+  const w = typeof workflow === 'string' ? findWorkflow(definition, workflow) : workflow;
+  if (!w) throw new TypeError(`unknown workflow ${String(workflow)}`);
+  const names = w.placements.map(p => p.name);
+  const rank = new Map(names.map(n => [n, 0]));
+  const indegree = new Map(names.map(n => [n, 0]));
+  const next = new Map(names.map(n => [n, [] as string[]]));
+  const previous = new Map(names.map(n => [n, [] as string[]]));
+  for (const c of w.connections) {
+    if (!rank.has(c.source) || !rank.has(c.target)) continue;
+    indegree.set(c.target, indegree.get(c.target)! + 1);
+    next.get(c.source)!.push(c.target);
+    previous.get(c.target)!.push(c.source);
   }
-  const queue = graph.nodes.filter(node => incoming.get(node.id) === 0).map(node => node.id);
+  const queue = names.filter(n => indegree.get(n) === 0);
   for (let i = 0; i < queue.length; i++) {
     const source = queue[i]!;
-    for (const target of outgoing.get(source) ?? []) {
-      ranks.set(target, Math.max(ranks.get(target) ?? 0, (ranks.get(source) ?? 0) + 1));
-      incoming.set(target, (incoming.get(target) ?? 0) - 1);
-      if (incoming.get(target) === 0) queue.push(target);
+    for (const target of next.get(source)!) {
+      rank.set(target, Math.max(rank.get(target)!, rank.get(source)! + 1));
+      indegree.set(target, indegree.get(target)! - 1);
+      if (indegree.get(target) === 0) queue.push(target);
     }
   }
-  const columns = new Map<number, number>();
-  const counts = new Map<number, number>();
-  const heights = new Map<number, number>();
-  for (const node of graph.nodes) {
-    const rank = ranks.get(node.id) ?? 0;
-    heights.set(rank, Math.max(heights.get(rank) ?? 0, nodeDisplayHeight(node)));
+  const layers = new Map<number, string[]>();
+  for (const n of names) { const r = rank.get(n)!; layers.set(r, [...layers.get(r) ?? [], n]); }
+  const order = [...layers.keys()].sort((a, b) => a - b);
+  const column = new Map<string, number>();
+  for (const r of order) {
+    const layer = layers.get(r)!;
+    const center = (n: string) => {
+      const from = previous.get(n)!.filter(p => column.has(p));
+      return from.length ? from.reduce((sum, p) => sum + column.get(p)!, 0) / from.length : Number.NaN;
+    };
+    const sorted = layer.map((n, i) => ({ n, i, c: center(n) })).sort((a, b) => (Number.isNaN(a.c) || Number.isNaN(b.c) ? a.i - b.i : a.c - b.c || a.i - b.i));
+    sorted.forEach(({ n }, i) => column.set(n, i - (sorted.length - 1) / 2));
   }
-  const offsets = new Map<number, number>();
+  const placements = new Map(w.placements.map(p => [p.name, p]));
+  const offset = new Map<number, number>();
   let y = 0;
-  for (const rank of [...heights.keys()].sort((a, b) => a - b)) { offsets.set(rank, y); y += heights.get(rank)! + 72; }
-  for (const rank of ranks.values()) counts.set(rank, (counts.get(rank) ?? 0) + 1);
-  return new Map(graph.nodes.map(node => {
-    const rank = ranks.get(node.id) ?? 0;
-    const column = columns.get(rank) ?? 0;
-    columns.set(rank, column + 1);
-    return [node.id, { x: (column - ((counts.get(rank) ?? 1) - 1) / 2) * 320, y: offsets.get(rank) ?? 0 }];
+  for (const r of order) { offset.set(r, y); y += Math.max(...layers.get(r)!.map(n => placementHeight(placements.get(n)!))) + GAP; }
+  const kinds = deriveKinds(definition, w);
+  const nodes: LayoutNode[] = w.placements.map(p => ({
+    name: p.name, placement: p, kind: kinds[p.name] ?? null, entry: isEntry(w, p.name), endpoint: isEndpoint(w, p.name), height: placementHeight(p),
+    position: lookup(positions, p.name) ?? { x: column.get(p.name)! * COLUMN, y: offset.get(rank.get(p.name)!)! },
   }));
+  const edges = w.connections.map((connection, index) => ({ index, connection, kind: kinds[connection.source] ?? null }));
+  const layout: WorkflowLayout = { workflow: w, nodes, edges };
+  const entry = w.input && nodes.find(n => n.name === w.input!.placement);
+  if (w.input && entry) layout.input = { type: w.input.type, placement: w.input.placement, position: { x: entry.position.x, y: entry.position.y - 96 } };
+  return layout;
 }

@@ -1,0 +1,43 @@
+{
+  "main": "limit",
+  "functions": [
+    {"id": "loadUser", "input": "UserRef", "output": {"single": "User"}},
+    {"id": "fetchProfile", "input": "User", "output": {"single": "Part"}},
+    {"id": "fetchOrders", "input": "User", "output": {"single": "Part"}},
+    {"id": "fetchPoints", "input": "User", "output": {"single": "Part"}},
+    {"id": "fetchCoupons", "input": "User", "output": {"single": "Part"}}
+  ],
+  "transforms": [
+    {"id": "user", "input": "User", "output": "User"},
+    {"id": "part", "input": "Part", "output": "Part"}
+  ],
+  "workflows": [
+    {
+      "id": "limit",
+      "input": {"type": "UserRef", "placement": "load"},
+      "placements": [
+        {"name": "load", "node": {"type": "function", "function": "loadUser"}, "policy": "stop"},
+        {
+          "name": "lookups",
+          "node": {
+            "type": "concurrency",
+            "input": "User",
+            "limit": 2,
+            "output": "list",
+            "element": "Part",
+            "tasks": [
+              {"name": "profile", "body": {"type": "function", "function": "fetchProfile"}, "inputTransform": "user", "outputTransform": "part", "policy": "stop"},
+              {"name": "orders", "body": {"type": "function", "function": "fetchOrders"}, "inputTransform": "user", "outputTransform": "part", "policy": "stop"},
+              {"name": "points", "body": {"type": "function", "function": "fetchPoints"}, "inputTransform": "user", "outputTransform": "part", "policy": "stop"},
+              {"name": "coupons", "body": {"type": "function", "function": "fetchCoupons"}, "inputTransform": "user", "outputTransform": "part", "policy": "stop"}
+            ]
+          },
+          "policy": "stop"
+        }
+      ],
+      "connections": [
+        {"source": "load", "target": "lookups", "transform": "user"}
+      ]
+    }
+  ]
+}

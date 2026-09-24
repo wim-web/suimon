@@ -1,0 +1,46 @@
+{
+  "main": "limits",
+  "functions": [
+    {"id": "items", "output": {"stream": "Item"}},
+    {"id": "work", "input": "Item", "output": {"single": "Done"}},
+    {"id": "idle", "output": {"single": "Done"}}
+  ],
+  "transforms": [
+    {"id": "item", "input": "Item", "output": "Item"},
+    {"id": "slow", "input": "Item", "output": "Item"},
+    {"id": "fast", "input": "Item", "output": "Item"},
+    {"id": "done", "input": "Done", "output": "Done"},
+    {"id": "dones", "input": {"list": "Done"}, "output": {"list": "Done"}}
+  ],
+  "workflows": [
+    {
+      "id": "limits",
+      "placements": [
+        {"name": "items", "node": {"type": "function", "function": "items"}, "policy": "stop"},
+        {
+          "name": "each",
+          "node": {
+            "type": "concurrency",
+            "input": "Item",
+            "limit": 2,
+            "output": "list",
+            "element": "Done",
+            "tasks": [
+              {"name": "a", "body": {"type": "function", "function": "work"}, "inputTransform": "item", "outputTransform": "done", "policy": "continue", "timeout": {"callMs": 60000}},
+              {"name": "b", "body": {"type": "function", "function": "work"}, "inputTransform": "item", "outputTransform": "done", "policy": "continue"},
+              {"name": "c", "body": {"type": "function", "function": "work"}, "inputTransform": "item", "outputTransform": "done", "policy": "continue"},
+              {"name": "d", "body": {"type": "function", "function": "work"}, "inputTransform": "item", "outputTransform": "done", "policy": "continue"},
+              {"name": "e", "body": {"type": "function", "function": "idle"}, "inputTransform": "discard", "outputTransform": "done", "policy": "continue"}
+            ]
+          },
+          "policy": "continue"
+        },
+        {"name": "all", "node": {"type": "waitStream", "element": {"list": "Done"}}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "items", "target": "each", "transform": "item"},
+        {"source": "each", "target": "all", "transform": "dones"}
+      ]
+    }
+  ]
+}

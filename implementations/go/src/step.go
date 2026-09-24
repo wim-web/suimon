@@ -1,709 +1,1778 @@
 package suimon
 
-import "slices"
+import (
+	"cmp"
+	"slices"
+)
 
-func (s State) plainChannelReady(c Channel) bool {
-	p := c.Pending()
-	i := s.NodeInstance(c.Path, c.Edge.Src.Node)
-	return c.Kind == "plain" && c.Closed() && len(p) > 0 && !p[0].EOS && (c.Entry || (i != nil && i.Status == "succeeded"))
-}
-func (s State) preconditions(o Op) bool {
-	switch o.Kind {
-	case "activate", "fireWaitAll", "fireBranch":
-		return all(s.Incoming(o.Path, o.Node), s.plainChannelReady)
-	case "spawn":
-		cs := s.Incoming(o.Path, o.Node)
-		if len(cs) == 0 {
-			return false
-		}
-		ts := cs[0].Pending()
-		return len(ts) > 0 && ts[0] == (Token{Item: o.Item})
-	case "fireCoalesce":
-		c := find(s.Incoming(o.Path, o.Node), func(c Channel) bool { return c.ID == o.Edge })
-		return c != nil && s.plainChannelReady(*c) && c.Pending()[0] == (Token{Item: o.Item})
-	}
-	return true
-}
-func (s *State) transition(o Op) *Reject {
-	switch o.Kind {
-	case "start":
-		if s.Started || len(s.Instances) > 0 {
-			return reject("ALREADY_STARTED")
-		}
-		f := s.Frame(nil)
-		if f == nil {
-			return reject("NO_ROOT", "missing root graph")
-		}
-		if !unique(mapped(o.Inputs, func(i Input) PortRef { return i.Entry })) || len(o.Inputs) != len(f.Graph.Entries) || !all(o.Inputs, func(i Input) bool { return contains(f.Graph.Entries, i.Entry) }) {
-			return reject("ENTRY_MISMATCH")
-		}
-		for _, in := range o.Inputs {
-			cs := filter(s.Channels, func(c Channel) bool { return len(c.Path) == 0 && c.Entry && c.Edge.Dst == in.Entry })
-			if !unique(in.Items) || !all(cs, func(c Channel) bool { return c.Kind != "plain" || len(in.Items) == 1 }) {
-				return reject("INVALID_INPUT")
-			}
-			ids := mapped(cs, func(c Channel) string { return c.ID })
-			for _, item := range in.Items {
-				if r := s.place(ids, Token{Item: item}); r != nil {
-					return r
-				}
-			}
-			if r := s.place(ids, Token{EOS: true}); r != nil {
-				return r
-			}
-		}
-		s.Started = true
-	case "activate":
-		if !s.Started {
-			return reject("NOT_STARTED")
-		}
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		inputs, r := s.plainInputs(o.Path, n)
-		if r != nil {
-			return r
-		}
-		switch n.Kind.Type {
-		case "leaf":
-			i := makeInstance(o.Path, n, "ready", inputs, nil)
-			if r := s.freshInstance(i); r != nil {
-				return r
-			}
-			return s.consumeInputs(o.Path, o.Node, i.ID)
-		case "subworkflow", "loop":
-			i := makeInstance(o.Path, n, "waitingInputs", inputs, nil)
-			if n.Kind.Type == "loop" {
-				i.Iteration = N(1)
-			}
-			if r := s.freshInstance(i); r != nil {
-				return r
-			}
-			if r := s.consumeInputs(o.Path, o.Node, i.ID); r != nil {
-				return r
-			}
-			return s.addFrame(i, *n.Kind.Body, mapped(inputs, func(p [2]string) string { return p[1] }))
-		default:
-			return reject("NOT_ACTIVATABLE", o.Node)
-		}
-	case "spawn":
-		if !s.Started {
-			return reject("NOT_STARTED")
-		}
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "forEach" {
-			return reject("NOT_FOREACH", o.Node)
-		}
-		cs := s.Incoming(o.Path, o.Node)
-		if len(cs) == 0 {
-			return reject("MISSING_INPUT", o.Node)
-		}
-		i := makeInstance(o.Path, n, "waitingInputs", List[[2]string]{{"item", o.Item}}, ptr(o.Item))
-		if r := s.freshInstance(i); r != nil {
-			return r
-		}
-		if r := s.consume(cs[0].ID, i.ID, &o.Item); r != nil {
-			return r
-		}
-		return s.addFrame(i, *n.Kind.Body, []string{o.Item})
-	case "claim":
-		a := o.Auth
-		i, r := s.getInstance(a.Instance)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		policy, concurrency, r := leafPolicy(n)
-		if r != nil {
-			return r
-		}
-		if a.Now.Cmp(s.Now) < 0 {
-			return reject("CLOCK_REGRESSION")
-		}
-		if i.Status != "ready" || i.Lease != nil || i.RetryAt != nil {
-			return reject("NOT_READY")
-		}
-		if i.AttemptCount.Cmp(policy.MaxAttempts.Add(i.ExtraAttempts)) >= 0 {
-			return reject("ATTEMPTS_EXHAUSTED")
-		}
-		if a.Attempt == "" || a.Token == "" || o.Worker == "" || anyOf(s.Attempts, func(x Attempt) bool { return x.ID == a.Attempt || x.Token == a.Token }) {
-			return reject("DUPLICATE_ATTEMPT_OR_TOKEN")
-		}
-		if anyOf(s.Instances, func(j Instance) bool {
-			return j.Status == "running" && j.Lease != nil && j.Lease.Until.Cmp(a.Now) <= 0 || j.Status == "retryWait" && j.RetryAt != nil && j.RetryAt.Cmp(a.Now) <= 0
-		}) {
-			return reject("MAINTENANCE_REQUIRED")
-		}
-		definition := func(path Path) *List[string] {
-			f := s.Frame(path)
-			if f == nil {
-				return nil
-			}
-			return &f.Definition
-		}
-		d := definition(i.Path)
-		active := filter(s.Instances, func(j Instance) bool {
-			return j.Node == i.Node && equal(definition(j.Path), d) && j.Status == "running"
-		})
-		if natLen(active).Cmp(concurrency) >= 0 {
-			return reject("CONCURRENCY_LIMIT")
-		}
-		i.Lease = &Lease{a.Attempt, a.Token, a.Now.Add(policy.LeaseSeconds)}
-		i.Status = "running"
-		i.AttemptCount = i.AttemptCount.Inc()
-		s.setInstance(i)
-		s.Attempts = append(s.Attempts, Attempt{a.Attempt, i.ID, i.AttemptCount, "running", a.Token, o.Worker})
-		s.Now = a.Now
-	case "renew":
-		i, r := s.getInstance(o.Auth.Instance)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		p, _, r := leafPolicy(n)
-		if r != nil {
-			return r
-		}
-		if i.Lease != nil {
-			l := *i.Lease
-			l.Until = o.Auth.Now.Add(p.LeaseSeconds)
-			i.Lease = &l
-		}
-		s.setInstance(i)
-		s.Now = o.Auth.Now
-	case "expireLease":
-		i, r := s.getInstance(o.Inst)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		if o.Now.Cmp(s.Now) < 0 || i.Status != "running" || i.Lease == nil || i.Lease.Until.Cmp(o.Now) > 0 {
-			return reject("LEASE_NOT_EXPIRED")
-		}
-		return s.expireOrFail(i, n, o.Now, "abandoned", true, "LEASE_EXPIRED")
-	case "promoteRetry":
-		i, r := s.getInstance(o.Inst)
-		if r != nil {
-			return r
-		}
-		if o.Now.Cmp(s.Now) < 0 || i.Status != "retryWait" || i.RetryAt == nil || i.RetryAt.Cmp(o.Now) > 0 {
-			return reject("RETRY_NOT_DUE")
-		}
-		i.Status = "ready"
-		i.RetryAt = nil
-		s.setInstance(i)
-		s.Now = o.Now
-	case "emit":
-		i, r := s.getInstance(o.Auth.Instance)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		if _, _, r := leafPolicy(n); r != nil {
-			return r
-		}
-		if !anyOf(n.Outputs, func(p Port) bool { return p.Name == o.Port && p.Kind == "stream" }) {
-			return reject("NOT_STREAM_OUTPUT")
-		}
-		if r := s.putOutput(i.Path, i.Node, o.Port, Token{Item: o.Item}); r != nil {
-			return r
-		}
-		s.Now = o.Auth.Now
-	case "complete":
-		i, r := s.getInstance(o.Auth.Instance)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		if _, _, r := leafPolicy(n); r != nil {
-			return r
-		}
-		ps := filter(n.Outputs, func(p Port) bool { return p.Kind == "plain" })
-		if !unique(mapped(o.Outputs, func(out Output) string { return out.Port })) || len(o.Outputs) != len(ps) || !all(o.Outputs, func(out Output) bool {
-			return len(out.Items) == 1 && anyOf(ps, func(p Port) bool { return p.Name == out.Port })
-		}) {
-			return reject("OUTPUT_MISMATCH")
-		}
-		if r := s.decision(Identity([]string{"leaf", i.ID}), compact(o.Outputs)); r != nil {
-			return r
-		}
-		for _, out := range o.Outputs {
-			for _, item := range out.Items {
-				if r := s.putOutput(i.Path, i.Node, out.Port, Token{Item: item}); r != nil {
-					return r
-				}
-			}
-		}
-		if r := s.closeOutputs(i.Path, n); r != nil {
-			return r
-		}
-		s.setAttempt(o.Auth.Attempt, "succeeded")
-		i.Status = "succeeded"
-		i.Lease = nil
-		s.setInstance(i)
-		s.Now = o.Auth.Now
-		s.Receipts = append(s.Receipts, Receipt{o.Auth.Instance, o.Auth.Attempt, o.Auth.Token, cloneOutputs(o.Outputs)})
-	case "fail":
-		i, r := s.getInstance(o.Auth.Instance)
-		if r != nil {
-			return r
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		return s.expireOrFail(i, n, o.Auth.Now, "failed", o.Retryable, o.Code)
-	case "fireWaitAll":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "waitAll" {
-			return reject("NOT_WAIT_ALL", o.Node)
-		}
-		inputs, r := s.plainInputs(o.Path, n)
-		if r != nil {
-			return r
-		}
-		item := DerivedItem("record", o.Path, o.Node, mapped(inputs, func(p [2]string) string { return Identity(p[:]) }))
-		return s.finishControl(o.Path, n, inputs, &item, nil)
-	case "fireBranch":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "branch" {
-			return reject("NOT_BRANCH", o.Node)
-		}
-		if !contains(n.Kind.Arms, o.Arm) {
-			return reject("UNKNOWN_ARM")
-		}
-		inputs, r := s.plainInputs(o.Path, n)
-		if r != nil {
-			return r
-		}
-		if len(inputs) == 0 {
-			return reject("MISSING_INPUT", o.Node)
-		}
-		item := inputs[0][1]
-		if r := s.decision(Identity([]string{"branch", InstanceID(o.Path, o.Node, nil), item}), o.Arm); r != nil {
-			return r
-		}
-		return s.finishControl(o.Path, n, inputs, &item, &o.Arm)
-	case "fireCollect":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "collect" {
-			return reject("NOT_COLLECT", o.Node)
-		}
-		cs := s.Incoming(o.Path, o.Node)
-		if len(cs) == 0 {
-			return reject("MISSING_INPUT", o.Node)
-		}
-		c := cs[0]
-		if !c.Closed() || !c.Consumed.IsZero() {
-			return reject("COLLECT_NOT_READY")
-		}
-		items := c.Items()
-		slices.Sort(items)
-		result := DerivedItem("list", o.Path, o.Node, items)
-		return s.finishControl(o.Path, n, mapped(items, func(item string) [2]string { return [2]string{"item", item} }), &result, nil)
-	case "fireCoalesce":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "coalesce" {
-			return reject("NOT_COALESCE", o.Node)
-		}
-		c := find(s.Incoming(o.Path, o.Node), func(c Channel) bool { return c.ID == o.Edge })
-		if c == nil {
-			return reject("WRONG_INPUT_EDGE", o.Edge)
-		}
-		i := makeInstance(o.Path, n, "succeeded", List[[2]string]{{c.Edge.Dst.Port, o.Item}}, nil)
-		if r := s.freshInstance(i); r != nil {
-			return r
-		}
-		if r := s.consume(c.ID, i.ID, &o.Item); r != nil {
-			return r
-		}
-		if len(n.Outputs) == 0 {
-			return reject("MISSING_OUTPUT", o.Node)
-		}
-		if r := s.putOutput(o.Path, o.Node, n.Outputs[0].Name, Token{Item: o.Item}); r != nil {
-			return r
-		}
-		return s.closeOutputs(o.Path, n)
-	case "fireFilter":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "filter" {
-			return reject("NOT_FILTER", o.Node)
-		}
-		cs := s.Incoming(o.Path, o.Node)
-		if len(cs) == 0 {
-			return reject("MISSING_INPUT", o.Node)
-		}
-		who := InstanceID(o.Path, o.Node, nil)
-		if r := s.streamController(o.Path, n); r != nil {
-			return r
-		}
-		if r := s.decision(Identity([]string{"filter", who, o.Item}), compact(o.Keep)); r != nil {
-			return r
-		}
-		if r := s.consume(cs[0].ID, who, &o.Item); r != nil {
-			return r
-		}
-		if o.Keep {
-			if len(n.Outputs) == 0 {
-				return reject("MISSING_OUTPUT", o.Node)
-			}
-			return s.putOutput(o.Path, o.Node, n.Outputs[0].Name, Token{Item: o.Item})
-		}
-	case "fireMerge":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "merge" {
-			return reject("NOT_MERGE", o.Node)
-		}
-		if !anyOf(s.Incoming(o.Path, o.Node), func(c Channel) bool { return c.ID == o.Edge }) {
-			return reject("WRONG_INPUT_EDGE")
-		}
-		if r := s.streamController(o.Path, n); r != nil {
-			return r
-		}
-		if r := s.consume(o.Edge, InstanceID(o.Path, o.Node, nil), &o.Item); r != nil {
-			return r
-		}
-		if len(n.Outputs) == 0 {
-			return reject("MISSING_OUTPUT", o.Node)
-		}
-		return s.putOutput(o.Path, o.Node, n.Outputs[0].Name, Token{Item: DerivedItem("merge", o.Path, o.Node, []string{o.Edge, o.Item})})
-	case "propagateEos":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "filter" && n.Kind.Type != "merge" && n.Kind.Type != "forEach" {
-			return reject("NOT_STREAM_CONTROL")
-		}
-		cs := s.Incoming(o.Path, o.Node)
-		if !all(cs, func(c Channel) bool { return c.Closed() && len(c.PendingItems()) == 0 }) {
-			return reject("INPUT_NOT_DRAINED")
-		}
-		if !all(filter(s.Instances, func(i Instance) bool { return slices.Equal(i.Path, o.Path) && i.Node == o.Node && i.Trigger != nil }), func(i Instance) bool { return i.Status == "succeeded" }) {
-			return reject("CHILDREN_NOT_FINISHED")
-		}
-		i := makeInstance(o.Path, n, "succeeded", nil, nil)
-		old := s.NodeInstance(o.Path, o.Node)
-		if old == nil {
-			if r := s.freshInstance(i); r != nil {
-				return r
-			}
-		} else {
-			if old.Status != "waitingInputs" {
-				return reject("CONTROL_FINISHED")
-			}
-			old.Status = "succeeded"
-			s.setInstance(*old)
-		}
-		if r := s.consumeChannels(cs, i.ID); r != nil {
-			return r
-		}
-		return s.closeOutputs(o.Path, n)
-	case "finishSubworkflow":
-		i, r := s.getInstance(o.Inst)
-		if r != nil {
-			return r
-		}
-		if i.Status != "waitingInputs" {
-			return reject("NOT_WAITING_BODY")
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "subworkflow" && n.Kind.Type != "forEach" {
-			return reject("NOT_SUBWORKFLOW")
-		}
-		f, r := s.CurrentFrame(i)
-		if r != nil {
-			return r
-		}
-		items, r := s.bodyResults(f)
-		if r != nil {
-			return r
-		}
-		if len(n.Outputs) != len(items) {
-			return reject("BODY_OUTPUT_ARITY")
-		}
-		if r := s.closeFrame(f, i.ID); r != nil {
-			return r
-		}
-		for j, p := range n.Outputs {
-			if r := s.putOutput(i.Path, n.ID, p.Name, Token{Item: items[j]}); r != nil {
-				return r
-			}
-		}
-		i.Status = "succeeded"
-		s.setInstance(i)
-		if n.Kind.Type == "subworkflow" {
-			return s.closeOutputs(i.Path, n)
-		}
-	case "loopIterate":
-		i, r := s.getInstance(o.Inst)
-		if r != nil {
-			return r
-		}
-		if i.Status != "waitingInputs" {
-			return reject("NOT_WAITING_BODY")
-		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
-		}
-		if n.Kind.Type != "loop" {
-			return reject("NOT_LOOP", o.Inst)
-		}
-		f, r := s.CurrentFrame(i)
-		if r != nil {
-			return r
-		}
-		items, r := s.bodyResults(f)
-		if r != nil {
-			return r
-		}
-		if len(items) == 0 {
-			return reject("MISSING_BODY_RESULT", o.Inst)
-		}
-		item := items[0]
-		if r := s.decision(Identity([]string{"loop", o.Inst, i.Iteration.String(), item}), compact(o.Done)); r != nil {
-			return r
-		}
-		if r := s.closeFrame(f, i.ID); r != nil {
-			return r
-		}
-		if o.Done {
-			if len(n.Outputs) == 0 {
-				return reject("MISSING_OUTPUT", o.Inst)
-			}
-			if r := s.putOutput(i.Path, n.ID, n.Outputs[0].Name, Token{Item: item}); r != nil {
-				return r
-			}
-			if r := s.closeOutputs(i.Path, n); r != nil {
-				return r
-			}
-			i.Status = "succeeded"
-			s.setInstance(i)
-		} else if i.Iteration.Cmp(n.Kind.MaxIterations.Add(i.ExtraIterations)) >= 0 {
-			i.Status = "failed"
-			s.setInstance(i)
-			s.Status = "blocked"
-			s.Reason = ptr("LOOP_LIMIT")
-		} else {
-			i.Iteration = i.Iteration.Inc()
-			s.setInstance(i)
-			return s.addFrame(i, *n.Kind.Body, []string{item})
-		}
-	case "skip":
-		n, r := s.getNode(o.Path, o.Node)
-		if r != nil {
-			return r
-		}
-		inputs := s.Incoming(o.Path, o.Node)
-		empty := func(c Channel) bool { return c.Closed() && len(c.Items()) == 0 }
-		absent := anyOf(inputs, empty)
-		if n.Kind.Type == "coalesce" {
-			absent = len(inputs) > 0 && all(inputs, empty)
-		}
-		if !allKind(n.Inputs, "plain") || !absent {
-			return reject("NOT_SKIPPABLE")
-		}
-		if !all(inputs, func(c Channel) bool { return c.Closed() }) {
-			return reject("INPUT_NOT_FINISHED")
-		}
-		if anyOf(s.Instances, func(i Instance) bool { return slices.Equal(i.Path, o.Path) && i.Node == o.Node }) {
-			return reject("NODE_ALREADY_STARTED")
-		}
-		i := makeInstance(o.Path, n, "cancelled", nil, nil)
-		if r := s.freshInstance(i); r != nil {
-			return r
-		}
-		if r := s.consumeInputs(o.Path, o.Node, i.ID); r != nil {
-			return r
-		}
-		return s.closeOutputs(o.Path, n)
-	case "idle":
+// The operational rules of Suimon/Step.lean. Each rule checks its own preconditions in the Lean
+// order and returns the Lean error code of the first one that fails; a rejected operation changes
+// nothing. Lists keep the Lean order: new records are appended and updates replace in place.
+//
+// A rule makes every check before its first change, so the same rules serve two callers: Step,
+// which leaves its state unchanged and copies each list before the list changes, and a machine,
+// which owns its state and changes it in place, keeping the indexes of the state up to date.
+
+// Rejection is the refusal of an operation; Code is the error code of Step.lean, such as
+// NOT_RUNNING or DUPLICATE_RESULT.
+type Rejection struct{ Code string }
+
+func (r *Rejection) Error() string { return r.Code }
+
+func reject(code string) error { return &Rejection{Code: code} }
+
+func require(ok bool, code string) error {
+	if ok {
 		return nil
-	case "cancel":
-		s.Status = "cancelled"
-		for j := range s.Instances {
-			i := &s.Instances[j]
-			if !terminal(i.Status) {
-				i.Status = "cancelled"
-				i.Lease = nil
-				i.RetryAt = nil
+	}
+	return reject(code)
+}
+
+// Step applies one operation. It returns a new state and leaves s unchanged.
+func Step(p *Definition, s *State, op Op) (*State, error) { return stepWith(p, nil, s, op) }
+
+// stepWith is Step with d, a derivation of p to read kinds from, or nil to derive the kinds of the
+// workflow op needs.
+func stepWith(p *Definition, d *derivation, s *State, op Op) (*State, error) {
+	t := *s
+	st := &stepper{view: view{s: &t}, p: p, d: d}
+	if err := st.apply(op); err != nil {
+		return nil, err
+	}
+	return st.s, nil
+}
+
+// machine owns a state and applies operations to it in place, keeping its index and the set of
+// the values it mentions. Nothing else may hold the state while the machine changes it.
+type machine struct {
+	view
+	p *Definition
+	// d is a derivation of p, which the machine reads the kinds of p from.
+	d *derivation
+	// seen holds every value the state mentions.
+	seen map[string]struct{}
+}
+
+// newMachine takes s over; s must not be used elsewhere while the machine changes it. d is a
+// derivation of p.
+func newMachine(p *Definition, d *derivation, s *State) *machine {
+	m := &machine{view: view{s: s, ix: newStateIndex(s)}, p: p, d: d, seen: map[string]struct{}{}}
+	for _, v := range s.Values() {
+		m.seen[v] = struct{}{}
+	}
+	return m
+}
+
+// apply applies op in place and returns the values it introduces, in the order of Introduced. A
+// rejected op changes nothing.
+func (m *machine) apply(op Op) ([]string, error) {
+	st := &stepper{view: m.view, p: m.p, d: m.d}
+	if err := st.apply(op); err != nil {
+		return nil, err
+	}
+	introduced := st.introduced(m.seen)
+	for _, v := range introduced {
+		m.seen[v] = struct{}{}
+	}
+	return introduced, nil
+}
+
+// stepper applies one operation to s. Without an index, s is a copy of the caller's state whose
+// lists are still shared: each list is copied before its first change (owned). With an index, s
+// is owned and changes in place.
+type stepper struct {
+	view
+	p *Definition
+	// d, when not nil, is a derivation of p to read kinds from; without it, the stepper derives the
+	// kinds of the workflow an operation needs.
+	d     *derivation
+	owned uint16
+	// mentions are the values of the records the step added or changed, where they are mentioned.
+	mentions []mention
+}
+
+// A mention is a value at its place in the order of State.Values: the list, the position in the
+// list, and the place in the record.
+type mention struct {
+	list, pos, part int
+	value           string
+}
+
+// The lists of a state, in the order of State.Values; each is also its bit in owned.
+const (
+	listRuns = iota
+	listInvocations
+	listCalls
+	listExecutions
+	listResults
+	listDeliveries
+	listTaskResults
+	listSettled
+	listFailures
+)
+
+// kinds is the kind table of w, a workflow of st.p.
+func (st *stepper) kinds(w *Workflow) kindTable {
+	if st.d != nil {
+		return st.d.kinds(w)
+	}
+	return w.deriveKinds(st.p)
+}
+
+func (st *stepper) mention(list, pos, part int, value *string) {
+	if value != nil {
+		st.mentions = append(st.mentions, mention{list, pos, part, *value})
+	}
+}
+
+// introduced are the mentioned values that seen does not hold, each once, in the order of their
+// first mention in State.Values. Values are never removed from a state, so these are the values
+// that Introduced finds, in the same order, when seen holds the values of the state before.
+func (st *stepper) introduced(seen map[string]struct{}) []string {
+	slices.SortStableFunc(st.mentions, func(a, b mention) int {
+		return cmp.Or(cmp.Compare(a.list, b.list), cmp.Compare(a.pos, b.pos), cmp.Compare(a.part, b.part))
+	})
+	var out []string
+	for _, m := range st.mentions {
+		if _, ok := seen[m.value]; !ok && !slices.Contains(out, m.value) {
+			out = append(out, m.value)
+		}
+	}
+	return out
+}
+
+// own makes the list writable: without an index, it copies the list once per step.
+func own[T any](st *stepper, list int, xs *[]T) {
+	if st.ix == nil && st.owned&(1<<list) == 0 {
+		*xs = append(make([]T, 0, len(*xs)+1), *xs...)
+		st.owned |= 1 << list
+	}
+}
+
+// Changes. Records are added at the end of their list. A record that changes is replaced where
+// it is; without an index every record with its identity is replaced, as Lean's replacement of
+// matching records does, and with one the record at the position, the only one in a state that
+// Step built.
+
+func (st *stepper) addRun(r Run) {
+	own(st, listRuns, &st.s.Runs)
+	pos := len(st.s.Runs)
+	st.s.Runs = append(st.s.Runs, r)
+	st.mention(listRuns, pos, 0, r.Input)
+	if st.ix != nil {
+		st.ix.addRun(pos, &st.s.Runs[pos])
+	}
+}
+
+func (st *stepper) completeRun(pos int) {
+	own(st, listRuns, &st.s.Runs)
+	if st.ix != nil {
+		st.s.Runs[pos].Complete = true
+		return
+	}
+	path := st.s.Runs[pos].Path
+	for i := range st.s.Runs {
+		if slices.Equal(st.s.Runs[i].Path, path) {
+			st.s.Runs[i].Complete = true
+		}
+	}
+}
+
+func (st *stepper) addInvocation(i Invocation) {
+	own(st, listInvocations, &st.s.Invocations)
+	pos := len(st.s.Invocations)
+	st.s.Invocations = append(st.s.Invocations, i)
+	st.mention(listInvocations, pos, 0, i.Input)
+	if st.ix != nil {
+		st.ix.addInvocation(pos, &st.s.Invocations[pos])
+	}
+}
+
+// setInvocation sets the status and the arm of the invocation at pos.
+func (st *stepper) setInvocation(pos int, status InvocationStatus, arm *string) {
+	own(st, listInvocations, &st.s.Invocations)
+	next := st.s.Invocations[pos]
+	next.Status, next.Arm = status, arm
+	if st.ix != nil {
+		old := st.s.Invocations[pos].Status
+		st.s.Invocations[pos] = next
+		st.ix.setInvocationStatus(&st.s.Invocations[pos], old)
+		return
+	}
+	for i := range st.s.Invocations {
+		if st.s.Invocations[i].ID == next.ID {
+			st.s.Invocations[i] = next
+		}
+	}
+}
+
+func (st *stepper) setInvocationStatus(pos int, status InvocationStatus) {
+	st.setInvocation(pos, status, st.s.Invocations[pos].Arm)
+}
+
+func (st *stepper) addCall(c Call) {
+	own(st, listCalls, &st.s.Calls)
+	pos := len(st.s.Calls)
+	st.s.Calls = append(st.s.Calls, c)
+	st.mention(listCalls, pos, 0, c.Input)
+	if st.ix != nil {
+		st.ix.addCall(pos, &st.s.Calls[pos])
+	}
+}
+
+// setCall sets the status and the yields of the call at pos.
+func (st *stepper) setCall(pos int, status CallStatus, yields int) {
+	own(st, listCalls, &st.s.Calls)
+	next := st.s.Calls[pos]
+	next.Status, next.Yields = status, yields
+	if st.ix != nil {
+		st.s.Calls[pos] = next
+		return
+	}
+	for i := range st.s.Calls {
+		if st.s.Calls[i].ID == next.ID {
+			st.s.Calls[i] = next
+		}
+	}
+}
+
+func (st *stepper) setCallStatus(pos int, status CallStatus) {
+	st.setCall(pos, status, st.s.Calls[pos].Yields)
+}
+
+func (st *stepper) addExecution(e Execution) {
+	own(st, listExecutions, &st.s.Executions)
+	pos := len(st.s.Executions)
+	st.s.Executions = append(st.s.Executions, e)
+	st.mention(listExecutions, pos, 0, e.Input)
+	for j := range e.Tasks {
+		st.mention(listExecutions, pos, 1+j, e.Tasks[j].Input)
+	}
+	if st.ix != nil {
+		st.ix.addExecution(pos, &st.s.Executions[pos])
+	}
+}
+
+func (st *stepper) completeExecution(pos int) {
+	own(st, listExecutions, &st.s.Executions)
+	if st.ix != nil {
+		st.s.Executions[pos].Complete = true
+		return
+	}
+	next := st.s.Executions[pos]
+	next.Complete = true
+	st.replaceExecution(next)
+}
+
+func (st *stepper) replaceExecution(next Execution) {
+	for i := range st.s.Executions {
+		if st.s.Executions[i].ID == next.ID {
+			st.s.Executions[i] = next
+		}
+	}
+}
+
+// setTask replaces the tasks named like task in the execution at pos.
+func (st *stepper) setTask(pos int, task TaskState) {
+	own(st, listExecutions, &st.s.Executions)
+	next := st.s.Executions[pos]
+	if st.ix == nil {
+		next.Tasks = slices.Clone(next.Tasks)
+	}
+	for j := range next.Tasks {
+		if next.Tasks[j].Name == task.Name {
+			if !equalPtr(next.Tasks[j].Input, task.Input) {
+				st.mention(listExecutions, pos, 1+j, task.Input)
+			}
+			next.Tasks[j] = task
+		}
+	}
+	if st.ix != nil {
+		st.s.Executions[pos] = next
+		return
+	}
+	st.replaceExecution(next)
+}
+
+func (st *stepper) setTaskStatus(pos, task int, status TaskStatus) {
+	next := st.s.Executions[pos].Tasks[task]
+	next.Status = status
+	st.setTask(pos, next)
+}
+
+func (st *stepper) addResult(r Result) {
+	own(st, listResults, &st.s.Results)
+	pos := len(st.s.Results)
+	st.s.Results = append(st.s.Results, r)
+	st.mention(listResults, pos, 0, &r.Value)
+	if st.ix != nil {
+		st.ix.addResult(pos, &st.s.Results[pos])
+	}
+}
+
+func (st *stepper) addTaskResult(r TaskResult) {
+	own(st, listTaskResults, &st.s.TaskResults)
+	pos := len(st.s.TaskResults)
+	st.s.TaskResults = append(st.s.TaskResults, r)
+	st.mention(listTaskResults, pos, 0, &r.Value)
+	if v, ok := r.Output.value(); ok {
+		st.mention(listTaskResults, pos, 1, &v)
+	}
+	if st.ix != nil {
+		st.ix.addTaskResult(pos, &st.s.TaskResults[pos])
+	}
+}
+
+// setTaskOutput sets the output of the task result at pos.
+func (st *stepper) setTaskOutput(pos int, output TaskOutput) {
+	own(st, listTaskResults, &st.s.TaskResults)
+	next := st.s.TaskResults[pos]
+	next.Output = output
+	if v, ok := output.value(); ok {
+		st.mention(listTaskResults, pos, 1, &v)
+	}
+	if st.ix != nil {
+		st.s.TaskResults[pos] = next
+		return
+	}
+	for i := range st.s.TaskResults {
+		x := &st.s.TaskResults[i]
+		if x.Execution == next.Execution && x.Task == next.Task && x.Index == next.Index {
+			*x = next
+		}
+	}
+}
+
+func (st *stepper) addDelivery(d Delivery) {
+	own(st, listDeliveries, &st.s.Deliveries)
+	pos := len(st.s.Deliveries)
+	st.s.Deliveries = append(st.s.Deliveries, d)
+	if d.Outcome.Kind == DeliveredValue {
+		st.mention(listDeliveries, pos, 0, &d.Outcome.Value)
+	}
+	if st.ix != nil {
+		st.ix.addDelivery(pos, &st.s.Deliveries[pos])
+	}
+}
+
+func (st *stepper) addSettled(x Settled) {
+	own(st, listSettled, &st.s.Settled)
+	pos := len(st.s.Settled)
+	st.s.Settled = append(st.s.Settled, x)
+	if st.ix != nil {
+		st.ix.addSettled(pos, &st.s.Settled[pos])
+	}
+}
+
+// stop cancels running calls and leaves waiting tasks unstarted, in one transition (§11.3).
+func (st *stepper) stop() {
+	st.s.Status = StatusStopping
+	own(st, listCalls, &st.s.Calls)
+	for i := range st.s.Calls {
+		if c := &st.s.Calls[i]; c.Status == CallRunning || c.Status == CallFetching {
+			c.Status = CallCancelling
+		}
+	}
+	own(st, listExecutions, &st.s.Executions)
+	for i := range st.s.Executions {
+		e := &st.s.Executions[i]
+		if st.ix == nil {
+			e.Tasks = slices.Clone(e.Tasks)
+		}
+		for j := range e.Tasks {
+			if t := &e.Tasks[j]; t.Status == TaskPending || t.Status == TaskReady {
+				t.Status = TaskNotStarted
 			}
 		}
-		for j := range s.Attempts {
-			if s.Attempts[j].Status == "running" {
-				s.Attempts[j].Status = "cancelled"
+	}
+}
+
+// endUnfinished ends every invocation and task that has not ended, at the conclusion after a stop
+// (§8.2, §11.3): an active invocation or task ends cancelled, and a task that never started ends
+// unstarted, so that none holds a slot any more. It publishes no result, delivery or settlement, and
+// leaves runs as they are.
+func (st *stepper) endUnfinished() {
+	own(st, listInvocations, &st.s.Invocations)
+	for i := range st.s.Invocations {
+		if inv := &st.s.Invocations[i]; inv.Status == InvocationActive {
+			inv.Status = InvocationCancelled
+			if st.ix != nil {
+				st.ix.setInvocationStatus(inv, InvocationActive)
 			}
 		}
-		s.Reason = ptr("CANCELLED")
-	case "manualRetry":
-		i, r := s.getInstance(o.Inst)
-		if r != nil {
-			return r
+	}
+	own(st, listExecutions, &st.s.Executions)
+	for i := range st.s.Executions {
+		e := &st.s.Executions[i]
+		if st.ix == nil {
+			e.Tasks = slices.Clone(e.Tasks)
 		}
-		n, r := s.getNode(i.Path, i.Node)
-		if r != nil {
-			return r
+		for j := range e.Tasks {
+			switch t := &e.Tasks[j]; t.Status {
+			case TaskActive:
+				t.Status = TaskCancelled
+			case TaskPending, TaskReady:
+				t.Status = TaskNotStarted
+			}
 		}
-		if i.Status != "failed" {
-			return reject("NOT_FAILED")
+	}
+}
+
+// fail records a failure; the policy is chosen where the failure happened, never again by an
+// enclosing placement (§11.2).
+func (st *stepper) fail(f Failure, policy Policy) {
+	own(st, listFailures, &st.s.Failures)
+	st.s.Failures = append(st.s.Failures, f)
+	if policy == PolicyStop {
+		st.stop()
+	}
+}
+
+func taskIndex(e *Execution, name string) (int, error) {
+	for j := range e.Tasks {
+		if e.Tasks[j].Name == name {
+			return j, nil
 		}
-		switch n.Kind.Type {
-		case "leaf":
-			i.Status = "retryWait"
-			i.ExtraAttempts = i.ExtraAttempts.Inc()
-			i.RetryAt = ptr(s.Now)
-			s.setInstance(i)
-			s.Status = "running"
-			s.Reason = nil
-		case "loop":
-			f, r := s.CurrentFrame(i)
-			if r != nil {
-				return r
-			}
-			if !f.Closed {
-				return reject("BODY_NOT_FINISHED")
-			}
-			items, r := s.frameOutputItems(f)
-			if r != nil {
-				return r
-			}
-			i.Status = "waitingInputs"
-			i.ExtraIterations = i.ExtraIterations.Inc()
-			i.Iteration = i.Iteration.Inc()
-			s.setInstance(i)
-			if r := s.addFrame(i, *n.Kind.Body, items); r != nil {
-				return r
-			}
-			s.Status = "running"
-			s.Reason = nil
-		default:
-			return reject("NOT_RETRYABLE_NODE", i.Node)
+	}
+	return 0, reject("UNKNOWN_TASK")
+}
+
+// owner is where the owner of a call is: an invocation, or a task of an execution.
+type owner struct {
+	ofTask                      bool
+	invocation, execution, task int
+}
+
+func (st *stepper) ownerOf(c *Call) (owner, error) {
+	if c.Task == nil {
+		pos, ok := st.invocationPos(c.Owner)
+		if !ok {
+			return owner{}, reject("UNKNOWN_INVOCATION")
 		}
+		return owner{invocation: pos}, nil
+	}
+	pos, ok := st.executionPos(c.Owner)
+	if !ok {
+		return owner{}, reject("UNKNOWN_EXECUTION")
+	}
+	j, err := taskIndex(&st.s.Executions[pos], *c.Task)
+	if err != nil {
+		return owner{}, err
+	}
+	return owner{ofTask: true, execution: pos, task: j}, nil
+}
+
+func (st *stepper) callFailure(c *Call, cause Cause) (Failure, error) {
+	if c.Task == nil {
+		i, ok := st.invocation(c.Owner)
+		if !ok {
+			return Failure{}, reject("UNKNOWN_INVOCATION")
+		}
+		return Failure{Run: i.Run, Placement: i.Placement, Cause: cause}, nil
+	}
+	e, ok := st.execution(c.Owner)
+	if !ok {
+		return Failure{}, reject("UNKNOWN_EXECUTION")
+	}
+	return Failure{Run: e.Run, Placement: e.Placement, Task: ptr(*c.Task), Cause: cause}, nil
+}
+
+// acceptance is one value of a call accepted as a result of its owner (§10.2): a result, or a task
+// result.
+type acceptance struct {
+	result     *Result
+	taskResult *TaskResult
+}
+
+func (st *stepper) accept(c *Call, index int, value string, arm *string) (acceptance, error) {
+	if c.Task == nil {
+		i, ok := st.invocation(c.Owner)
+		if !ok {
+			return acceptance{}, reject("UNKNOWN_INVOCATION")
+		}
+		r := Result{ID: keyCallResult(c.ID, index), Run: i.Run, Placement: i.Placement, Producer: c.ID,
+			Arm: arm, Value: value}
+		if _, dup := st.result(r.ID); dup {
+			return acceptance{}, reject("DUPLICATE_RESULT")
+		}
+		return acceptance{result: &r}, nil
+	}
+	if _, dup := st.taskResultPos(c.Owner, *c.Task, index); dup {
+		return acceptance{}, reject("DUPLICATE_RESULT")
+	}
+	return acceptance{taskResult: &TaskResult{Execution: c.Owner, Task: *c.Task, Index: index, Value: value}}, nil
+}
+
+func (st *stepper) addAccepted(a acceptance) {
+	if a.result != nil {
+		st.addResult(*a.result)
+	} else {
+		st.addTaskResult(*a.taskResult)
+	}
+}
+
+func (st *stepper) settleOwner(o owner, invocation InvocationStatus, task TaskStatus) {
+	if o.ofTask {
+		st.setTaskStatus(o.execution, o.task, task)
+	} else {
+		st.setInvocationStatus(o.invocation, invocation)
+	}
+}
+
+// cancelOwner ends the owner of a terminated call as cancelled, unless the owner already failed.
+func (st *stepper) cancelOwner(o owner) {
+	if o.ofTask {
+		if st.s.Executions[o.execution].Tasks[o.task].Status == TaskActive {
+			st.setTaskStatus(o.execution, o.task, TaskCancelled)
+		}
+	} else if st.s.Invocations[o.invocation].Status == InvocationActive {
+		st.setInvocationStatus(o.invocation, InvocationCancelled)
+	}
+}
+
+func (st *stepper) failCall(pos int, status CallStatus, cause Cause) error {
+	c := st.s.Calls[pos]
+	f, err := st.callFailure(&c, cause)
+	if err != nil {
+		return err
+	}
+	o, err := st.ownerOf(&c)
+	if err != nil {
+		return err
+	}
+	st.setCallStatus(pos, status)
+	st.settleOwner(o, InvocationFailed, TaskFailed)
+	st.fail(f, c.Policy)
+	return nil
+}
+
+func invocationOutcome(kind Kind, status InvocationStatus) Outcome {
+	switch status {
+	case InvocationSucceeded:
+		return OutcomeNormal
+	case InvocationSkipped:
+		return OutcomeSkipped
+	case InvocationUpstreamFailed:
+		if kind == KindStream {
+			return OutcomeNormal
+		}
+		return OutcomeUpstreamFailed
+	}
+	if kind == KindStream {
+		return OutcomeNormal
+	}
+	return OutcomeFailed
+}
+
+// missingOutcome: a Stream output that got no value ends normally unless it was not selected (§7.3).
+func missingOutcome(kind Kind, reason Outcome) Outcome {
+	if kind == KindStream && reason != OutcomeSkipped {
+		return OutcomeNormal
+	}
+	return reason
+}
+
+// settleOutcome says how a placement settles when it has taken all its input and its invocations
+// ended, or false when it is not ready (§7.3, §9, §10.3).
+func (v view) settleOutcome(path Path, pl *Placement, sh shape, kind Kind) (Settled, *Result, bool) {
+	for i := range v.invocationsOf(path, pl.Name) {
+		if !v.invocationEnded(i) {
+			return Settled{}, nil, false
+		}
+	}
+	done := func(outcome Outcome) (Settled, *Result, bool) {
+		return Settled{Run: path, Placement: pl.Name, Outcome: outcome}, nil, true
+	}
+	key := keyAggregate(path, pl.Name)
+	aggregate := func(values []string) (Settled, *Result, bool) {
+		r := &Result{ID: key, Run: path, Placement: pl.Name, Producer: key, Value: listValue(values)}
+		return Settled{Run: path, Placement: pl.Name, Outcome: OutcomeNormal}, r, true
+	}
+	triggered := func(index int) bool {
+		for d := range v.deliveriesOn(path, index) {
+			if d.Outcome.Kind == DeliveredFailed {
+				continue
+			}
+			if _, ok := v.findInvocation(path, pl.Name, ptr(d.Source)); !ok {
+				return false
+			}
+		}
+		return true
+	}
+	ownFailures := func(index int) int {
+		n := 0
+		for d := range v.deliveriesOn(path, index) {
+			if d.Outcome.Kind == DeliveredFailed {
+				n++
+			}
+		}
+		for i := range v.invocationsOf(path, pl.Name) {
+			if i.Status == InvocationFailed || i.Status == InvocationCancelled {
+				n++
+			}
+		}
+		return n
+	}
+	switch control := pl.Control.(type) {
+	case WaitStreamControl:
+		if sh.kind != shapeStream {
+			return Settled{}, nil, false
+		}
+		ended, ok := v.streamEnd(path, sh.index, sh.connection)
+		if !ok {
+			return Settled{}, nil, false
+		}
+		if ended == OutcomeSkipped {
+			return done(OutcomeSkipped)
+		}
+		var values []string
+		for d := range v.deliveriesOn(path, sh.index) {
+			if d.Outcome.Kind == DeliveredValue {
+				values = append(values, d.Outcome.Value)
+			}
+		}
+		return aggregate(values)
+	case MergeControl:
+		if sh.kind != shapeMerge {
+			return Settled{}, nil, false
+		}
+		resolutions := make([]resolution, len(sh.merged))
+		allSkipped := true
+		for n, in := range sh.merged {
+			resolutions[n] = v.resolveSingle(path, in.index, in.connection)
+			if resolutions[n].kind == resolutionPending {
+				return Settled{}, nil, false
+			}
+			allSkipped = allSkipped && resolutions[n].kind == resolutionSkipped
+		}
+		if allSkipped {
+			return done(OutcomeSkipped)
+		}
+		var values []string
+		for _, r := range resolutions {
+			if r.kind == resolutionValue && r.input != nil {
+				values = append(values, *r.input)
+			}
+		}
+		return aggregate(values)
+	case BranchControl:
+		settleArms := func(outcome Outcome, arm func(string) Outcome) (Settled, *Result, bool) {
+			arms := make([]ArmOutcome, len(control.Arms))
+			for n, a := range control.Arms {
+				arms[n] = ArmOutcome{Arm: a, Outcome: arm(a)}
+			}
+			return Settled{Run: path, Placement: pl.Name, Outcome: outcome, Arms: arms}, nil, true
+		}
+		all := func(o Outcome) func(string) Outcome { return func(string) Outcome { return o } }
+		byInvocation := func(inv *Invocation) (Settled, *Result, bool) {
+			switch inv.Status {
+			case InvocationSucceeded:
+				return settleArms(OutcomeNormal, func(a string) Outcome {
+					if inv.Arm != nil && *inv.Arm == a {
+						return OutcomeNormal
+					}
+					return OutcomeSkipped
+				})
+			case InvocationSkipped:
+				return settleArms(OutcomeSkipped, all(OutcomeSkipped))
+			case InvocationUpstreamFailed:
+				return settleArms(OutcomeUpstreamFailed, all(OutcomeUpstreamFailed))
+			}
+			return settleArms(OutcomeFailed, all(OutcomeFailed))
+		}
+		switch sh.kind {
+		case shapeEntry:
+			inv, ok := v.findInvocation(path, pl.Name, nil)
+			if !ok {
+				return Settled{}, nil, false
+			}
+			return byInvocation(inv)
+		case shapeSingle:
+			r := v.resolveSingle(path, sh.index, sh.connection)
+			switch r.kind {
+			case resolutionPending:
+				return Settled{}, nil, false
+			case resolutionValue:
+				inv, ok := v.findInvocation(path, pl.Name, ptr(r.source))
+				if !ok {
+					return Settled{}, nil, false
+				}
+				return byInvocation(inv)
+			case resolutionTransformFailed:
+				return settleArms(OutcomeFailed, all(OutcomeFailed))
+			case resolutionSkipped:
+				return settleArms(OutcomeSkipped, all(OutcomeSkipped))
+			}
+			return settleArms(OutcomeUpstreamFailed, all(OutcomeUpstreamFailed))
+		case shapeStream:
+			ended, ok := v.streamEnd(path, sh.index, sh.connection)
+			if !ok || !triggered(sh.index) {
+				return Settled{}, nil, false
+			}
+			if ended == OutcomeSkipped {
+				return settleArms(OutcomeSkipped, all(OutcomeSkipped))
+			}
+			chosen := map[string]bool{}
+			for r := range v.resultsOf(path, pl.Name) {
+				if r.Arm != nil {
+					chosen[*r.Arm] = true
+				}
+			}
+			own := ownFailures(sh.index)
+			return settleArms(OutcomeNormal, func(a string) Outcome {
+				if len(chosen) > 0 && !chosen[a] && own == 0 {
+					return OutcomeSkipped
+				}
+				return OutcomeNormal
+			})
+		}
+		return Settled{}, nil, false
+	case CallControl, ConcurrencyControl:
+		switch sh.kind {
+		case shapeNone, shapeEntry:
+			inv, ok := v.findInvocation(path, pl.Name, nil)
+			if !ok {
+				return Settled{}, nil, false
+			}
+			return done(invocationOutcome(kind, inv.Status))
+		case shapeSingle:
+			r := v.resolveSingle(path, sh.index, sh.connection)
+			switch r.kind {
+			case resolutionPending:
+				return Settled{}, nil, false
+			case resolutionValue:
+				inv, ok := v.findInvocation(path, pl.Name, ptr(r.source))
+				if !ok {
+					return Settled{}, nil, false
+				}
+				return done(invocationOutcome(kind, inv.Status))
+			case resolutionTransformFailed:
+				return done(missingOutcome(kind, OutcomeFailed))
+			case resolutionSkipped:
+				return done(OutcomeSkipped)
+			}
+			return done(missingOutcome(kind, OutcomeUpstreamFailed))
+		case shapeStream:
+			ended, ok := v.streamEnd(path, sh.index, sh.connection)
+			if !ok || !triggered(sh.index) {
+				return Settled{}, nil, false
+			}
+			if ended == OutcomeSkipped {
+				return done(OutcomeSkipped)
+			}
+			any, allSkipped := false, true
+			for i := range v.invocationsOf(path, pl.Name) {
+				any = true
+				allSkipped = allSkipped && i.Status == InvocationSkipped
+			}
+			if any && allSkipped && ownFailures(sh.index) == 0 {
+				return done(OutcomeSkipped)
+			}
+			return done(OutcomeNormal)
+		}
+	}
+	return Settled{}, nil, false
+}
+
+// designatedOutput is the endpoint whose result a sub-workflow call returns.
+func (v view) designatedOutput(p *Definition, r *Run) (string, error) {
+	if r.Owner == nil {
+		return "", reject("ROOT_RUN")
+	}
+	owner := *r.Owner
+	var body Body
+	if r.Task == nil {
+		i, ok := v.invocation(owner)
+		if !ok {
+			return "", reject("UNKNOWN_INVOCATION")
+		}
+		pl, err := v.placementOf(p, i.Run, i.Placement)
+		if err != nil {
+			return "", err
+		}
+		call, ok := pl.Control.(CallControl)
+		if !ok {
+			return "", reject("NOT_A_CALL")
+		}
+		body = call.Body
+	} else {
+		e, ok := v.execution(owner)
+		if !ok {
+			return "", reject("UNKNOWN_EXECUTION")
+		}
+		spec, err := v.taskSpec(p, e, *r.Task)
+		if err != nil {
+			return "", err
+		}
+		body = spec.Body
+	}
+	if !body.Workflow {
+		return "", reject("NOT_A_WORKFLOW_CALL")
+	}
+	return body.Output, nil
+}
+
+// apply applies one operation.
+func (st *stepper) apply(op Op) error {
+	switch op := op.(type) {
+	case OpStart:
+		return st.start(op.Input)
+	case OpInvoke:
+		return st.invoke(op.Run, op.Placement, op.Trigger)
+	case OpFetch:
+		return st.fetch(op.Call)
+	case OpReturned:
+		return st.returned(op.Call, op.Value)
+	case OpJudged:
+		return st.judged(op.Call, op.Arm)
+	case OpYielded:
+		return st.yielded(op.Call, op.Value)
+	case OpEnded:
+		return st.ended(op.Call)
+	case OpFailed:
+		return st.failed(op.Call)
+	case OpTimedOut:
+		return st.timedOut(op.Call, op.Element)
+	case OpLost:
+		return st.lost(op.Call)
+	case OpTerminated:
+		return st.terminated(op.Call)
+	case OpDeliver:
+		return st.deliver(op.Run, op.Connection, op.Source, op.Value)
+	case OpTransformFailed:
+		return st.transformFailed(op.Run, op.Connection, op.Source)
+	case OpTaskInput:
+		return st.taskInput(op.Execution, op.Task, op.Value)
+	case OpTaskInputFailed:
+		return st.taskInputFailed(op.Execution, op.Task)
+	case OpBeginTask:
+		return st.beginTask(op.Execution, op.Task)
+	case OpTaskOutput:
+		return st.taskOutput(op.Execution, op.Task, op.Index, op.Value)
+	case OpTaskOutputFailed:
+		return st.taskOutputFailed(op.Execution, op.Task, op.Index)
+	case OpSettle:
+		return st.settle(op.Run, op.Placement)
+	case OpCloseExecution:
+		return st.closeExecution(op.Execution)
+	case OpCloseRun:
+		return st.closeRun(op.Run)
+	case OpCancel:
+		return st.cancel()
+	case OpConclude:
+		return st.conclude()
+	}
+	return reject("UNKNOWN_OP")
+}
+
+func (st *stepper) running() error {
+	return require(st.s.Started && st.s.Status == StatusRunning, "NOT_RUNNING")
+}
+
+// getCall is the position of the call and a copy of it.
+func (st *stepper) getCall(id string) (int, Call, error) {
+	pos, ok := st.callPos(id)
+	if !ok {
+		return 0, Call{}, reject("UNKNOWN_CALL")
+	}
+	return pos, st.s.Calls[pos], nil
+}
+
+func (st *stepper) getExecution(id string) (int, *Execution, error) {
+	pos, ok := st.executionPos(id)
+	if !ok {
+		return 0, nil, reject("UNKNOWN_EXECUTION")
+	}
+	return pos, &st.s.Executions[pos], nil
+}
+
+func (st *stepper) start(input *string) error {
+	s := st.s
+	if err := require(!s.Started && s.Status == StatusRunning, "ALREADY_STARTED"); err != nil {
+		return err
+	}
+	w, ok := st.p.workflow(st.p.Main)
+	if !ok {
+		return reject("UNKNOWN_MAIN")
+	}
+	if err := require((w.Input != nil) == (input != nil), "INPUT_MISMATCH"); err != nil {
+		return err
+	}
+	s.Started = true
+	s.Runs = nil
+	st.owned |= 1 << listRuns
+	if st.ix != nil {
+		st.ix.runs, st.ix.runsOf = map[string][]int{}, map[string][]int{}
+	}
+	st.addRun(Run{Path: Path{}, Workflow: st.p.Main, Input: input})
+	return nil
+}
+
+// invocationInput is the input one invocation takes, if its trigger is available (§3.1, §5.3).
+func (st *stepper) invocationInput(r *Run, w *Workflow, name string, trigger *string) (*string, error) {
+	sh, ok := w.shape(st.kinds(w), name)
+	if !ok {
+		return nil, reject("INVALID_SHAPE")
+	}
+	switch {
+	case sh.kind == shapeNone && trigger == nil:
+		return nil, nil
+	case sh.kind == shapeEntry && trigger == nil:
+		return r.Input, nil
+	case sh.kind == shapeSingle && trigger != nil:
+		res := st.resolveSingle(r.Path, sh.index, sh.connection)
+		if res.kind != resolutionValue {
+			return nil, reject("INPUT_NOT_READY")
+		}
+		if res.source != *trigger {
+			return nil, reject("WRONG_TRIGGER")
+		}
+		return res.input, nil
+	case sh.kind == shapeStream && trigger != nil:
+		d, ok := st.delivery(r.Path, sh.index, *trigger)
+		if ok && d.Outcome.Kind == DeliveredValue {
+			return ptr(d.Outcome.Value), nil
+		}
+		if ok && d.Outcome.Kind == DeliveredTrigger {
+			return nil, nil
+		}
+		return nil, reject("INPUT_NOT_READY")
+	}
+	return nil, reject("INVALID_TRIGGER")
+}
+
+func (st *stepper) invoke(path Path, name string, trigger *string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	r, ok := st.run(path)
+	if !ok {
+		return reject("UNKNOWN_RUN")
+	}
+	if r.Complete {
+		return reject("RUN_COMPLETE")
+	}
+	w, ok := st.p.workflow(r.Workflow)
+	if !ok {
+		return reject("UNKNOWN_WORKFLOW")
+	}
+	pl, ok := w.placement(name)
+	if !ok {
+		return reject("UNKNOWN_PLACEMENT")
+	}
+	input, err := st.invocationInput(r, w, name, trigger)
+	if err != nil {
+		return err
+	}
+	id := keyInvocation(path, name, trigger)
+	if _, dup := st.findInvocation(path, name, trigger); dup {
+		return reject("DUPLICATE_INVOCATION")
+	}
+	if _, dup := st.invocation(id); dup {
+		return reject("DUPLICATE_INVOCATION")
+	}
+	invocation := Invocation{ID: id, Run: path, Placement: name, Trigger: trigger, Input: input}
+	switch c := pl.Control.(type) {
+	case CallControl:
+		if !c.Body.Workflow {
+			decl, ok := st.p.function(c.Body.ID)
+			if !ok {
+				return reject("UNKNOWN_FUNCTION")
+			}
+			if _, dup := st.call(id); dup {
+				return reject("DUPLICATE_CALL")
+			}
+			st.addInvocation(invocation)
+			st.addCall(Call{ID: id, Owner: id, Target: CallTarget{ID: c.Body.ID}, Input: input,
+				Stream: decl.Output.Kind == KindStream, Timeout: pl.Timeout, Policy: pl.Policy})
+			return nil
+		}
+		child := keyChild(id)
+		if _, dup := st.run(child); dup {
+			return reject("DUPLICATE_RUN")
+		}
+		st.addInvocation(invocation)
+		st.addRun(Run{Path: child, Workflow: c.Body.ID, Input: input, Owner: ptr(id)})
+		return nil
+	case BranchControl:
+		if _, dup := st.call(id); dup {
+			return reject("DUPLICATE_CALL")
+		}
+		st.addInvocation(invocation)
+		st.addCall(Call{ID: id, Owner: id, Target: CallTarget{Judge: true, ID: c.Judge}, Input: input,
+			Timeout: pl.Timeout, Policy: pl.Policy})
+		return nil
+	case ConcurrencyControl:
+		if _, dup := st.execution(id); dup {
+			return reject("DUPLICATE_EXECUTION")
+		}
+		tasks := make([]TaskState, len(c.Spec.Tasks))
+		for n, task := range c.Spec.Tasks {
+			status := TaskReady
+			if c.Spec.Input != nil {
+				status = TaskPending
+			}
+			tasks[n] = TaskState{Name: task.Name, Status: status}
+		}
+		st.addInvocation(invocation)
+		st.addExecution(Execution{ID: id, Run: path, Placement: name, Input: input, Tasks: tasks})
+		return nil
+	}
+	return reject("NOT_INVOCABLE")
+}
+
+// appendOne is xs with x appended, in a new list.
+func appendOne[T any](xs []T, x T) []T {
+	out := make([]T, len(xs), len(xs)+1)
+	copy(out, xs)
+	return append(out, x)
+}
+
+func (st *stepper) fetch(id string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Stream && c.Status == CallRunning, "NOT_FETCHABLE"); err != nil {
+		return err
+	}
+	st.setCallStatus(pos, CallFetching)
+	return nil
+}
+
+func (st *stepper) returned(id, value string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(!c.Stream && c.Status == CallRunning && !c.Target.Judge, "NOT_RETURNABLE"); err != nil {
+		return err
+	}
+	a, err := st.accept(&c, 0, value, nil)
+	if err != nil {
+		return err
+	}
+	o, err := st.ownerOf(&c)
+	if err != nil {
+		return err
+	}
+	st.addAccepted(a)
+	st.setCallStatus(pos, CallReturned)
+	st.settleOwner(o, InvocationSucceeded, TaskSucceeded)
+	return nil
+}
+
+func (st *stepper) judged(id, arm string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Status == CallRunning && c.Target.Judge && c.Task == nil, "NOT_JUDGING"); err != nil {
+		return err
+	}
+	ipos, ok := st.invocationPos(c.Owner)
+	if !ok {
+		return reject("UNKNOWN_INVOCATION")
+	}
+	i := &st.s.Invocations[ipos]
+	pl, err := st.placementOf(st.p, i.Run, i.Placement)
+	if err != nil {
+		return err
+	}
+	branch, ok := pl.Control.(BranchControl)
+	if !ok {
+		return reject("NOT_BRANCH")
+	}
+	if err := require(slices.Contains(branch.Arms, arm), "UNKNOWN_ARM"); err != nil {
+		return err
+	}
+	input := ""
+	if i.Input != nil {
+		input = *i.Input
+	}
+	a, err := st.accept(&c, 0, input, ptr(arm))
+	if err != nil {
+		return err
+	}
+	st.addAccepted(a)
+	st.setCallStatus(pos, CallReturned)
+	st.setInvocation(ipos, InvocationSucceeded, ptr(arm))
+	return nil
+}
+
+func (st *stepper) yielded(id, value string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Stream && c.Status == CallFetching, "NOT_FETCHING"); err != nil {
+		return err
+	}
+	a, err := st.accept(&c, c.Yields, value, nil)
+	if err != nil {
+		return err
+	}
+	st.addAccepted(a)
+	st.setCall(pos, CallRunning, c.Yields+1)
+	return nil
+}
+
+func (st *stepper) ended(id string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Stream && c.Status == CallFetching, "NOT_FETCHING"); err != nil {
+		return err
+	}
+	o, err := st.ownerOf(&c)
+	if err != nil {
+		return err
+	}
+	st.setCallStatus(pos, CallReturned)
+	st.settleOwner(o, InvocationSucceeded, TaskSucceeded)
+	return nil
+}
+
+func (st *stepper) failed(id string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Status == CallRunning || c.Status == CallFetching, "NOT_RUNNING"); err != nil {
+		return err
+	}
+	return st.failCall(pos, CallFailed, CauseError)
+}
+
+func (st *stepper) timedOut(id string, element bool) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	var ok bool
+	if element {
+		ok = c.Status == CallFetching && c.Timeout.ElementMs != nil
+	} else {
+		ok = (c.Status == CallRunning || c.Status == CallFetching) && c.Timeout.CallMs != nil
+	}
+	if err := require(ok, "NO_TIMEOUT"); err != nil {
+		return err
+	}
+	return st.failCall(pos, CallCancelling, CauseTimeout)
+}
+
+func (st *stepper) lost(id string) error {
+	s := st.s
+	if err := require(s.Started && (s.Status == StatusRunning || s.Status == StatusStopping), "TERMINAL"); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	switch c.Status {
+	case CallRunning, CallFetching:
+		return st.failCall(pos, CallLost, CauseLost)
+	case CallCancelling:
+		return st.cancelled(pos, &c)
+	}
+	return reject("NOT_RUNNING")
+}
+
+// cancelled ends a cancelled call and its owner.
+func (st *stepper) cancelled(pos int, c *Call) error {
+	o, err := st.ownerOf(c)
+	if err != nil {
+		return err
+	}
+	st.setCallStatus(pos, CallCancelled)
+	st.cancelOwner(o)
+	return nil
+}
+
+func (st *stepper) terminated(id string) error {
+	s := st.s
+	if err := require(s.Started && (s.Status == StatusRunning || s.Status == StatusStopping), "TERMINAL"); err != nil {
+		return err
+	}
+	pos, c, err := st.getCall(id)
+	if err != nil {
+		return err
+	}
+	if err := require(c.Status == CallCancelling, "NOT_CANCELLING"); err != nil {
+		return err
+	}
+	return st.cancelled(pos, &c)
+}
+
+// deliveryTarget is the connection and workflow of one delivery, checked for eligibility.
+func (st *stepper) deliveryTarget(path Path, index int, source string) (*Workflow, *Connection, error) {
+	w, ok := st.workflow(st.p, path)
+	if !ok {
+		return nil, nil, reject("UNKNOWN_RUN")
+	}
+	if index < 0 || index >= len(w.Connections) {
+		return nil, nil, reject("UNKNOWN_CONNECTION")
+	}
+	c := &w.Connections[index]
+	r, ok := st.result(source)
+	if !ok {
+		return nil, nil, reject("UNKNOWN_RESULT")
+	}
+	if err := require(slices.Equal(r.Run, path) && r.Placement == c.Source && (c.Arm == nil || equalPtr(r.Arm, c.Arm)),
+		"NOT_ELIGIBLE"); err != nil {
+		return nil, nil, err
+	}
+	if _, dup := st.delivery(path, index, source); dup {
+		return nil, nil, reject("DUPLICATE_DELIVERY")
+	}
+	return w, c, nil
+}
+
+func (st *stepper) deliver(path Path, index int, source string, value *string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	_, c, err := st.deliveryTarget(path, index, source)
+	if err != nil {
+		return err
+	}
+	var outcome Delivered
+	switch {
+	case !c.Transform.Discard && value != nil:
+		outcome = Delivered{Kind: DeliveredValue, Value: *value}
+	case c.Transform.Discard && value == nil:
+		outcome = Delivered{Kind: DeliveredTrigger}
 	default:
-		return reject("UNKNOWN_OPERATION", o.Kind)
+		return reject("TRANSFORM_MISMATCH")
+	}
+	st.addDelivery(Delivery{Run: path, Connection: index, Source: source, Outcome: outcome})
+	return nil
+}
+
+func (st *stepper) transformFailed(path Path, index int, source string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	w, c, err := st.deliveryTarget(path, index, source)
+	if err != nil {
+		return err
+	}
+	if err := require(!c.Transform.Discard, "DISCARD_CANNOT_FAIL"); err != nil {
+		return err
+	}
+	target, ok := w.placement(c.Target)
+	if !ok {
+		return reject("UNKNOWN_PLACEMENT")
+	}
+	st.addDelivery(Delivery{Run: path, Connection: index, Source: source, Outcome: Delivered{Kind: DeliveredFailed}})
+	st.fail(Failure{Run: path, Placement: c.Target, Cause: CauseTransform}, target.Policy)
+	return nil
+}
+
+func (st *stepper) taskInput(eid, name string, value *string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	j, err := taskIndex(e, name)
+	if err != nil {
+		return err
+	}
+	t := e.Tasks[j]
+	if err := require(t.Status == TaskPending, "NOT_PENDING"); err != nil {
+		return err
+	}
+	spec, err := st.taskSpec(st.p, e, name)
+	if err != nil {
+		return err
+	}
+	if spec.Input == nil || spec.Input.Discard != (value == nil) {
+		return reject("TRANSFORM_MISMATCH")
+	}
+	t.Status = TaskReady
+	t.Input = value
+	st.setTask(pos, t)
+	return nil
+}
+
+func (st *stepper) taskInputFailed(eid, name string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	j, err := taskIndex(e, name)
+	if err != nil {
+		return err
+	}
+	if err := require(e.Tasks[j].Status == TaskPending, "NOT_PENDING"); err != nil {
+		return err
+	}
+	spec, err := st.taskSpec(st.p, e, name)
+	if err != nil {
+		return err
+	}
+	if err := require(spec.Input != nil && !spec.Input.Discard, "DISCARD_CANNOT_FAIL"); err != nil {
+		return err
+	}
+	failure := Failure{Run: e.Run, Placement: e.Placement, Task: ptr(name), Cause: CauseTransform}
+	st.setTaskStatus(pos, j, TaskFailed)
+	st.fail(failure, spec.Policy)
+	return nil
+}
+
+func (st *stepper) beginTask(eid, name string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	pos, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	if err := require(!e.Complete, "EXECUTION_COMPLETE"); err != nil {
+		return err
+	}
+	c, err := st.concurrencyOf(st.p, e)
+	if err != nil {
+		return err
+	}
+	j, err := taskIndex(e, name)
+	if err != nil {
+		return err
+	}
+	task := e.Tasks[j]
+	if err := require(task.Status == TaskReady, "NOT_READY"); err != nil {
+		return err
+	}
+	if err := require(uint64(st.slotsHeld(e)) < c.Limit, "NO_SLOT"); err != nil {
+		return err
+	}
+	spec, err := st.taskSpec(st.p, e, name)
+	if err != nil {
+		return err
+	}
+	id := taskID(e.ID, name)
+	if !spec.Body.Workflow {
+		decl, ok := st.p.function(spec.Body.ID)
+		if !ok {
+			return reject("UNKNOWN_FUNCTION")
+		}
+		if _, dup := st.call(id); dup {
+			return reject("DUPLICATE_CALL")
+		}
+		st.setTaskStatus(pos, j, TaskActive)
+		st.addCall(Call{ID: id, Owner: eid, Task: ptr(name), Target: CallTarget{ID: spec.Body.ID},
+			Input: task.Input, Stream: decl.Output.Kind == KindStream, Timeout: spec.Timeout, Policy: spec.Policy})
+		return nil
+	}
+	child := keyChild(id)
+	if _, dup := st.run(child); dup {
+		return reject("DUPLICATE_RUN")
+	}
+	st.setTaskStatus(pos, j, TaskActive)
+	st.addRun(Run{Path: child, Workflow: spec.Body.ID, Input: task.Input, Owner: ptr(eid), Task: ptr(name)})
+	return nil
+}
+
+func (st *stepper) taskResult(eid, name string, index int) (int, error) {
+	pos, ok := st.taskResultPos(eid, name, index)
+	if !ok {
+		return 0, reject("UNKNOWN_RESULT")
+	}
+	return pos, nil
+}
+
+func (st *stepper) taskOutput(eid, name string, index int, value string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	_, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	c, err := st.concurrencyOf(st.p, e)
+	if err != nil {
+		return err
+	}
+	spec, err := st.taskSpec(st.p, e, name)
+	if err != nil {
+		return err
+	}
+	if err := require(spec.Output != nil, "NOT_IN_OUTPUT"); err != nil {
+		return err
+	}
+	pos, err := st.taskResult(eid, name, index)
+	if err != nil {
+		return err
+	}
+	if err := require(st.s.TaskResults[pos].Output.Kind == TaskOutputPending, "ALREADY_TRANSFORMED"); err != nil {
+		return err
+	}
+	output := TaskOutput{Kind: TaskOutputValue, Value: value}
+	if c.Output == CollectList {
+		st.setTaskOutput(pos, output)
+		return nil
+	}
+	result := Result{ID: keyTaskOutput(eid, name, index), Run: e.Run, Placement: e.Placement, Producer: eid,
+		Value: value}
+	if _, dup := st.result(result.ID); dup {
+		return reject("DUPLICATE_RESULT")
+	}
+	st.setTaskOutput(pos, output)
+	st.addResult(result)
+	return nil
+}
+
+func (st *stepper) taskOutputFailed(eid, name string, index int) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	_, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	spec, err := st.taskSpec(st.p, e, name)
+	if err != nil {
+		return err
+	}
+	if err := require(spec.Output != nil, "NOT_IN_OUTPUT"); err != nil {
+		return err
+	}
+	pos, err := st.taskResult(eid, name, index)
+	if err != nil {
+		return err
+	}
+	if err := require(st.s.TaskResults[pos].Output.Kind == TaskOutputPending, "ALREADY_TRANSFORMED"); err != nil {
+		return err
+	}
+	failure := Failure{Run: e.Run, Placement: e.Placement, Task: ptr(name), Cause: CauseTransform}
+	st.setTaskOutput(pos, TaskOutput{Kind: TaskOutputFailed})
+	st.fail(failure, spec.Policy)
+	return nil
+}
+
+func (st *stepper) settle(path Path, name string) error {
+	if err := st.running(); err != nil {
+		return err
+	}
+	r, ok := st.run(path)
+	if !ok {
+		return reject("UNKNOWN_RUN")
+	}
+	if r.Complete {
+		return reject("RUN_COMPLETE")
+	}
+	w, ok := st.p.workflow(r.Workflow)
+	if !ok {
+		return reject("UNKNOWN_WORKFLOW")
+	}
+	pl, ok := w.placement(name)
+	if !ok {
+		return reject("UNKNOWN_PLACEMENT")
+	}
+	if _, dup := st.settledOf(path, name); dup {
+		return reject("ALREADY_SETTLED")
+	}
+	k := st.kinds(w)
+	sh, ok := w.shape(k, name)
+	if !ok {
+		return reject("INVALID_SHAPE")
+	}
+	kind, ok := k.outputKind(name)
+	if !ok {
+		return reject("INVALID_KIND")
+	}
+	settled, result, ok := st.settleOutcome(path, pl, sh, kind)
+	if !ok {
+		return reject("NOT_READY")
+	}
+	if result != nil {
+		if _, dup := st.result(result.ID); dup {
+			return reject("DUPLICATE_RESULT")
+		}
+	}
+	st.addSettled(settled)
+	if result != nil {
+		st.addResult(*result)
 	}
 	return nil
 }
-func cloneOutputs(xs List[Output]) List[Output] {
-	return mapped(xs, func(o Output) Output { o.Items = slices.Clone(o.Items); return o })
-}
-func (o Op) countsAsWork() bool {
-	return o.Kind != "idle" && o.Kind != "cancel" && o.Kind != "manualRetry"
-}
-func (s State) authorized(o Op) bool {
-	switch o.Kind {
-	case "emit", "complete", "fail", "renew":
-		return s.validLease(o.Auth)
+
+func (st *stepper) closeExecution(eid string) error {
+	if err := st.running(); err != nil {
+		return err
 	}
-	return true
-}
-func (s State) duplicateComplete(o Op) bool {
-	return o.Kind == "complete" && anyOf(s.Receipts, func(r Receipt) bool {
-		return r.Instance == o.Auth.Instance && r.Attempt == o.Auth.Attempt && r.Token == o.Auth.Token && equal(r.Outputs, o.Outputs)
-	})
+	pos, e, err := st.getExecution(eid)
+	if err != nil {
+		return err
+	}
+	if err := require(!e.Complete, "EXECUTION_COMPLETE"); err != nil {
+		return err
+	}
+	c, err := st.concurrencyOf(st.p, e)
+	if err != nil {
+		return err
+	}
+	for j := range e.Tasks {
+		if !st.taskEnded(e, &e.Tasks[j]) {
+			return reject("TASKS_RUNNING")
+		}
+	}
+	var included []string
+	for _, task := range c.Tasks {
+		if task.Output != nil {
+			included = append(included, task.Name)
+		}
+	}
+	var outputs []*TaskResult
+	for x := range st.taskResultsOf(eid) {
+		if slices.Contains(included, x.Task) {
+			outputs = append(outputs, x)
+		}
+	}
+	for _, x := range outputs {
+		if x.Output.Kind == TaskOutputPending {
+			return reject("OUTPUT_PENDING")
+		}
+	}
+	ipos, ok := st.invocationPos(eid)
+	if !ok {
+		return reject("UNKNOWN_INVOCATION")
+	}
+	allSkipped := true
+	for _, task := range e.Tasks {
+		if slices.Contains(included, task.Name) && task.Status != TaskSkipped {
+			allSkipped = false
+		}
+	}
+	if allSkipped {
+		st.completeExecution(pos)
+		st.setInvocationStatus(ipos, InvocationSkipped)
+		return nil
+	}
+	if c.Output == CollectStream {
+		st.completeExecution(pos)
+		st.setInvocationStatus(ipos, InvocationSucceeded)
+		return nil
+	}
+	var values []string
+	for _, x := range outputs {
+		if v, ok := x.Output.value(); ok {
+			values = append(values, v)
+		}
+	}
+	result := Result{ID: keyList(eid), Run: e.Run, Placement: e.Placement, Producer: eid, Value: listValue(values)}
+	if _, dup := st.result(result.ID); dup {
+		return reject("DUPLICATE_RESULT")
+	}
+	st.completeExecution(pos)
+	st.setInvocationStatus(ipos, InvocationSucceeded)
+	st.addResult(result)
+	return nil
 }
 
-// Step applies one operation atomically. Neither accepted nor rejected
-// operations mutate their input state. A rejection returns the original state.
-func Step(s State, o Op) (State, *Reject) { return step(s, o, true) }
-func step(s State, o Op, idle bool) (State, *Reject) {
-	if s.duplicateComplete(o) || terminal(s.Status) && s.authorized(o) {
-		return s, nil
+func (st *stepper) closeRun(path Path) error {
+	if err := st.running(); err != nil {
+		return err
 	}
-	if !s.authorized(o) {
-		return s, reject("INVALID_LEASE", "stale, mismatched or expired lease")
+	rpos, ok := st.runPos(path)
+	if !ok {
+		return reject("UNKNOWN_RUN")
 	}
-	if !s.Started && o.Kind != "start" && o.Kind != "cancel" {
-		return s, reject("NOT_STARTED")
+	r := st.s.Runs[rpos]
+	if err := require(!r.Complete && len(path) != 0, "NOT_CLOSABLE"); err != nil {
+		return err
 	}
-	if !s.preconditions(o) {
-		return s, reject("PRECONDITION")
+	w, ok := st.p.workflow(r.Workflow)
+	if !ok {
+		return reject("UNKNOWN_WORKFLOW")
 	}
-	next := cloneState(s)
-	if idle && o.Kind == "idle" {
-		if !s.HasWork() {
-			f := s.Frame(nil)
-			success := s.Started && f != nil && s.FrameDone(*f)
-			if success {
-				next.Status = "succeeded"
-				next.Reason = nil
-			} else {
-				next.Status = "blocked"
-				if s.Status != "blocked" || s.Reason == nil {
-					next.Reason = ptr("DEPENDENCIES_UNRESOLVED")
+	for _, pl := range w.Placements {
+		if _, settled := st.settledOf(path, pl.Name); !settled {
+			return reject("NOT_SETTLED")
+		}
+	}
+	output, err := st.designatedOutput(st.p, &r)
+	if err != nil {
+		return err
+	}
+	x, ok := st.settledOf(path, output)
+	if !ok {
+		return reject("NOT_SETTLED")
+	}
+	outcome := x.Outcome
+	var value *string
+	if first, ok := st.firstResultOf(path, output); ok {
+		value = ptr(first.Value)
+	}
+	if r.Owner == nil {
+		return reject("ROOT_RUN")
+	}
+	owner := *r.Owner
+	if r.Task == nil {
+		ipos, ok := st.invocationPos(owner)
+		if !ok {
+			return reject("UNKNOWN_INVOCATION")
+		}
+		i := &st.s.Invocations[ipos]
+		status := i.Status
+		switch outcome {
+		case OutcomeNormal:
+			if value == nil {
+				return reject("MISSING_RESULT")
+			}
+			result := Result{ID: keyReturned(i.ID), Run: i.Run, Placement: i.Placement, Producer: i.ID, Value: *value}
+			if _, dup := st.result(result.ID); dup {
+				return reject("DUPLICATE_RESULT")
+			}
+			st.completeRun(rpos)
+			st.setInvocationStatus(ipos, InvocationSucceeded)
+			st.addResult(result)
+			return nil
+		case OutcomeSkipped:
+			status = InvocationSkipped
+		case OutcomeFailed:
+			status = InvocationFailed
+		case OutcomeUpstreamFailed:
+			status = InvocationUpstreamFailed
+		}
+		st.completeRun(rpos)
+		st.setInvocationStatus(ipos, status)
+		return nil
+	}
+	name := *r.Task
+	epos, e, err := st.getExecution(owner)
+	if err != nil {
+		return err
+	}
+	j, err := taskIndex(e, name)
+	if err != nil {
+		return err
+	}
+	status := e.Tasks[j].Status
+	switch outcome {
+	case OutcomeNormal:
+		if value == nil {
+			return reject("MISSING_RESULT")
+		}
+		if _, dup := st.taskResultPos(e.ID, name, 0); dup {
+			return reject("DUPLICATE_RESULT")
+		}
+		st.completeRun(rpos)
+		st.setTaskStatus(epos, j, TaskSucceeded)
+		st.addTaskResult(TaskResult{Execution: e.ID, Task: name, Index: 0, Value: *value})
+		return nil
+	case OutcomeSkipped:
+		status = TaskSkipped
+	case OutcomeFailed:
+		status = TaskFailed
+	case OutcomeUpstreamFailed:
+		status = TaskUpstreamFailed
+	}
+	st.completeRun(rpos)
+	st.setTaskStatus(epos, j, status)
+	return nil
+}
+
+func (st *stepper) cancel() error {
+	s := st.s
+	if err := require(s.Started, "NOT_STARTED"); err != nil {
+		return err
+	}
+	switch s.Status {
+	case StatusRunning:
+		st.stop()
+		s.Cancelled = true
+		return nil
+	case StatusStopping:
+		s.Cancelled = true
+		return nil
+	}
+	return reject("TERMINAL")
+}
+
+// conclude decides the final status (§11.3, §13.3). After a stop, the cancelled calls have all
+// terminated, and what has not ended ends without a result (endUnfinished).
+func (st *stepper) conclude() error {
+	s := st.s
+	if err := require(s.Started, "NOT_STARTED"); err != nil {
+		return err
+	}
+	switch s.Status {
+	case StatusRunning:
+		rpos, ok := st.runPos(Path{})
+		if !ok {
+			return reject("NO_ROOT")
+		}
+		w, ok := st.p.workflow(s.Runs[rpos].Workflow)
+		if !ok {
+			return reject("UNKNOWN_WORKFLOW")
+		}
+		for _, pl := range w.Placements {
+			if _, settled := st.settledOf(Path{}, pl.Name); !settled {
+				return reject("NOT_SETTLED")
+			}
+		}
+		status := StatusSucceeded
+		if len(s.Failures) > 0 {
+			status = StatusFailed
+		} else {
+			allSkipped := true
+			for _, pl := range w.Placements {
+				if !w.isEndpoint(pl.Name) {
+					continue
+				}
+				if x, ok := st.settledOf(Path{}, pl.Name); !ok || x.Outcome != OutcomeSkipped {
+					allSkipped = false
 				}
 			}
-		}
-	} else if r := next.transition(o); r != nil {
-		return s, r
-	}
-	if !Invariants(next) || !historyOK(s, next) {
-		return s, reject("INVARIANT", "invalid transaction boundary")
-	}
-	return next, nil
-}
-func (s State) HasWork() bool {
-	for _, o := range Candidates(DefaultConfig(), s) {
-		if o.countsAsWork() {
-			next, r := step(s, o, false)
-			if r == nil && !equal(next, s) {
-				return true
+			if allSkipped {
+				status = StatusSkipped
 			}
 		}
-	}
-	return false
-}
-
-// Transaction replays commands without exposing a partial result on failure.
-func Transaction(s State, ops []Op) (State, *Reject) {
-	next := s
-	for _, o := range ops {
-		var r *Reject
-		next, r = Step(next, o)
-		if r != nil {
-			return s, r
+		st.completeRun(rpos)
+		s.Status = status
+		return nil
+	case StatusStopping:
+		for _, c := range s.Calls {
+			if !c.Status.ended() {
+				return reject("CALLS_RUNNING")
+			}
 		}
+		st.endUnfinished()
+		s.Status = StatusCancelled
+		if len(s.Failures) > 0 {
+			s.Status = StatusFailed
+		}
+		return nil
 	}
-	return next, nil
+	return reject("TERMINAL")
 }

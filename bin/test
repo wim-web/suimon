@@ -14,7 +14,11 @@ elif command -v lake >/dev/null 2>&1; then
 else
   lake_bin="$HOME/.elan/bin/lake"
 fi
-if rg -n '\b(sorry|admit|axiom)\b' Suimon Test Main.lean Suimon.lean lakefile.lean --glob '*.lean'; then
+if ! command -v rg >/dev/null 2>&1; then
+  echo 'bin/test needs rg (ripgrep) to find unfinished proofs.' >&2
+  exit 1
+fi
+if rg -n '\b(sorry|admit|axiom|native_decide|implemented_by)\b' Suimon Test Main.lean Suimon.lean lakefile.lean --glob '*.lean'; then
   echo 'Unfinished proofs or unchecked axioms found.' >&2
   exit 1
 else
@@ -25,12 +29,8 @@ else
   fi
 fi
 if [[ "$suite" != schema ]]; then
-  "$lake_bin" build suimon suimon_test
+  "$lake_bin" build Suimon suimon suimon_test
   .lake/build/bin/suimon_test
-  for graph in Test/graphs/*.json; do
-    echo "explore: $graph"
-    .lake/build/bin/suimon explore --graph "$graph" --depth 8 --workers 2 --tick 1
-  done
 fi
 if [[ "$suite" != lean ]]; then
   "$lake_bin" build suimon_schema_test

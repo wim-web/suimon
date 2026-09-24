@@ -1,180 +1,372 @@
-import Suimon.Graph
+import Suimon.Validate
+import Suimon.Identity
+
 namespace Suimon
 open Lean
-abbrev ItemId := String
-abbrev InstanceId := String
-abbrev AttemptId := String
-abbrev LeaseToken := String
-abbrev Time := Nat
-abbrev Path := List InstanceId
 
-inductive Token | item (id : ItemId) | eos
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Channel where
+/-- Values stay opaque; the model only moves their identities. --/
+abbrev Value := String
+/-- A run is a workflow executed as the root, as one sub-workflow call or as one workflow task. Its
+    path lists the labels of the records that own it and the runs around it (`Key.child`); `[]` is
+    the root. --/
+abbrev Path := List String
+/-- A result is identified by where it came from, never by its value (§5.4). --/
+abbrev ResultId := String
+
+deriving instance ToJson, FromJson for Policy, Timeout
+
+/-- A list value is identified by the multiset of its elements (§15.4). --/
+def listValue (values : List Value) : Value := identity ("list" :: values.mergeSort (· ≤ ·))
+
+/-! Identities of the records the engine creates. A record lives in a run and has a label there; its
+    identity is the run path followed by the label, like a file path (`Key.within`). A label starts
+    with the kind of the record and refers to other records of the same run by their labels
+    (`Key.relative`), and a run path is a list of labels (`Key.child`), so an identity holds its run
+    path once and grows linearly with the nesting of runs. Identities of different kinds never
+    coincide, since their labels start with different tags, and each is a function of where the
+    record comes from, never of the schedule. -/
+namespace Key
+
+/-- The identity of the record labelled `label` in the run at `path`. --/
+@[irreducible] def within (path : Path) (label : String) : String := identity (path ++ [label])
+
+/-- The run path and the label of an identity that `within` builds; `none` for any other string. --/
+@[irreducible] def split (id : String) : Option (Path × String) :=
+  match decodeIdentity id with
+  | some parts =>
+    match parts.getLast? with
+    | some label => if identity parts = id then some (parts.dropLast, label) else none
+    | none => none
+  | none => none
+
+/-- The run of the record `id`; the root for a string that `within` does not build. --/
+@[irreducible] def scope (id : String) : Path :=
+  match split id with
+  | some (run, _) => run
+  | none => []
+
+/-- How a label in the run at `path` refers to the record `id`: by its label, since the record lives
+    in that run. The engine refers to no other record; any other string is kept whole and followed by
+    an empty part, so that a reference still determines its record (`Key.relative_inj`). --/
+@[irreducible] def relative (path : Path) (id : String) : List String :=
+  match split id with
+  | some (run, label) => if run = path then [label] else [id, ""]
+  | none => [id, ""]
+
+/-- The path of the run that the record `id` owns: the owner's run path followed by the owner's
+    label, which is the owner's identity read as a path. --/
+@[irreducible] def child (id : String) : Path :=
+  match split id with
+  | some (run, label) => run ++ [label]
+  | none => [id]
+
+/-- A record that the record `owner` owns lives in the owner's run, and its label refers to the
+    owner. --/
+def owned (kind owner : String) (parts : List String) : String :=
+  within (scope owner) (identity (kind :: relative (scope owner) owner ++ parts))
+
+def invocation (path : Path) (placement : String) (trigger : Option ResultId) : String :=
+  within path (identity (["invocation", placement] ++ trigger.toList.flatMap (relative path)))
+def task (execution task : String) : String := owned "task" execution [task]
+def callResult (call : String) (index : Nat) : ResultId := owned "result" call [toString index]
+def aggregate (path : Path) (placement : String) : ResultId := within path (identity ["aggregate", placement])
+def taskOutput (execution task : String) (index : Nat) : ResultId :=
+  owned "output" execution [task, toString index]
+def list (execution : String) : ResultId := owned "list" execution []
+def returned (invocation : String) : ResultId := owned "return" invocation []
+end Key
+
+inductive Cause where
+  | error | timeout | lost | transform
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- How a placement ended in one run. A Single output has a value (`normal`) or the reason it has
+    none; a Stream output ends `normal` or `skipped`, and failures stay in the failure records. --/
+inductive Outcome where
+  | normal | skipped | failed | upstreamFailed
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+inductive Status where
+  | running | stopping | succeeded | failed | cancelled | skipped
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+def Status.terminal : Status → Bool
+  | .running | .stopping => false
+  | _ => true
+
+inductive CallStatus where
+  | running | fetching | cancelling | returned | failed | lost | cancelled
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- A cancelled call keeps running until it terminates (§8.2, §11.5). --/
+def CallStatus.ended : CallStatus → Bool
+  | .running | .fetching | .cancelling => false
+  | _ => true
+
+inductive InvocationStatus where
+  | active | succeeded | skipped | failed | upstreamFailed | cancelled
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+inductive TaskStatus where
+  | pending | ready | active | succeeded | skipped | failed | upstreamFailed | notStarted | cancelled
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+def TaskStatus.ended : TaskStatus → Bool
+  | .pending | .ready | .active => false
+  | _ => true
+
+structure Run where
+  path : Path
+  workflow : String
+  input : Option Value := none
+  /-- The invocation, or the execution of the task, that called this workflow; `none` for the root. --/
+  owner : Option String := none
+  task : Option String := none
+  complete : Bool := false
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- One application of a placement: once for a Single input, once per element of a Stream. --/
+structure Invocation where
   id : String
-  edge : Edge
-  path : Path
-  kind : PortKind
-  entry : Bool := false
-  exit : Bool := false
-  placed : List Token := []
-  consumed : Nat := 0
-  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-inductive InstanceStatus
-  | waitingInputs | ready | running | retryWait | succeeded | failed | cancelled
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Lease where
-  attempt : AttemptId
-  token : LeaseToken
-  until_ : Time
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Instance where
-  id : InstanceId
-  node : NodeId
-  path : Path
-  trigger : Option ItemId := none
-  status : InstanceStatus
-  attemptCount : Nat := 0
-  lease : Option Lease := none
-  retryAt : Option Time := none
-  iteration : Nat := 0
-  extraAttempts : Nat := 0
-  extraIterations : Nat := 0
-  inputs : List (PortName × ItemId) := []
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-inductive AttemptStatus | running | succeeded | failed | abandoned | cancelled
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Attempt where
-  id : AttemptId
-  «instance» : InstanceId
-  no : Nat
-  status : AttemptStatus
-  token : LeaseToken
-  worker : String
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-inductive ExecStatus | running | blocked | succeeded | failed | cancelled
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Frame where
-  path : Path
-  graph : Graph
-  definition : List NodeId := []
-  owner : Option InstanceId := none
-  closed : Bool := false
-  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Consumption where
-  channel : String
+  run : Path
+  placement : String
+  trigger : Option ResultId := none
+  input : Option Value := none
+  status : InvocationStatus := .active
+  /-- The arm a branch judge selected. --/
+  arm : Option String := none
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+inductive CallTarget where
+  | function (id : String)
+  | judge (id : String)
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- A call of a user process. Its owner is an invocation, or the execution of a task. --/
+structure Call where
+  id : String
+  owner : String
+  task : Option String := none
+  target : CallTarget
+  input : Option Value := none
+  stream : Bool := false
+  status : CallStatus := .running
+  yields : Nat := 0
+  timeout : Timeout := {}
+  policy : Policy
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+structure TaskState where
+  name : String
+  input : Option Value := none
+  status : TaskStatus
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- One execution of a concurrency placement for one input. --/
+structure Execution where
+  id : String
+  run : Path
+  placement : String
+  input : Option Value := none
+  tasks : List TaskState
+  complete : Bool := false
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- The output transform of a task applied to one of its results: not yet, the transformed value,
+    or a failure. --/
+inductive TaskOutput where
+  | pending
+  | value (v : Value)
+  | failed
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+def TaskOutput.value? : TaskOutput → Option Value
+  | .value v => some v
+  | _ => none
+
+/-- A result of a task body, before the task's output transform. --/
+structure TaskResult where
+  execution : String
+  task : String
   index : Nat
-  item : ItemId
-  byInstance : InstanceId
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Output where
-  port : PortName
-  items : List ItemId
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Receipt where
-  «instance» : InstanceId
-  attempt : AttemptId
-  token : LeaseToken
-  outputs : List Output
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
-structure Decision where
-  key : String
-  value : String
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
+  value : Value
+  output : TaskOutput := .pending
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- An accepted result of a placement in a run. A branch result carries its selected arm. --/
+structure Result where
+  id : ResultId
+  run : Path
+  placement : String
+  /-- What produced the result: the call for a call result, the execution for a concurrency result,
+      the invocation for a sub-workflow call result, and `Key.aggregate run placement` for the list
+      of a waitStream or Merge. --/
+  producer : String
+  arm : Option String := none
+  value : Value
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+inductive Delivered where
+  | value (v : Value)
+  | trigger
+  | failed
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+/-- The transform of one connection applied to one result. --/
+structure Delivery where
+  run : Path
+  connection : Nat
+  source : ResultId
+  outcome : Delivered
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+structure Settled where
+  run : Path
+  placement : String
+  outcome : Outcome
+  /-- A branch settles each arm separately. --/
+  arms : List (String × Outcome) := []
+  deriving DecidableEq, Repr, ToJson, FromJson
+
+structure Failure where
+  run : Path
+  placement : String
+  task : Option String := none
+  cause : Cause
+  deriving DecidableEq, Repr, ToJson, FromJson
+
 structure State where
-  status : ExecStatus := .running
-  channels : List Channel := []
-  instances : List Instance := []
-  attempts : List Attempt := []
-  frames : List Frame := []
-  consumed : List Consumption := []
-  receipts : List Receipt := []
-  decisions : List Decision := []
-  now : Time := 0
+  status : Status := .running
   started : Bool := false
-  reason : Option String := none
-  deriving BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
+  /-- The caller cancelled the workflow. --/
+  cancelled : Bool := false
+  runs : List Run := []
+  invocations : List Invocation := []
+  calls : List Call := []
+  executions : List Execution := []
+  results : List Result := []
+  taskResults : List TaskResult := []
+  deliveries : List Delivery := []
+  settled : List Settled := []
+  failures : List Failure := []
+  deriving DecidableEq, Repr, ToJson, FromJson
 
-def identity (parts : List String) : String := (toJson parts).compress
+instance : Inhabited State := ⟨{}⟩
 
-def instanceId (path : Path) (node : NodeId) (trigger : Option ItemId := none) : InstanceId :=
-  (toJson (path, node, trigger)).compress
+namespace Workflow
 
-def Frame.edgeChannels (f : Frame) : List Channel :=
-  f.graph.edges.zipIdx.map fun (e, i) => {
-      id := identity (f.path ++ ["edge", toString i])
-      edge := e
-      path := f.path
-      kind := ((f.graph.output? e.src).map (·.kind)).getD .plain }
+/-- Input connections with their indices, which identify connections in a run. --/
+def inputs (w : Workflow) (name : String) : List (Nat × Connection) :=
+  w.connections.zipIdx.filterMap fun (c, i) => if c.target == name then some (i, c) else none
 
-def Frame.entryChannels (f : Frame) : List Channel :=
-  f.graph.entries.zipIdx.map fun (p, i) => {
-      id := identity (f.path ++ ["entry", toString i])
-      edge := { src := { node := "$input", port := toString i }, dst := p }
-      path := f.path
-      kind := ((f.graph.input? p).map (·.kind)).getD .plain
-      entry := true }
+/-- Where one placement gets its input from. --/
+inductive Shape where
+  | none
+  | entry
+  | single (index : Nat) (connection : Connection)
+  | stream (index : Nat) (connection : Connection)
+  | merge (connections : List (Nat × Connection))
 
-def Frame.exitChannels (f : Frame) : List Channel :=
-  f.graph.exits.zipIdx.map fun (p, i) => {
-      id := identity (f.path ++ ["exit", toString i])
-      edge := { src := p, dst := { node := "$output", port := toString i } }
-      path := f.path
-      kind := ((f.graph.output? p).map (·.kind)).getD .plain
-      exit := true }
+def shape? (p : Definition) (w : Workflow) (name : String) : Option Shape := do
+  let placement ← w.placement? name
+  if placement.control matches .merge _ then return .merge (w.inputs name)
+  if w.isEntry name then return .entry
+  match w.inputs name with
+  | [] => return .none
+  | [(i, c)] => match w.outputKind? p c.source with
+    | some .single => return .single i c
+    | some .stream => return .stream i c
+    | none => none
+  | _ => none
 
-def Frame.channels (f : Frame) : List Channel :=
-  f.edgeChannels ++ f.entryChannels ++ f.exitChannels
+end Workflow
 
-def State.initial (g : Graph) : State :=
-  let f : Frame := { path := [], graph := g }
-  { frames := [f], channels := f.channels }
+namespace State
 
-def ExecStatus.terminal : ExecStatus → Bool
-  | .succeeded | .failed | .cancelled => true
-  | _ => false
+def run? (s : State) (path : Path) : Option Run := s.runs.find? (·.path == path)
+def workflow? (p : Definition) (s : State) (path : Path) : Option Workflow := do p.workflow? (← s.run? path).workflow
+def invocation? (s : State) (id : String) : Option Invocation := s.invocations.find? (·.id == id)
+def call? (s : State) (id : String) : Option Call := s.calls.find? (·.id == id)
+def execution? (s : State) (id : String) : Option Execution := s.executions.find? (·.id == id)
+def result? (s : State) (id : ResultId) : Option Result := s.results.find? (·.id == id)
+def settled? (s : State) (path : Path) (name : String) : Option Settled :=
+  s.settled.find? fun x => x.run == path && x.placement == name
+def delivery? (s : State) (path : Path) (index : Nat) (source : ResultId) : Option Delivery :=
+  s.deliveries.find? fun d => d.run == path && d.connection == index && d.source == source
 
-def InstanceStatus.finished : InstanceStatus → Bool
-  | .succeeded | .failed | .cancelled => true
-  | _ => false
+def invocationsOf (s : State) (path : Path) (name : String) : List Invocation :=
+  s.invocations.filter fun i => i.run == path && i.placement == name
 
-def Channel.items (c : Channel) : List ItemId := c.placed.filterMap fun t =>
-  match t with | .item id => some id | .eos => none
+def resultsOf (s : State) (path : Path) (name : String) : List Result :=
+  s.results.filter fun r => r.run == path && r.placement == name
 
-def Channel.closed (c : Channel) : Bool := c.placed.contains .eos
+def deliveriesOn (s : State) (path : Path) (index : Nat) : List Delivery :=
+  s.deliveries.filter fun d => d.run == path && d.connection == index
 
-def Channel.pending (c : Channel) : List Token := c.placed.drop c.consumed
+/-- Calls, child runs and executions record their owner, so ending checks follow ownership. --/
+def invocationEnded (s : State) (i : Invocation) : Bool :=
+  i.status != .active &&
+  (s.calls.filter fun c => c.owner == i.id && c.task.isNone).all (·.status.ended) &&
+  (s.runs.filter fun r => r.owner == some i.id && r.task.isNone).all (·.complete) &&
+  (s.executions.filter (·.id == i.id)).all (·.complete)
 
-def Channel.pendingItems (c : Channel) : List ItemId := c.pending.filterMap fun t =>
-  match t with | .item id => some id | .eos => none
+def armOutcome (x : Settled) : Option String → Outcome
+  | none => x.outcome
+  | some arm => ((x.arms.find? (·.1 == arm)).map (·.2)).getD x.outcome
 
-def State.instance? (s : State) (id : InstanceId) : Option Instance := s.instances.find? (·.id == id)
-/-- Internal scheduling addresses a logical node, independently of its wire ID. --/
-def State.nodeInstance? (s : State) (path : Path) (node : NodeId) : Option Instance :=
-  s.instances.find? (fun i => i.path == path && i.node == node && i.trigger.isNone)
-def State.frame? (s : State) (path : Path) : Option Frame := s.frames.find? (·.path == path)
-def State.node? (s : State) (path : Path) (node : NodeId) : Option Node := do
-  let f ← s.frame? path
-  f.graph.node? node
+/-- The results a connection carries: those of its source, on its arm for a branch. --/
+def eligible (s : State) (path : Path) (c : Connection) : List Result :=
+  (s.resultsOf path c.source).filter fun r => c.arm.isNone || r.arm == c.arm
 
-def State.incoming (s : State) (path : Path) (node : NodeId) : List Channel :=
-  s.channels.filter fun c => c.path == path && !c.exit && c.edge.dst.node == node
+inductive Resolution where
+  | pending
+  | value (source : ResultId) (input : Option Value)
+  | transformFailed
+  | skipped
+  | failure
+  deriving DecidableEq, Repr
 
-def State.outgoing (s : State) (path : Path) (node : NodeId) (port : PortName) : List Channel :=
-  s.channels.filter fun c => c.path == path && !c.entry && c.edge.src == { node, port }
+/-- A Single connection resolves to its delivered value, or to why no value will come. --/
+def resolveSingle (s : State) (path : Path) (index : Nat) (c : Connection) : Resolution :=
+  match s.deliveriesOn path index with
+  | d :: _ => match d.outcome with
+    | .value v => .value d.source (some v)
+    | .trigger => .value d.source none
+    | .failed => .transformFailed
+  | [] => match s.settled? path c.source with
+    | none => .pending
+    | some x => match armOutcome x c.arm with
+      | .normal => .pending
+      | .skipped => .skipped
+      | .failed | .upstreamFailed => .failure
 
-structure Credentials where
-  «instance» : InstanceId
-  attempt : AttemptId
-  token : LeaseToken
-  now : Time
-  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, ToJson, FromJson
+/-- A Stream connection ends once its source settled and each of its results was delivered. --/
+def streamEnd? (s : State) (path : Path) (index : Nat) (c : Connection) : Option Outcome := do
+  let x ← s.settled? path c.source
+  guard ((s.eligible path c).all fun r => (s.delivery? path index r.id).isSome)
+  pure (armOutcome x c.arm)
 
-/-- A stale worker cannot regain authority by merely naming the current instance. --/
-def validLease (s : State) (c : Credentials) : Bool :=
-  !s.status.terminal && c.now ≥ s.now && (s.instance? c.instance).any fun i =>
-    i.status == .running && i.lease.any (fun l =>
-      l.attempt == c.attempt && l.token == c.token && c.now < l.until_)
+def taskId (execution task : String) : String := Key.task execution task
 
-def ValidLease (s : State) (c : Credentials) : Prop := validLease s c = true
+/-- A task holds a slot while its body runs, including a cancelled call that has not terminated. --/
+def holdsSlot (s : State) (e : Execution) (t : TaskState) : Bool :=
+  t.status == .active ||
+    s.calls.any fun c => c.owner == e.id && c.task == some t.name && c.status == .cancelling
+
+def taskEnded (s : State) (e : Execution) (t : TaskState) : Bool :=
+  t.status.ended && !s.holdsSlot e t &&
+  (s.runs.filter fun r => r.owner == some e.id && r.task == some t.name).all (·.complete)
+
+/-- Every value the state mentions, with repeats. A recovered state needs the payload of each (§12.1). --/
+def values (s : State) : List Value :=
+  s.runs.filterMap (·.input) ++ s.invocations.filterMap (·.input) ++ s.calls.filterMap (·.input) ++
+    s.executions.flatMap (fun e => e.input.toList ++ e.tasks.filterMap (·.input)) ++
+    s.results.map (·.value) ++
+    s.deliveries.filterMap (fun d => match d.outcome with
+      | .value v => some v
+      | _ => none) ++
+    s.taskResults.flatMap fun r => r.value :: r.output.value?.toList
+
+end State
+
 end Suimon

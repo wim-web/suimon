@@ -1,0 +1,34 @@
+{
+  "main": "merge",
+  "functions": [
+    {"id": "loadUser", "input": "UserRef", "output": {"single": "User"}},
+    {"id": "fetchProfile", "input": "User", "output": {"single": "Part"}},
+    {"id": "fetchOrders", "input": "User", "output": {"single": "Part"}},
+    {"id": "fetchPoints", "input": "User", "output": {"single": "Part"}}
+  ],
+  "transforms": [
+    {"id": "user", "input": "User", "output": "User"},
+    {"id": "part", "input": "Part", "output": "Part"}
+  ],
+  "workflows": [
+    {
+      "id": "merge",
+      "input": {"type": "UserRef", "placement": "load"},
+      "placements": [
+        {"name": "load", "node": {"type": "function", "function": "loadUser"}, "policy": "stop"},
+        {"name": "profile", "node": {"type": "function", "function": "fetchProfile"}, "policy": "stop"},
+        {"name": "orders", "node": {"type": "function", "function": "fetchOrders"}, "policy": "stop"},
+        {"name": "points", "node": {"type": "function", "function": "fetchPoints"}, "policy": "stop"},
+        {"name": "summary", "node": {"type": "merge", "element": "Part"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "load", "target": "profile", "transform": "user"},
+        {"source": "load", "target": "orders", "transform": "user"},
+        {"source": "load", "target": "points", "transform": "user"},
+        {"source": "profile", "target": "summary", "transform": "part"},
+        {"source": "orders", "target": "summary", "transform": "part"},
+        {"source": "points", "target": "summary", "transform": "part"}
+      ]
+    }
+  ]
+}

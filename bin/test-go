@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Tests the Go implementation in implementations/go.
+#   unit         Go tests (the runtime scenarios and crash recovery included), the race detector
+#                on the package, and go vet.
+#   conformance  Compares the Go CLI with the Lean CLI at SUIMON_LEAN_CLI (default
+#                .lake/build/bin/suimon), and has it check the journals the runtime writes; it
+#                builds nothing, so build the Lean CLI first (lake build suimon).
+#   all          Both (the default).
+# GO overrides the go command.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -7,49 +15,43 @@ if [[ $# -gt 1 || ! "$suite" =~ ^(all|unit|conformance)$ ]]; then
   echo 'Usage: bin/test-go [all|unit|conformance]' >&2
   exit 2
 fi
-if [[ "$suite" == all ]]; then
-  bin/test
-  bin/test-go unit
-  bin/test-go conformance
-  exit
-fi
-# Keep oracle-dependent test names distinguishable from the standalone Go suite.
-comparison_tests='^(TestLean|TestCLICompatibility)|AgainstLean$'
-if [[ "$suite" == unit ]]; then
-  unset SUIMON_LEAN_ORACLE SUIMON_LEAN_CLI SUIMON_GO_CLI SUIMON_GO_CORPUS
-  cd implementations/go
-  go test -count=1 -v -skip "$comparison_tests" ./...
-  go test -race -count=1 -run '^TestWorkflow' ./src
-  go vet ./...
-  exit
-fi
-if [[ -n "${LAKE:-}" ]]; then
-  lake_bin="$LAKE"
-elif command -v lake >/dev/null 2>&1; then
-  lake_bin="$(command -v lake)"
-else
-  lake_bin="$HOME/.elan/bin/lake"
-fi
-if rg -n '\b(sorry|admit|axiom)\b' Suimon Test Main.lean Suimon.lean lakefile.lean --glob '*.lean'; then
-  echo 'Unfinished proofs or unchecked axioms found.' >&2
+go_bin="${GO:-go}"
+if ! "$go_bin" version >/dev/null 2>&1; then
+  echo "bin/test-go: '$go_bin version' failed; set GO to a Go toolchain (go.mod: $(awk '$1 == "go" {print $2}' implementations/go/go.mod) or later)" >&2
   exit 1
-else
-  scan_status=$?
-  if [[ "$scan_status" -ne 1 ]]; then
-    printf 'Proof scan failed (rg exit status %s).\n' "$scan_status" >&2
-    exit "$scan_status"
-  fi
 fi
-go_test_tmp="$(mktemp -d "${TMPDIR:-/tmp}/suimon-go.XXXXXX")"
-trap 'rm -rf "$go_test_tmp"' EXIT
-export SUIMON_GO_CORPUS="$go_test_tmp/corpus.jsonl"
-: > "$SUIMON_GO_CORPUS"
-"$lake_bin" build suimon suimon_go_oracle suimon_go_corpus
-.lake/build/bin/suimon_go_corpus
-export SUIMON_LEAN_ORACLE="$repo_root/.lake/build/bin/suimon_go_oracle"
-export SUIMON_LEAN_CLI="$repo_root/.lake/build/bin/suimon"
-export SUIMON_GO_CLI="$go_test_tmp/suimon"
-cd implementations/go
-go build -o "$SUIMON_GO_CLI" ./cmd/suimon
-# Workflow tests also compare their recorded traces with the Lean oracle.
-go test -count=1 -v -run "$comparison_tests|^TestWorkflow" ./src ./cmd/suimon
+packages=(./src/... ./cmd/... ./example/...)
+
+unit() {
+  (
+    unset SUIMON_LEAN_CLI
+    cd implementations/go
+    "$go_bin" test -count=1 "${packages[@]}"
+    "$go_bin" test -race -count=1 ./src
+    "$go_bin" vet "${packages[@]}"
+  )
+}
+
+conformance() {
+  local lean_cli="${SUIMON_LEAN_CLI:-.lake/build/bin/suimon}"
+  if [[ "$lean_cli" != /* ]]; then
+    lean_cli="$repo_root/$lean_cli"
+  fi
+  if [[ ! -x "$lean_cli" ]]; then
+    echo "bin/test-go: no Lean CLI at $lean_cli (build it with lake build suimon, or set SUIMON_LEAN_CLI)" >&2
+    exit 1
+  fi
+  (
+    cd implementations/go
+    SUIMON_LEAN_CLI="$lean_cli" "$go_bin" test -count=1 -v -run '^TestConformance' "${packages[@]}"
+  )
+}
+
+case "$suite" in
+  unit) unit ;;
+  conformance) conformance ;;
+  all)
+    unit
+    conformance
+    ;;
+esac
