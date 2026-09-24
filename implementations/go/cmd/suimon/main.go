@@ -137,8 +137,9 @@ func natOption(opts []option, key string, def uint64, reduce func(uint64) uint64
 // clampCount bounds a count at 2^40, which no walk or loop reaches.
 func clampCount(n uint64) uint64 { return min(n, 1<<40) }
 
-// seedModulus keeps a seed modulo 2^32, which is all that suimon.NextSeed uses of it.
-func seedModulus(n uint64) uint64 { return n % (1 << 32) }
+// seedModulus keeps a seed modulo 2^64, which is all that a walk uses of it: uint64 arithmetic
+// already wraps there.
+func seedModulus(n uint64) uint64 { return n }
 
 // readFile reads a file and reports errors as Lean's IO.FS.readFile does.
 func readFile(path string) ([]byte, error) {

@@ -76,7 +76,7 @@ def nothingRunning (s : State) : Bool :=
 def randomWalks (label : String) (p : Definition) (cfg : Explore.Config) (seeds : Nat) : IO Unit := do
   for seed in List.range seeds do
     let mut s : State := {}
-    let mut rng := seed + 1
+    let mut rng : UInt64 := .ofNat (seed + 1)
     let mut steps := 0
     while steps < 5000 do
       let choices := Explore.accepted p cfg s
@@ -230,6 +230,14 @@ def run : IO Unit := do
     "keys: the run of a task"
   ensure (Key.invocation ["x"] "b" (some r) == "1:x54:10:invocation1:b33:30:6:result16:10:invocation1:a1:00:")
     "keys: a result of another run"
+  -- The first draws of SplitMix64 from seed 0, as its reference implementation gives them. A walk
+  -- uses every bit of the seed, modulo 2^64. The Go port pins the same values (identity_test.go).
+  let draws := ((List.range 3).foldl (init := ((0 : UInt64), ([] : List UInt64))) fun (seed, draws) _ =>
+    (Explore.nextSeed seed, draws ++ [Explore.mix (Explore.nextSeed seed)])).2
+  ensure (draws == [0xe220a8397b1dcdaf, 0x6e789e6aa1b965f4, 0x06c45d188009454f] &&
+    Explore.mix (Explore.nextSeed (.ofNat (2 ^ 40))) != Explore.mix (Explore.nextSeed 0)) s!"SplitMix64: {draws}"
+  ensure ((Explore.walk merge {} (2 ^ 64 + 3) 10000).2 == (Explore.walk merge {} 3 10000).2 &&
+    (Explore.walk merge {} (2 ^ 32 + 3) 10000).2 != (Explore.walk merge {} 3 10000).2) "the seed of a walk"
   -- The JSON of a task result tells a pending output from a failed one.
   let pending : TaskResult := { execution := "e", task := "t", index := 0, value := "v" }
   let outputs := [pending, { pending with output := .failed }, { pending with output := .value "w" }]

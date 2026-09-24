@@ -125,17 +125,25 @@ func TestExploreValues(t *testing.T) {
 	if got := ExploreValue("input"); got != "5:value5:input" {
 		t.Errorf("ExploreValue = %q", got)
 	}
-	seeds := []uint64{NextSeed(1), NextSeed(NextSeed(1)), NextSeed(1 << 40)}
-	if seeds[0] != 1015568748 || seeds[1] != 1586005467 || seeds[2] != NextSeed(0) {
-		t.Errorf("NextSeed: %v", seeds)
+	// The first draws of SplitMix64 from seed 0, as its reference implementation gives them; Lean
+	// pins the same values (Test/Step.lean). A walk uses every bit of the seed.
+	var draws []uint64
+	for seed, i := uint64(0), 0; i < 3; i++ {
+		seed = NextSeed(seed)
+		draws = append(draws, mix(seed))
+	}
+	if !slices.Equal(draws, []uint64{0xe220a8397b1dcdaf, 0x6e789e6aa1b965f4, 0x06c45d188009454f}) ||
+		mix(NextSeed(1<<40)) == mix(NextSeed(0)) {
+		t.Errorf("SplitMix64: %x", draws)
 	}
 	merge := load(t, "merge")
 	s := mustStep(t, merge, &State{}, OpStart{})
 	choices := Accepted(merge, DefaultConfig(), s)
 	cfg := DefaultConfig()
 	cfg.Disruption = 0
-	// With disruption 0, Lean's n % 0 = n and n / 0 = 0: seed 0 picks the first disruptive choice.
-	if c, ok := Pick(cfg, s, 0, choices); !ok || !disruptive(cfg, s, c.Op) {
+	// With disruption 0, Lean's n % 0 = n and n / 0 = 0: seed 0 draws 0, which picks the first
+	// disruptive choice, and seed 7 draws another number, which picks the first other one.
+	if c, ok := Pick(cfg, s, 0, choices); !ok || mix(0) != 0 || !disruptive(cfg, s, c.Op) {
 		t.Errorf("disruption 0, seed 0: %v", c.Op)
 	}
 	firstGood := -1

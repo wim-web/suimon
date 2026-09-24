@@ -97,8 +97,18 @@ def accepted (p : Definition) (cfg : Config) (s : State) : List (Op × State) :=
     | .ok next => if next == s then none else some (op, next)
     | .error _ => none
 
-/-- A portable generator, so that a failing seed reproduces anywhere. --/
-def nextSeed (seed : Nat) : Nat := (1664525 * seed + 1013904223) % 4294967296
+/-- A portable generator, so that a failing seed reproduces anywhere: SplitMix64 (Steele, Lea and
+    Flood, 2014), whose seed advances by a fixed odd constant and which draws `mix seed`. --/
+def nextSeed (seed : UInt64) : UInt64 := seed + 0x9e3779b97f4a7c15
+
+/-- Every bit of the number drawn depends on every bit of the seed, so that remainders by small
+    numbers vary independently from one draw to the next. With a linear congruential generator,
+    whose low bits cycle, a remainder by 40 repeats every 8 draws, and a walk never picks two
+    disruptive operations within 8 steps. --/
+def mix (seed : UInt64) : UInt64 :=
+  let z := (seed ^^^ (seed >>> 30)) * 0xbf58476d1ce4e5b9
+  let z := (z ^^^ (z >>> 27)) * 0x94d049bb133111eb
+  z ^^^ (z >>> 31)
 
 /-- Failures, cancellation and short streams end work early, so a walk picks them rarely. --/
 def disruptive (cfg : Config) (s : State) : Op → Bool
@@ -107,16 +117,20 @@ def disruptive (cfg : Config) (s : State) : Op → Bool
   | .ended id => (s.call? id).any (·.yields < cfg.maxYields)
   | _ => false
 
-def pick (cfg : Config) (s : State) (seed : Nat) (choices : List (Op × State)) : Option (Op × State) :=
+/-- Chooses with the number drawn at `seed`: its remainder by `cfg.disruption` decides whether to
+    take a disruptive operation, and its quotient which one of the pool. --/
+def pick (cfg : Config) (s : State) (seed : UInt64) (choices : List (Op × State)) : Option (Op × State) :=
+  let n := (mix seed).toNat
   let (bad, good) := choices.partition (disruptive cfg s ·.1)
-  let pool := if good.isEmpty || (!bad.isEmpty && seed % cfg.disruption == 0) then bad else good
-  pool[(seed / cfg.disruption) % pool.length]?
+  let pool := if good.isEmpty || (!bad.isEmpty && n % cfg.disruption == 0) then bad else good
+  pool[(n / cfg.disruption) % pool.length]?
 
-/-- A random walk until no operation is accepted, or the limit is reached. --/
+/-- A random walk until no operation is accepted, or the limit is reached. The walk uses the seed
+    modulo 2^64. --/
 def walk (p : Definition) (cfg : Config) (seed limit : Nat) : State × List Op := Id.run do
   let mut state : State := {}
   let mut trace : Array Op := #[]
-  let mut seed := seed
+  let mut seed : UInt64 := .ofNat seed
   for _ in List.range limit do
     let choices := accepted p cfg state
     if choices.isEmpty then break

@@ -474,7 +474,8 @@ func TestConformanceExplore(t *testing.T) {
 	}
 }
 
-var conformanceSeeds = []string{"1", "2", "3", "4", "5", "7", "11", "42"}
+// conformanceSeeds include seeds beyond 2^32 and 2^64: a walk uses the seed modulo 2^64.
+var conformanceSeeds = []string{"1", "2", "3", "4", "5", "7", "11", "42", "4294967299", "18446744073709551619"}
 
 // header is the header line of the records of the definition at path, as Lean gen writes it.
 func header(t *testing.T, cli, path string) string {

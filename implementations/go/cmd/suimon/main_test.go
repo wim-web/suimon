@@ -163,7 +163,7 @@ func TestCLIOutputs(t *testing.T) {
 		{[]string{"validate", "a", "b"}, 2, "", usage},
 		{[]string{"explore", merge, "--seeds", "0"}, 0, "{}\n", ""},
 		{[]string{"explore", merge, "--seeds", "1_0", "--steps", "5"}, 1, "", "seed 1: no accepted operation in status running\n"},
-		{[]string{"explore", merge, "--seeds", "3", "--seeds", "5"}, 0, `{"cancelled":2,"succeeded":1}` + "\n", ""},
+		{[]string{"explore", merge, "--seeds", "3", "--seeds", "5"}, 0, `{"failed":1,"succeeded":2}` + "\n", ""},
 		{[]string{"explore", merge, "--seeds", "x"}, 1, "", "--seeds expects a natural number\n"},
 		{[]string{"explore", merge, "--seeds", "1__0"}, 1, "", "--seeds expects a natural number\n"},
 		{[]string{"explore", merge, "--bogus", "1"}, 2, "", "unknown option --bogus\n"},
@@ -180,6 +180,11 @@ func TestCLIOutputs(t *testing.T) {
 		if r.code != c.code || r.stdout != c.stdout || r.stderr != c.stderr {
 			t.Errorf("%v: got %d %q %q, want %d %q %q", c.args, r.code, r.stdout, r.stderr, c.code, c.stdout, c.stderr)
 		}
+	}
+	// A walk uses the seed modulo 2^64, like Lean's.
+	gen := func(seed string) string { return runGo("gen", merge, "--seed", seed).stdout }
+	if gen("18446744073709551619") != gen("3") || gen("4294967299") == gen("3") {
+		t.Error("gen: the seed is not taken modulo 2^64")
 	}
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	r := runGo("validate", missing)

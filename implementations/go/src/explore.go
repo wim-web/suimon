@@ -257,9 +257,18 @@ func acceptedWith(p *Definition, d *derivation, cfg Config, s *State) []Choice {
 	return choices
 }
 
-// NextSeed is a portable generator, so that a failing seed reproduces anywhere.
+// NextSeed is a portable generator, so that a failing seed reproduces anywhere: SplitMix64 (Steele,
+// Lea and Flood, 2014), whose seed advances by a fixed odd constant and which draws mix(seed).
 func NextSeed(seed uint64) uint64 {
-	return (1664525*(seed%4294967296) + 1013904223) % 4294967296
+	return seed + 0x9e3779b97f4a7c15
+}
+
+// mix makes every bit of the number drawn depend on every bit of the seed, so that remainders by
+// small numbers vary independently from one draw to the next (Lean's Explore.mix).
+func mix(seed uint64) uint64 {
+	z := (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
 }
 
 // disruptive: failures, cancellation and short streams end work early, so a walk picks them rarely.
@@ -289,8 +298,11 @@ func natMod(a, b uint64) uint64 {
 	return a % b
 }
 
-// Pick chooses among the accepted operations with the seed: usually a non-disruptive one.
+// Pick chooses among the accepted operations with the number drawn at seed, usually a
+// non-disruptive one: the remainder of the number by cfg.Disruption decides whether to take a
+// disruptive operation, and the quotient which one of the pool.
 func Pick(cfg Config, s *State, seed uint64, choices []Choice) (Choice, bool) {
+	n := mix(seed)
 	var bad, good []Choice
 	for _, c := range choices {
 		if disruptive(cfg, s, c.Op) {
@@ -300,17 +312,18 @@ func Pick(cfg Config, s *State, seed uint64, choices []Choice) (Choice, bool) {
 		}
 	}
 	pool := good
-	if len(good) == 0 || (len(bad) > 0 && natMod(seed, cfg.Disruption) == 0) {
+	if len(good) == 0 || (len(bad) > 0 && natMod(n, cfg.Disruption) == 0) {
 		pool = bad
 	}
 	if len(pool) == 0 {
 		return Choice{}, false
 	}
-	return pool[natMod(natDiv(seed, cfg.Disruption), uint64(len(pool)))], true
+	return pool[natMod(natDiv(n, cfg.Disruption), uint64(len(pool)))], true
 }
 
 // Walk is a random walk from the state before the start until no operation is accepted, or limit
-// operations were taken. It returns the final state and the operations.
+// operations were taken. It returns the final state and the operations. Lean's walk takes the seed
+// modulo 2^64, as a uint64 is.
 func Walk(p *Definition, cfg Config, seed uint64, limit int) (*State, []Op) {
 	d := p.derive()
 	state := &State{}
