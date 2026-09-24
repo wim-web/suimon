@@ -17,7 +17,8 @@ declarations are `typedConnections_of_validate`, `concurrency_output_typed` and 
 - concurrencyの出力の型: every value a task puts in the output of a concurrency has the common element
   type `T` (`concurrency_output_type`).
 - 外部入力の境界: the caller's input, of the main workflow's input type, is the input of the root run
-  and goes to the entry placement once, without a trigger (`external_input_boundary`). -/
+  and goes to the entry placement once, without a trigger (`external_input_boundary`); an execution
+  that finished without a stop invoked the entry with it (`external_input_reaches_entry`). -/
 
 namespace Suimon.Values
 open Round3 State
@@ -69,6 +70,24 @@ theorem shape?_of_isEntry {w : Workflow} {name : String} (hent : w.isEntry name 
     simp only [Bool.false_eq_true, ↓reduceIte, hent, pure, Option.some.injEq] at h
     exact Or.inl h.symm
 
+/-- A placement whose input shape is a Merge's is a Merge. -/
+theorem shape?_merge_placement {w : Workflow} {name : String} {cs : List (Nat × Connection)}
+    (h : w.shape? p name = some (.merge cs)) : ∃ pl, w.placement? name = some pl ∧ ∃ el, pl.control = .merge el := by
+  unfold Workflow.shape? at h
+  simp only [option_bind_eq_some] at h
+  obtain ⟨pl, hpl, h⟩ := h
+  refine ⟨pl, hpl, ?_⟩
+  cases hctl : pl.control <;> simp only [hctl] at h
+  case merge e => exact ⟨e, rfl⟩
+  all_goals
+    simp only [Bool.false_eq_true, ↓reduceIte] at h
+    split at h
+    · simp [pure] at h
+    · split at h
+      · simp [pure] at h
+      · split at h <;> simp [pure] at h
+      · simp at h
+
 /-- The entry of a run takes the run's input, without a trigger (§3.1, §4.5). -/
 theorem entry_input {s : State} (h : Reachable p s) : ∀ i ∈ s.invocations, ∀ r ∈ s.runs, r.path = i.run →
     ∀ w e, p.workflow? r.workflow = some w → w.input = some e → e.placement = i.placement →
@@ -111,8 +130,8 @@ theorem entry_input {s : State} (h : Reachable p s) : ∀ i ∈ s.invocations, �
 /-- **外部入力の境界** (§3.1, §15.2), for values. The caller's input is the input of the root run, which
     runs the main workflow, and has the input type that the main workflow declares. The entry placement
     takes that type and has no input connection; each invocation of it in the root run takes the
-    caller's input as it is, without a trigger, and there is at most one. The caller builds no internal
-    connection, Single/Stream kind or end of a Stream. -/
+    caller's input as it is, without a trigger, and there is at most one. The caller passes only this
+    value (`Op.start`), never an internal connection, a Single/Stream kind or the end of a Stream. -/
 theorem external_input_boundary (valid : p.validate = .ok ()) (typed : TypedEnv p env τ) {tr : List Op}
     {s : State} (h : Conforming p env tr s) :
     ∀ r ∈ s.runs, r.path = [] → r.workflow = p.main ∧ r.input = env.input ∧
@@ -151,6 +170,49 @@ theorem external_input_boundary (valid : p.validate = .ok ()) (typed : TypedEnv 
     obtain ⟨hid', -⟩ := inv.own.invocations i' hi'
     refine inv.wk.invocation_eq_of_id hi hi' ?_
     rw [hid, hid', hirun, hi'run, hipl, hi'pl, (hentry i hi hirun hipl).1, (hentry i' hi' hi'run hi'pl).1]
+
+/-- **外部入力の境界** (§3.1, §15.2): the caller's input reaches the entry. In an execution that
+    finished without a stop, the entry placement of the main workflow was invoked in the root run,
+    with the caller's input and without a trigger. -/
+theorem external_input_reaches_entry (valid : p.validate = .ok ()) {tr : List Op} {s : State}
+    (h : Conforming p env tr s) (done : Done s) {w : Workflow} {e : Entry} (hw : p.workflow? p.main = some w)
+    (he : w.input = some e) :
+    ∃ i ∈ s.invocations, i.run = [] ∧ i.placement = e.placement ∧ i.trigger = none ∧ i.input = env.input := by
+  have hr := h.reachable
+  have inv := Delivery.Reachable.inv hr
+  obtain ⟨r, hrs, hrc⟩ : ∃ r, s.run? [] = some r ∧ r.complete = true := by
+    unfold Done at done
+    cases hrs : s.run? [] with
+    | none => rw [hrs] at done; cases done
+    | some r => rw [hrs] at done; exact ⟨r, rfl, by simpa using done⟩
+  obtain ⟨hrm, hrpath⟩ := State.run?_eq_some hrs
+  obtain ⟨hwf, hin, -⟩ := root_run h r hrm hrpath
+  have hwr : p.workflow? r.workflow = some w := by rw [hwf]; exact hw
+  have hws : s.workflow? p [] = some w := Delivery.workflow?_iff.mpr ⟨r, hrs, hwr⟩
+  obtain ⟨-, ⟨pl, hpl, hnm, -⟩, -⟩ :=
+    ((Definition.normal_of_validate valid).workflows w (Definition.workflow?_eq_some hw).1).entry e he
+  obtain ⟨hplm, hpln⟩ := Workflow.placement?_eq_some hpl
+  -- A complete run settled every placement, and the entry settles only after its invocation.
+  obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp ((inv.sett.runs r hrm hrc).2 w hwr pl hplm)
+  obtain ⟨hxm, hxrun, hxpl⟩ := State.settled?_eq_some hx
+  obtain ⟨w', pl', sh, hw', hpl', hsh, hdone⟩ := inv.sett.input x hxm
+  rw [hxrun, hrpath, hws] at hw'
+  cases hw'
+  rw [hxpl, hpln, hpl] at hpl'
+  cases hpl'
+  rw [hxpl, hpln] at hsh
+  have hent : w.isEntry e.placement = true := by simp [Workflow.isEntry, he]
+  rcases shape?_of_isEntry hent hsh with rfl | ⟨cs, rfl⟩
+  · obtain ⟨i, hi, hitr⟩ := hdone
+    obtain ⟨him, hirun, hipl⟩ := Delivery.mem_invocationsOf.mp hi
+    rw [hxrun, hrpath] at hirun
+    have hipl' : i.placement = e.placement := hipl.trans hpln
+    obtain ⟨-, hiin⟩ := entry_input hr i him r hrm (hrpath.trans hirun.symm) w e hwr he hipl'.symm
+    exact ⟨i, him, hirun, hipl', hitr, hiin.trans hin⟩
+  · obtain ⟨pl₂, hpl₂, el, hel⟩ := shape?_merge_placement hsh
+    rw [hpl] at hpl₂
+    cases hpl₂
+    exact absurd hel (hnm el)
 
 /-! ## 型付き接続 -/
 

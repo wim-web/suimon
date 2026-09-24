@@ -54,9 +54,6 @@ theorem fits_some {v : Value} {input : Option ValueType} :
     τ.Fits (some v) input ↔ ∃ T, input = some T ∧ τ.HasType v T := by
   cases input <;> simp [Fits]
 
-theorem fits_none {input : Option ValueType} : τ.Fits none input ↔ input = none := by
-  cases input <;> simp [Fits]
-
 end ValueTyping
 
 /-- The typing contracts of the outside world (§3.1, §4.1, §4.2, §8.1, §15.3). The behavior answers by
