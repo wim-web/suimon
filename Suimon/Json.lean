@@ -1,9 +1,10 @@
-import Suimon.Workflow
+import Suimon.Validate
 import Suimon.Wire
 
 /-! A definition is read from Lean's `Json`, which the definition file and the header of an execution
-    record give. It is written as a `Wire` value, whose fields keep the order of the definition file
-    (`Codec.definitionWire`); its `Json` is that value's. -/
+    record give, and validated (`Codec.loadJson`, `Codec.load`). It is written as a `Wire` value,
+    whose fields keep the order of the definition file (`Codec.definitionWire`); its `Json` is that
+    value's. -/
 
 namespace Suimon
 open Lean
@@ -459,6 +460,18 @@ def definitionWire (p : Definition) : Wire :=
     ("workflows", .arr (p.workflows.map workflowWire))]
 
 def definitionJson (p : Definition) : Json := (definitionWire p).toJson
+
+/-- Reads a definition from the `Json` of a definition file (`Codec.parse`): decoded, then validated
+    (§14). --/
+def loadJson (json : Json) : Except String Definition := do
+  let p ← definition json
+  p.validate
+  return p
+
+/-- Reads the definition that the header of an execution record holds, as a definition file is read.
+    `suimon check` replays a record against it. --/
+def load (w : Wire) : Except String Definition :=
+  loadJson w.toJson
 
 end Codec
 

@@ -601,8 +601,7 @@ theorem definition_definitionWire_of_validate {p : Definition} (h : p.validate =
 
 /-- Loading the header of a record written for a definition that validation accepts, as the CLI loads a
     definition (decode, then validate), gives the definition back. --/
-theorem load_definitionWire {p : Definition} (h : p.validate = .ok ()) :
-    (do let q ← definition (definitionWire p).toJson; q.validate; return q) = Except.ok p := by
-  simp [definition_definitionWire_of_validate h, h, bind, Except.bind, pure, Except.pure]
+theorem load_definitionWire {p : Definition} (h : p.validate = .ok ()) : load (definitionWire p) = .ok p := by
+  simp [load, loadJson, definition_definitionWire_of_validate h, h, bind, Except.bind, pure, Except.pure]
 
 end Suimon.Codec

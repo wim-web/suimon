@@ -33,7 +33,7 @@ def run : IO Unit := do
       let result ← cli ["check", path.toString] 0
       Validate.ensure (Validate.contains result.stdout "\"uncommitted\":false") s!"check {name}: {result.stdout}"
       -- `--state` prints the checked state as the derived JSON, which reads back to the same state.
-      let expected ← IO.ofExcept (Trace.check Trace.wireCodec Test.Trace.loadHeader generated.stdout)
+      let expected ← IO.ofExcept (Trace.check Trace.wireCodec Codec.load generated.stdout)
       let printed ← cli ["check", path.toString, "--state"] 0
       Validate.ensure (printed.stdout == (toJson expected.state).compress ++ "\n") s!"check --state {name}"
       match Json.parse printed.stdout >>= fromJson? with

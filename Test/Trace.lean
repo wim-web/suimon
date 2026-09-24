@@ -9,12 +9,6 @@ open Lean Suimon Suimon.Test.Validate
 def withPayloads (before after : State) : List (Value × String) :=
   (Suimon.Trace.introduced before after).map fun v => (v, v)
 
-/-- Reads the definition of a header as `suimon check` does: decoded, then validated. --/
-def loadHeader (w : Wire) : Except String Definition := do
-  let p ← Codec.definition w.toJson
-  p.validate
-  return p
-
 /-- The header line of a record of `p`, with its newline. --/
 def header (p : Definition) : String :=
   Suimon.Trace.wireCodec.encodeHeader (Codec.definitionWire p) ++ "\n"
@@ -45,29 +39,29 @@ def recorded (p : Definition) (seed : Nat) : IO Recorded := do
   return { steps := steps.toList, records, text, states }
 
 def checkedText (label : String) (text : String) : IO Suimon.Trace.Checked :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
+  match Suimon.Trace.check Suimon.Trace.wireCodec Codec.load text with
   | .ok c => pure c
   | .error e => throw (IO.userError s!"{label}: {e}")
 
 def rejectedText (label fragment : String) (text : String) : IO Unit :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
+  match Suimon.Trace.check Suimon.Trace.wireCodec Codec.load text with
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{fragment}'")
   | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got {e}"
 
 def rejectedExactly (label expected : String) (text : String) : IO Unit :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
+  match Suimon.Trace.check Suimon.Trace.wireCodec Codec.load text with
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{expected}'")
   | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
 
 /-- Resumes `text` under `q`, which must give `expected`, the state `recover` gives. --/
 def resumedAs (label : String) (q : Definition) (text : String) (expected : State) : IO Unit :=
-  match Suimon.Trace.resume Suimon.Trace.wireCodec loadHeader q text with
-  | .ok s => ensure (s == expected && (Suimon.Trace.recover Suimon.Trace.wireCodec loadHeader text).toOption == some s)
+  match Suimon.Trace.resume Suimon.Trace.wireCodec Codec.load q text with
+  | .ok s => ensure (s == expected && (Suimon.Trace.recover Suimon.Trace.wireCodec Codec.load text).toOption == some s)
       s!"{label}: resumed from another state"
   | .error e => throw (IO.userError s!"{label}: not resumed: {e}")
 
 def resumeRejected (label expected : String) (q : Definition) (text : String) : IO Unit :=
-  match Suimon.Trace.resume Suimon.Trace.wireCodec loadHeader q text with
+  match Suimon.Trace.resume Suimon.Trace.wireCodec Codec.load q text with
   | .ok _ => throw (IO.userError s!"{label}: resumed, expected '{expected}'")
   | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
 
@@ -135,7 +129,7 @@ def run : IO Unit := do
     let p ← load name
     let headerLine := Suimon.Trace.wireCodec.encodeHeader (Codec.definitionWire p)
     -- The header reads back to the definition, on one line.
-    let loaded := match Suimon.Trace.wireCodec.decodeHeader headerLine >>= loadHeader with
+    let loaded := match Suimon.Trace.wireCodec.decodeHeader headerLine >>= Codec.load with
       | .ok q => q == p
       | .error _ => false
     ensure (!headerLine.contains '\n' && loaded) s!"{name}: header codec"
@@ -190,7 +184,7 @@ def run : IO Unit := do
           ensure (c.definition == if cut == 0 then none else some p) s!"{label} cut {cut}: definition"
           ensure (c.uncommitted == ((cut > 0 && (cut - 1) % 2 == 1) || torn.length > prefixText.length))
             s!"{label} cut {cut}: uncommitted flag"
-          ensure ((Suimon.Trace.recover Suimon.Trace.wireCodec loadHeader torn).toOption == some r.states[committed]!)
+          ensure ((Suimon.Trace.recover Suimon.Trace.wireCodec Codec.load torn).toOption == some r.states[committed]!)
             s!"{label} cut {cut}: recover"
           -- The definition of the record resumes it from the recovered state once the header is
           -- complete; another definition never does.
@@ -273,7 +267,7 @@ def run : IO Unit := do
   rejectedText "header without definition" "line 1: header: missing field definition" "{}\n"
   rejectedText "unknown header field" "line 1: header: unknown field seq" "{\"definition\":{},\"seq\":0}\n"
   rejectedText "undecodable definition" "line 1: definition: missing field main" "{\"definition\":{}}\n"
-  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n" with
+  match Suimon.Trace.check Suimon.Trace.wireCodec Codec.load "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n" with
   | .ok _ => throw (IO.userError "invalid definition: accepted")
   | .error e => ensure (e == "line 1: unknown main workflow w") s!"invalid definition: {e}"
   rejectedTrace "header twice" "line 2: record: missing field seq" p (header p)

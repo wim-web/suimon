@@ -29,15 +29,10 @@ private def natOption (opts : List (String × String)) (key : String) (default :
     | some n => pure n
     | none => throw s!"{key} expects a natural number"
 
-/-- Decodes and validates a definition, from a file or from the header of a record. --/
-private def loadDefinition (json : Json) : Except String Definition := do
-  let p ← Codec.definition json
-  p.validate
-  return p
-
-/-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated. --/
+/-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated
+    (`Codec.loadJson`). --/
 private def readDefinition (path : String) : IO Definition := do
-  match Codec.parse (← IO.FS.readFile path) >>= loadDefinition with
+  match Codec.parse (← IO.FS.readFile path) >>= Codec.loadJson with
   | .ok p => pure p
   | .error e => throw (IO.userError e)
 
@@ -63,10 +58,11 @@ private def readRecord (path : String) : IO (String × Bool) := do
   | some text => return (text, cut < bytes.size)
   | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
 
-/-- Replays a record against the definition of its header, which is read like a definition file. --/
+/-- Replays a record against the definition of its header, which is read like a definition file
+    (`Codec.load`). --/
 private def checkFile (trace : String) (opts : List (String × String)) : IO UInt32 := run do
   let (text, torn) ← readRecord trace
-  match (Trace.check Trace.wireCodec (loadDefinition ·.toJson) text).map fun c =>
+  match (Trace.check Trace.wireCodec Codec.load text).map fun c =>
       { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.
