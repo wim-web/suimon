@@ -323,21 +323,65 @@ func TestStreamFinishesBeforeBatch(t *testing.T) {
 					t.Errorf("process %s took %.1fms in stream and %.1fms in batch, want at least %.0fms in both", name, s, b, want)
 				}
 			}
-			// Stream starts processing, returns its first result and finishes earlier. The default input
-			// gives a gap of 2.3 units in total; only the order is checked, so that delays under load
-			// cannot fail the test.
+			// Within each run, and so whatever the load: Stream processes while it is still fetching, and
+			// Batch only after it has fetched everything. That this makes Stream finish earlier for the
+			// default input is TestDefaultInputFavoursStream, from the drawn times alone.
 			ss, sr := firstProcess(stream)
 			bs, br := firstProcess(batch)
 			t.Logf("stream: first process at %.0fms, first result at %.0fms, total %.0fms", ss, sr, stream.endMs)
 			t.Logf("batch:  first process at %.0fms, first result at %.0fms, total %.0fms", bs, br, batch.endMs)
-			if ss >= bs || sr >= br {
-				t.Errorf("stream started processing at %.0fms and had a result at %.0fms, batch at %.0fms and %.0fms", ss, sr, bs, br)
+			if fetched := lastEnd(t, stream, "produce"); ss >= fetched {
+				t.Errorf("stream started processing at %.0fms, after produce ended at %.0fms", ss, fetched)
 			}
-			if stream.endMs >= batch.endMs {
-				t.Errorf("stream took %.0fms in total, not less than batch with %.0fms", stream.endMs, batch.endMs)
+			if fetched := lastEnd(t, batch, "produceAll"); bs < fetched {
+				t.Errorf("batch started processing at %.0fms, before produceAll returned at %.0fms", bs, fetched)
 			}
 		})
 	}
+}
+
+func TestDefaultInputFavoursStream(t *testing.T) {
+	// The schedule the drawn times give, in units: Stream fetches item i at i+1 and processes it right
+	// away; Batch fetches all n items, then processes them in parallel.
+	var r request
+	for _, s := range scenarioList {
+		if s.id == "stream" {
+			if err := json.Unmarshal([]byte(s.input), &r); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(r.Names) == 0 {
+		t.Fatal("the stream scenario has no default names")
+	}
+	streamFirst, streamTotal, quickest, slowest := math.Inf(1), 0.0, math.Inf(1), 0.0
+	for i, name := range r.Names {
+		d := processUnits(name)
+		streamFirst, streamTotal = min(streamFirst, float64(i+1)+d), max(streamTotal, float64(i+1)+d)
+		quickest, slowest = min(quickest, d), max(slowest, d)
+	}
+	n := float64(len(r.Names))
+	batchFirst, batchTotal := n+quickest, n+slowest
+	if streamFirst >= batchFirst || streamTotal+1 > batchTotal {
+		t.Errorf("stream: first result at %.1f units, total %.1f; batch: %.1f and %.1f; want stream earlier, by at least a unit in total",
+			streamFirst, streamTotal, batchFirst, batchTotal)
+	}
+}
+
+// lastEnd returns when the last call of function ended in r.
+func lastEnd(t *testing.T, r *run, function string) float64 {
+	t.Helper()
+	end := math.Inf(-1)
+	for _, s := range spansOf(r, function) {
+		if s.EndMs == nil {
+			t.Fatalf("%s is still running", function)
+		}
+		end = max(end, *s.EndMs)
+	}
+	if math.IsInf(end, -1) {
+		t.Fatalf("%s never ran", function)
+	}
+	return end
 }
 
 // processTimes returns how long process took for each item, by name.
