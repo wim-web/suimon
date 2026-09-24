@@ -1,5 +1,6 @@
 import Suimon.Step
 import Suimon.WireText
+import Suimon.Json
 
 namespace Suimon.Trace
 
@@ -346,6 +347,28 @@ def check (c : Codec) (load : Wire → Except String Definition) (text : String)
 /-- The state a crashed run resumes from (§12.1). --/
 def recover (c : Codec) (load : Wire → Except String Definition) (text : String) : Except String State :=
   (check c load text).map (·.state)
+
+/-! ## Resumption -/
+
+/-- Reads the definition of a header with `load`, and accepts it only when it has the canonical form
+    of `p` (`Codec.definitionWire`). --/
+def agreeing (load : Wire → Except String Definition) (p : Definition) (w : Wire) :
+    Except String Definition := do
+  let q ← load w
+  unless (Codec.definitionWire q).render == (Codec.definitionWire p).render do
+    throw "the record holds another definition"
+  return q
+
+/-- The state from which the definition `p` resumes a crashed run (§12.1): only a record whose header
+    holds a definition with the canonical form of `p` resumes, from the state `recover` gives, and a
+    record without a complete header does not. The implementations of user processes are not part
+    of the definition, so they are not compared (§14). --/
+def resume (c : Codec) (load : Wire → Except String Definition) (p : Definition) (text : String) :
+    Except String State := do
+  let checked ← check c (agreeing load p) text
+  match checked.definition with
+  | some _ => return checked.state
+  | none => throw "the record has no header"
 
 /-! ## Recording -/
 

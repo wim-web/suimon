@@ -1,5 +1,6 @@
 import Suimon.Trace
 import Suimon.Theorems.WireText
+import Suimon.Theorems.Json
 
 namespace Suimon.Trace
 
@@ -22,6 +23,10 @@ private theorem map_error {α β ε : Type} (e : ε) (f : α → β) : (f <$> Ex
 
 private theorem mapError_ok {α ε ε' : Type} (x : α) (f : ε → ε') :
     (Except.ok x : Except ε α).mapError f = .ok x :=
+  rfl
+
+private theorem mapError_error {α ε ε' : Type} (e : ε) (f : ε → ε') :
+    (Except.error e : Except ε α).mapError f = .error (f e) :=
   rfl
 
 theorem strings_map_str (at_ : String) (items : List String) : strings at_ (items.map .str) = .ok items := by
@@ -623,5 +628,138 @@ theorem check_payloads {c : Codec} {load : Wire → Except String Definition} {t
         simp only [hp, hr, ok_bind, pure_ok, Except.ok.injEq] at h
         subst h
         exact replayLines_covered hempty hr
+
+/-! ## Resuming under a definition (§12.1)
+
+A run resumes only under the definition its record holds: `resume` compares the canonical forms,
+which repeat no key, so forms that render alike are equal. -/
+
+/-- Canonical forms that render alike are equal: they repeat no key, and a rendered value parses back
+    to itself. --/
+theorem definitionWire_eq_of_render {p q : Definition}
+    (h : (Codec.definitionWire q).render = (Codec.definitionWire p).render) :
+    Codec.definitionWire q = Codec.definitionWire p := by
+  have hq := Wire.parse_render _ (Codec.definitionWire_distinctKeys q)
+  rw [h, Wire.parse_render _ (Codec.definitionWire_distinctKeys p)] at hq
+  exact (Except.ok.inj hq).symm
+
+/-- The definition `agreeing load p` reads is the one `load` reads, when it has the canonical form
+    of `p`. --/
+theorem agreeing_eq_ok {load : Wire → Except String Definition} {p q : Definition} {w : Wire} :
+    agreeing load p w = .ok q ↔ load w = .ok q ∧ Codec.definitionWire q = Codec.definitionWire p := by
+  simp only [agreeing]
+  cases hl : load w with
+  | error e => simp [error_bind]
+  | ok q' =>
+    simp only [ok_bind, Except.ok.injEq]
+    by_cases hr : (Codec.definitionWire q').render = (Codec.definitionWire p).render
+    · simp only [hr, beq_self_eq_true, ↓reduceIte, pure_ok, Except.ok.injEq]
+      constructor
+      · rintro rfl
+        exact ⟨rfl, definitionWire_eq_of_render hr⟩
+      · exact fun h => h.1
+    · have hne : ((Codec.definitionWire q').render == (Codec.definitionWire p).render) = false := by
+        simpa using hr
+      simp only [hne, Bool.false_eq_true, ↓reduceIte, throw_error, error_bind, reduceCtorEq, false_iff,
+        not_and]
+      rintro rfl hw
+      exact hr (congrArg Wire.render hw)
+
+/-- A record checks with `agreeing load p` exactly when it checks with `load` and the definition of
+    its header, once complete, has the canonical form of `p`; both checks then agree. --/
+theorem check_agreeing {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+    {checked : Checked} :
+    check c (agreeing load p) text = .ok checked ↔
+      check c load text = .ok checked ∧
+        ∀ q, checked.definition = some q → Codec.definitionWire q = Codec.definitionWire p := by
+  simp only [check]
+  split
+  · refine ⟨fun h => ⟨h, fun q hq => ?_⟩, fun h => h.1⟩
+    simp only [pure_ok, Except.ok.injEq] at h
+    subst h
+    simp at hq
+  · rename_i header lines _
+    cases hd : c.decodeHeader (String.ofList header) with
+    | error e => simp [error_bind, mapError_error]
+    | ok w =>
+      simp only [ok_bind]
+      cases hl : load w with
+      | error e => simp [agreeing, hl, error_bind, mapError_error]
+      | ok q =>
+        by_cases hr : Codec.definitionWire q = Codec.definitionWire p
+        · simp only [agreeing_eq_ok.2 ⟨hl, hr⟩]
+          refine ⟨fun h => ⟨h, fun q' hq' => ?_⟩, fun h => h.1⟩
+          cases hrep : replayLines c q {} 1 lines with
+          | error e => simp only [mapError_ok, ok_bind, hrep, error_bind, reduceCtorEq] at h
+          | ok r =>
+            simp only [mapError_ok, ok_bind, hrep, pure_ok, Except.ok.injEq] at h
+            subst h
+            simp only [Option.some.injEq] at hq'
+            exact hq' ▸ hr
+        · have hag : ∀ q', agreeing load p w ≠ .ok q' := fun q' h => by
+            obtain ⟨hq', hw⟩ := agreeing_eq_ok.1 h
+            rw [hl, Except.ok.injEq] at hq'
+            exact hr (hq' ▸ hw)
+          cases ha : agreeing load p w with
+          | ok q' => exact absurd ha (hag q')
+          | error e =>
+            simp only [mapError_error, mapError_ok, error_bind, ok_bind, reduceCtorEq, false_iff, not_and]
+            intro h
+            cases hrep : replayLines c q {} 1 lines with
+            | error e => simp only [hrep, error_bind, reduceCtorEq] at h
+            | ok r =>
+              simp only [hrep, ok_bind, pure_ok, Except.ok.injEq] at h
+              subst h
+              exact fun hall => hr (hall q rfl)
+
+/-- A record resumes under `p` exactly when it checks, its header is complete, and the definition
+    the header holds has the canonical form of `p`; it resumes from the checked state. --/
+theorem resume_eq_ok {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+    {s : State} :
+    resume c load p text = .ok s ↔
+      ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
+        Codec.definitionWire q = Codec.definitionWire p ∧ checked.state = s := by
+  simp only [resume]
+  cases hc : check c (agreeing load p) text with
+  | error e =>
+    simp only [error_bind, reduceCtorEq, false_iff, not_exists, not_and]
+    intro checked q hcheck hq hw _
+    have := check_agreeing.2 ⟨hcheck, fun q' hq' => by rw [hq, Option.some.injEq] at hq'; exact hq' ▸ hw⟩
+    rw [hc] at this
+    cases this
+  | ok checked =>
+    obtain ⟨hcheck, hq⟩ := check_agreeing.1 hc
+    simp only [ok_bind]
+    cases hd : checked.definition with
+    | none =>
+      simp only [throw_error, reduceCtorEq, false_iff, not_exists, not_and]
+      intro checked' q hcheck' hq' _ _
+      rw [hcheck, Except.ok.injEq] at hcheck'
+      subst hcheck'
+      rw [hd] at hq'
+      cases hq'
+    | some q =>
+      simp only [pure_ok, Except.ok.injEq]
+      constructor
+      · rintro rfl
+        exact ⟨checked, q, hcheck, hd, hq q hd, rfl⟩
+      · rintro ⟨checked', q', hcheck', -, -, rfl⟩
+        rw [hcheck, Except.ok.injEq] at hcheck'
+        rw [hcheck']
+
+/-- A record resumes only under a definition of the canonical form of the one its header holds
+    (§12.1). --/
+theorem resume_definitionWire {c : Codec} {load : Wire → Except String Definition} {p : Definition}
+    {text : String} {s : State} (h : resume c load p text = .ok s) :
+    ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
+      Codec.definitionWire q = Codec.definitionWire p := by
+  obtain ⟨checked, q, hcheck, hq, hw, -⟩ := resume_eq_ok.1 h
+  exact ⟨checked, q, hcheck, hq, hw⟩
+
+/-- A resumed run continues from the state `recover` gives. --/
+theorem resume_recover {c : Codec} {load : Wire → Except String Definition} {p : Definition} {text : String}
+    {s : State} (h : resume c load p text = .ok s) : recover c load text = .ok s := by
+  obtain ⟨checked, q, hcheck, -, -, rfl⟩ := resume_eq_ok.1 h
+  simp [recover, hcheck, Except.map]
 
 end Suimon.Trace

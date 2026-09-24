@@ -59,6 +59,30 @@ def rejectedExactly (label expected : String) (text : String) : IO Unit :=
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{expected}'")
   | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
 
+/-- Resumes `text` under `q`, which must give `expected`, the state `recover` gives. --/
+def resumedAs (label : String) (q : Definition) (text : String) (expected : State) : IO Unit :=
+  match Suimon.Trace.resume Suimon.Trace.wireCodec loadHeader q text with
+  | .ok s => ensure (s == expected && (Suimon.Trace.recover Suimon.Trace.wireCodec loadHeader text).toOption == some s)
+      s!"{label}: resumed from another state"
+  | .error e => throw (IO.userError s!"{label}: not resumed: {e}")
+
+def resumeRejected (label expected : String) (q : Definition) (text : String) : IO Unit :=
+  match Suimon.Trace.resume Suimon.Trace.wireCodec loadHeader q text with
+  | .ok _ => throw (IO.userError s!"{label}: resumed, expected '{expected}'")
+  | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
+
+/-- `p` with the policy of placement `placement` of workflow `workflow` changed by `f`. --/
+def withPolicy (workflow placement : String) (f : Policy → Policy) (p : Definition) : Definition :=
+  { p with workflows := p.workflows.map fun w =>
+      if w.id == workflow then
+        { w with placements := w.placements.map fun pl =>
+            if pl.name == placement then { pl with policy := f pl.policy } else pl }
+      else w }
+
+def flipPolicy : Policy → Policy
+  | .stop => .«continue»
+  | .«continue» => .stop
+
 /-- Checks a record of `p` whose lines after the header are `text`. --/
 def checked (label : String) (p : Definition) (text : String) : IO Suimon.Trace.Checked :=
   checkedText label (header p ++ text)
@@ -115,6 +139,11 @@ def run : IO Unit := do
       | .ok q => q == p
       | .error _ => false
     ensure (!headerLine.contains '\n' && loaded) s!"{name}: header codec"
+    -- Another definition, which differs from `p` by the policy of one placement.
+    let other := match (p.workflow? p.main).bind (·.placements.head?) with
+      | some pl => withPolicy p.main pl.name flipPolicy p
+      | none => p
+    ensure ((Codec.definitionWire other).render != (Codec.definitionWire p).render) s!"{name}: no other definition"
     for seed in List.range 20 do
       let label := s!"{name} seed {seed + 1}"
       let r ← recorded p (seed + 1)
@@ -163,6 +192,15 @@ def run : IO Unit := do
             s!"{label} cut {cut}: uncommitted flag"
           ensure ((Suimon.Trace.recover Suimon.Trace.wireCodec loadHeader torn).toOption == some r.states[committed]!)
             s!"{label} cut {cut}: recover"
+          -- The definition of the record resumes it from the recovered state once the header is
+          -- complete; another definition never does.
+          if cut == 0 then
+            resumeRejected s!"{label} cut {cut} resume" "the record has no header" p torn
+            resumeRejected s!"{label} cut {cut} resume other" "the record has no header" other torn
+          else
+            resumedAs s!"{label} cut {cut} resume" p torn r.states[committed]!
+            resumeRejected s!"{label} cut {cut} resume other" "line 1: the record holds another definition" other
+              torn
       -- Corruption before the last commit is an error, not a torn tail.
       if lines.length ≥ 5 then
         let corrupt := String.join ((lines.set 2 "{\"seq\":2").map (· ++ "\n"))
@@ -205,6 +243,30 @@ def run : IO Unit := do
     tornHeader.state == {}) "torn header"
   let empty ← checkedText "empty" ""
   ensure (empty.definition == none && empty.committed == 0 && !empty.uncommitted) "empty"
+  -- A record resumes only under a definition of the canonical form of the one its header holds, and
+  -- from the state recover gives, which is the initial state while no transition is committed; a
+  -- record without a complete header does not resume, and a definition that differs by one policy
+  -- resumes no record of this one.
+  let merged ← recorded p 1
+  resumedAs "resume" p merged.text merged.states.getLast!
+  resumedAs "resume header only" p (header p) {}
+  resumedAs "resume torn start" p (header p ++ "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com") {}
+  resumeRejected "resume empty" "the record has no header" p ""
+  resumeRejected "resume torn header" "the record has no header" p ((header p).take 30).toString
+  resumeRejected "resume undecodable definition" "line 1: definition: missing field main" p "{\"definition\":{}}\n"
+  let other := withPolicy "dashboard" "archive" (fun _ => .stop) p
+  ensure ((Codec.definitionWire other).render != (Codec.definitionWire p).render) "the definitions are the same"
+  for (label, text) in [("another definition", merged.text),
+      ("cut inside a line", (merged.text.take (merged.text.length - 5)).toString),
+      ("only the start", header p ++ start), ("only the header", header p)] do
+    resumeRejected s!"resume {label}" "line 1: the record holds another definition" other text
+  -- The same definition in another form is the same definition: the header is compared in its
+  -- canonical form, whatever the white space and the fields the form leaves out.
+  let file ← IO.FS.readFile "Test/definitions/merge.json"
+  let reformatted := "{ \"definition\" : " ++ file.replace "\n" " " ++ " }\n"
+  ensure (reformatted != header p) "the header was not reformatted"
+  resumedAs "resume reformatted" p (reformatted ++ (merged.text.drop (header p).length).toString)
+    merged.states.getLast!
   rejectedText "no header" "line 1: header: unknown field seq" start
   rejectedText "empty first line" "line 1: unexpected end of input" "\n"
   rejectedText "header not an object" "line 1: header: expected an object" "[]\n"
