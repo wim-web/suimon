@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf8"
@@ -231,8 +232,13 @@ func check(out io.Writer, trace string, opts []option) error {
 		fmt.Fprintf(out, "%s\n", state)
 		return nil
 	}
-	fmt.Fprintf(out, `{"committed":%d,"status":"%s","uncommitted":%t}`+"\n", checked.Committed,
-		checked.State.Status, checked.Uncommitted)
+	// validated is null while no line is complete, as in Lean.
+	validated := "null"
+	if checked.Definition != nil {
+		validated = strconv.FormatBool(checked.Validated)
+	}
+	fmt.Fprintf(out, `{"committed":%d,"status":"%s","uncommitted":%t,"validated":%s}`+"\n", checked.Committed,
+		checked.State.Status, checked.Uncommitted, validated)
 	return nil
 }
 

@@ -111,10 +111,11 @@ func TestCLI(t *testing.T) {
 		if !strings.Contains(r.stdout, fmt.Sprintf(`"committed":%d,`, (len(lines)-2)/2)) || !strings.Contains(r.stdout, `"uncommitted":true`) {
 			t.Errorf("check torn %s: %s", name, r.stdout)
 		}
-		// A record cut inside its header has committed nothing; a header alone neither.
-		for text, torn := range map[string]bool{lines[0][:20]: true, lines[0]: false} {
+		// A record cut inside its header has committed nothing; a header alone neither. The flag is
+		// null until the header line is complete.
+		for text, tail := range map[string]string{lines[0][:20]: `true,"validated":null`, lines[0]: `false,"validated":true`} {
 			r := cli(t, 0, "check", writeTemp(t, name+"-header.jsonl", text))
-			if want := fmt.Sprintf(`{"committed":0,"status":"running","uncommitted":%t}`+"\n", torn); r.stdout != want {
+			if want := `{"committed":0,"status":"running","uncommitted":` + tail + "}\n"; r.stdout != want {
 				t.Errorf("check header %s: %s", name, r.stdout)
 			}
 		}
@@ -144,7 +145,7 @@ func TestCLI(t *testing.T) {
 		t.Errorf("invalid header: %q", r.stderr)
 	}
 	uncheckedHeader := writeTemp(t, "unchecked.jsonl", "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n")
-	if r := cli(t, 0, "check", uncheckedHeader); r.stdout != `{"committed":0,"status":"running","uncommitted":false}`+"\n" {
+	if r := cli(t, 0, "check", uncheckedHeader); r.stdout != `{"committed":0,"status":"running","uncommitted":false,"validated":false}`+"\n" {
 		t.Errorf("unchecked invalid header: %q", r.stdout)
 	}
 	cli(t, 1, "validate", filepath.Join(repoRoot(t), "Test", "definitions", "missing.json"))
@@ -214,18 +215,18 @@ func TestCLICheck(t *testing.T) {
 		code           int
 		stdout, stderr string
 	}{
-		{start, 0, `{"committed":1,"status":"running","uncommitted":false}` + "\n", ""},
-		{start + `{"seq":3,"op":{"type":"cancel"}}` + "\n", 0, `{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
-		{start + `{"seq":3,"op":{"ty`, 0, `{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
+		{start, 0, `{"committed":1,"status":"running","uncommitted":false,"validated":true}` + "\n", ""},
+		{start + `{"seq":3,"op":{"type":"cancel"}}` + "\n", 0, `{"committed":1,"status":"running","uncommitted":true,"validated":true}` + "\n", ""},
+		{start + `{"seq":3,"op":{"ty`, 0, `{"committed":1,"status":"running","uncommitted":true,"validated":true}` + "\n", ""},
 		{start + "{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3", 0,
-			`{"committed":1,"status":"running","uncommitted":true}` + "\n", ""},
+			`{"committed":1,"status":"running","uncommitted":true,"validated":true}` + "\n", ""},
 		{start + "{\"seq\":3,\"commit\":true}\n", 1, "", "line 4: a commit without an op\n"},
-		{"", 0, `{"committed":0,"status":"running","uncommitted":false}` + "\n", ""},
-		{header[:40] + "\xe3", 0, `{"committed":0,"status":"running","uncommitted":true}` + "\n", ""},
+		{"", 0, `{"committed":0,"status":"running","uncommitted":false,"validated":null}` + "\n", ""},
+		{header[:40] + "\xe3", 0, `{"committed":0,"status":"running","uncommitted":true,"validated":null}` + "\n", ""},
 		{start[len(header):], 1, "", "line 1: header: unknown field seq\n"},
 		{start + header, 1, "", "line 4: record: missing field seq\n"},
 		{"{\"definition\":{\"main\":\"w\"},\"validated\":true}\n", 1, "", "line 1: unknown main workflow w\n"},
-		{"{\"definition\":{\"main\":\"w\"},\"validated\":false}\n", 0, `{"committed":0,"status":"running","uncommitted":false}` + "\n", ""},
+		{"{\"definition\":{\"main\":\"w\"},\"validated\":false}\n", 0, `{"committed":0,"status":"running","uncommitted":false,"validated":false}` + "\n", ""},
 		{"{\"definition\":{\"main\":\"w\"}}\n", 1, "", "line 1: header: missing field validated\n"},
 		{"{\"definition\":{\"main\":\"w\"},\"validated\":0}\n", 1, "", "line 1: header.validated: expected a boolean\n"},
 	}

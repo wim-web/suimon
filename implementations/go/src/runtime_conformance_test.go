@@ -68,7 +68,12 @@ func leanAgrees(t *testing.T, cli, dir string, p *Definition, journal string, st
 		t.Fatalf("Go check: %v", err)
 	}
 	code, stdout, stderr := leanRun(t, cli, "check", journalPath)
-	want := fmt.Sprintf(`{"committed":%d,"status":"%s","uncommitted":%t}`+"\n", c.Committed, c.State.Status, c.Uncommitted)
+	validated := "null"
+	if c.Definition != nil {
+		validated = fmt.Sprint(c.Validated)
+	}
+	want := fmt.Sprintf(`{"committed":%d,"status":"%s","uncommitted":%t,"validated":%s}`+"\n",
+		c.Committed, c.State.Status, c.Uncommitted, validated)
 	if code != 0 || stdout != want {
 		t.Fatalf("Lean check: exit %d, %q%s, want %q\n%s", code, stdout, stderr, want, journal)
 	}

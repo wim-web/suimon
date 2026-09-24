@@ -70,7 +70,7 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
     if (opts.lookup "--state").isSome then IO.println (toJson checked.state).compress
     else
       IO.println (Json.mkObj [("status", statusName checked.state.status), ("committed", checked.committed),
-        ("uncommitted", checked.uncommitted)]).compress
+        ("uncommitted", checked.uncommitted), ("validated", toJson checked.validated)]).compress
     return 0
   | .error e => IO.eprintln e; return 1
 

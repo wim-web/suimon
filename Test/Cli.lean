@@ -52,12 +52,15 @@ def run : IO Unit := do
       Validate.ensure (Validate.contains result.stdout s!"\"committed\":{(lines.length - 2) / 2}," &&
         Validate.contains result.stdout "\"uncommitted\":true") s!"check torn {name}: {result.stdout}"
     -- A record cut inside its header has committed nothing; a header alone neither.
-    for (text, torn) in [((headerLine.take 20).toString, true), (headerLine ++ "\n", false)] do
+    -- The flag is null until the header line is complete.
+    for (text, torn, validated) in
+        [((headerLine.take 20).toString, true, "null"), (headerLine ++ "\n", false, "true")] do
       IO.FS.withTempFile fun handle path => do
         handle.putStr text
         handle.flush
         let result ← cli ["check", path.toString] 0
-        Validate.ensure (result.stdout == s!"\{\"committed\":0,\"status\":\"running\",\"uncommitted\":{torn}}\n")
+        Validate.ensure (result.stdout ==
+            s!"\{\"committed\":0,\"status\":\"running\",\"uncommitted\":{torn},\"validated\":{validated}}\n")
           s!"check header {name}: {result.stdout}"
     let explored ← cli ["explore", definition, "--seeds", "20"] 0
     Validate.ensure (explored.stdout.startsWith "{") s!"explore {name}: {explored.stdout}"
@@ -76,7 +79,8 @@ def run : IO Unit := do
     handle.putStr "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"validated\":false}\n"
     handle.flush
     let result ← cli ["check", path.toString] 0
-    Validate.ensure (result.stdout == "{\"committed\":0,\"status\":\"running\",\"uncommitted\":false}\n")
+    Validate.ensure
+        (result.stdout == "{\"committed\":0,\"status\":\"running\",\"uncommitted\":false,\"validated\":false}\n")
       s!"unchecked invalid header: {result.stdout}"
   -- The flag is required, and a boolean.
   for (flag, message) in [("", "line 1: header: missing field validated\n"),
@@ -114,7 +118,8 @@ def run : IO Unit := do
             let final := recorded.states.getLast!
             let result ← cli ["check", path.toString] 0
             Validate.ensure (result.stdout == s!"\{\"committed\":{recorded.states.length - 1},\"status\":" ++
-              s!"\"{statusName final.status}\",\"uncommitted\":false}\n") s!"{name} unchecked record: {result.stdout}"
+              s!"\"{statusName final.status}\",\"uncommitted\":false,\"validated\":false}\n")
+              s!"{name} unchecked record: {result.stdout}"
             let printed ← cli ["check", path.toString, "--state"] 0
             Validate.ensure (printed.stdout == (toJson final).compress ++ "\n") s!"{name} unchecked record --state"
   -- No object may repeat a key, in a definition file or in any line of a record.
