@@ -1,6 +1,6 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-/* Program: schema/program.schema.json. Optional arrays are normalized to [] by parseProgram. */
+/* Definition: schema/definition.schema.json. Optional arrays are normalized to [] by parseDefinition. */
 
 /** A type name, or `{ list: type }` for List<type>. */
 export type ValueType = string | { list: ValueType };
@@ -46,7 +46,7 @@ export interface Placement { name: string; node: Control; policy: Policy; timeou
 export interface Connection { source: string; arm?: string; target: string; transform: string }
 export interface WorkflowInput { type: ValueType; placement: string }
 export interface Workflow { id: string; input?: WorkflowInput; placements: Placement[]; connections: Connection[] }
-export interface Program {
+export interface Definition {
   main: string;
   functions: FunctionDecl[];
   judges: JudgeDecl[];
@@ -130,7 +130,8 @@ export interface RuntimeState {
   failures: Failure[];
 }
 
-/* Execution records: schema/trace.schema.json. Value fields hold value identities, which stay opaque. */
+/* Execution records: schema/trace.schema.json. The first line is the header with the definition of the
+   execution; the op and commit records follow. Value fields hold value identities, which stay opaque. */
 
 export type CallOp =
   | { type: 'fetch' | 'ended' | 'failed' | 'lost' | 'terminated'; call: string }
@@ -159,10 +160,11 @@ export interface OpRecord { seq: number; op: Op; values?: Record<string, string>
 export interface CommitRecord { seq: number; commit: true }
 export type ExecutionRecord = OpRecord | CommitRecord;
 /**
- * The complete lines of a record, and the text after the last newline. The tail is what a crash
+ * The complete lines of a record, and the text after the last newline: the definition of the header,
+ * which is null while there is no complete line, and the records after it. The tail is what a crash
  * leaves: it is never parsed and never committed, even when it would parse.
  */
-export interface RecordLog { records: ExecutionRecord[]; tail: string }
+export interface RecordLog { definition: Definition | null; records: ExecutionRecord[]; tail: string }
 /** One op record; only an op followed by its commit is an accepted transition. */
 export interface Transition { seq: number; op: Op; values: Record<string, string>; committed: boolean }
 

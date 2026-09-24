@@ -8,7 +8,7 @@ namespace Suimon.Round3
 namespace RunConformAux
 open State
 
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-! ### Invocation inputs -/
 

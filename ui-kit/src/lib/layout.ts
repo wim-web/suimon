@@ -1,6 +1,6 @@
-import type { Connection, Placement, Program, ValueType, Workflow } from '../types';
-import { deriveKinds, findWorkflow, isEndpoint, isEntry } from './program';
-import type { Kind } from './program';
+import type { Connection, Definition, Placement, ValueType, Workflow } from '../types';
+import { deriveKinds, findWorkflow, isEndpoint, isEntry } from './definition';
+import type { Kind } from './definition';
 
 export interface Point { x: number; y: number }
 export interface LayoutNode { name: string; placement: Placement; kind: Kind | null; entry: boolean; endpoint: boolean; position: Point; height: number }
@@ -25,8 +25,8 @@ export function placementHeight(placement: Placement): number {
 }
 
 /** A layered top-down layout of one workflow; `positions` overrides computed positions by placement name. */
-export function layoutWorkflow(program: Program, workflow: Workflow | string, positions: Record<string, Point | undefined> = {}): WorkflowLayout {
-  const w = typeof workflow === 'string' ? findWorkflow(program, workflow) : workflow;
+export function layoutWorkflow(definition: Definition, workflow: Workflow | string, positions: Record<string, Point | undefined> = {}): WorkflowLayout {
+  const w = typeof workflow === 'string' ? findWorkflow(definition, workflow) : workflow;
   if (!w) throw new TypeError(`unknown workflow ${String(workflow)}`);
   const names = w.placements.map(p => p.name);
   const rank = new Map(names.map(n => [n, 0]));
@@ -65,7 +65,7 @@ export function layoutWorkflow(program: Program, workflow: Workflow | string, po
   const offset = new Map<number, number>();
   let y = 0;
   for (const r of order) { offset.set(r, y); y += Math.max(...layers.get(r)!.map(n => placementHeight(placements.get(n)!))) + GAP; }
-  const kinds = deriveKinds(program, w);
+  const kinds = deriveKinds(definition, w);
   const nodes: LayoutNode[] = w.placements.map(p => ({
     name: p.name, placement: p, kind: kinds[p.name] ?? null, entry: isEntry(w, p.name), endpoint: isEndpoint(w, p.name), height: placementHeight(p),
     position: positions[p.name] ?? { x: column.get(p.name)! * COLUMN, y: offset.get(rank.get(p.name)!)! },

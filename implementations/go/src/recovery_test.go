@@ -2,6 +2,7 @@ package suimon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,9 +41,9 @@ func cutPoints(journal string) []int {
 
 // resumeAt resumes the execution recorded in prefix with fresh bindings of sc, and returns the
 // report, the journal after the run, and what the prefix establishes.
-func resumeAt(t *testing.T, sc scenario, p *Program, prefix string) (*Report, *memJournal, Checked, error) {
+func resumeAt(t *testing.T, sc scenario, p *Definition, prefix string) (*Report, *memJournal, Checked, error) {
 	t.Helper()
-	c, err := Check(p, prefix)
+	c, err := Check(prefix, sameDefinition(p))
 	if err != nil {
 		t.Fatalf("the prefix does not replay: %v", err)
 	}
@@ -65,7 +66,7 @@ func resumeAt(t *testing.T, sc scenario, p *Program, prefix string) (*Report, *m
 // checkResumed checks a resumed run against the run that wrote the journal: the committed part of
 // the prefix is kept, and either nothing was lost and the result is the same, or each call that
 // was running at the cut is lost.
-func checkResumed(t *testing.T, p *Program, want *Report, r *Report, j *memJournal, c Checked, prefix string) {
+func checkResumed(t *testing.T, p *Definition, want *Report, r *Report, j *memJournal, c Checked, prefix string) {
 	t.Helper()
 	verifyJournal(t, p, j.text(), r)
 	// The committed records are kept, and the new ones follow them where the uncommitted tail was.
@@ -208,9 +209,9 @@ func TestRuntimeRecoveryTwice(t *testing.T) {
 	}
 }
 
-func mustCheck(t *testing.T, p *Program, text string) Checked {
+func mustCheck(t *testing.T, p *Definition, text string) Checked {
 	t.Helper()
-	c, err := Check(p, text)
+	c, err := Check(text, sameDefinition(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,21 +251,76 @@ func TestRuntimeResumeErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	header := EncodeHeader(p) + "\n"
+	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n"
 	for label, text := range map[string]string{
-		"empty":      "",
-		"torn start": "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com",
+		"empty":       "",
+		"torn header": header[:len(header)/2],
+		"header only": header,
+		"torn start":  header + start + "{\"seq\":2,\"com",
 	} {
 		if _, err := e.Resume(context.Background(), newMemJournal(text)); !errors.Is(err, ErrNotStarted) {
 			t.Errorf("%s: %v", label, err)
 		}
 	}
 	for label, text := range map[string]string{
-		"corrupt":       "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":tru}\n",
-		"other program": "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"1\"}}\n{\"seq\":2,\"commit\":true}\n",
+		"corrupt":   header + start + "{\"seq\":2,\"commit\":tru}\n",
+		"no header": start + "{\"seq\":2,\"commit\":true}\n",
 	} {
-		if _, err := e.Resume(context.Background(), newMemJournal(text)); err == nil || errors.Is(err, ErrNotStarted) {
+		if _, err := e.Resume(context.Background(), newMemJournal(text)); err == nil || errors.Is(err, ErrNotStarted) ||
+			errors.Is(err, ErrDefinitionMismatch) {
 			t.Errorf("%s: %v", label, err)
 		}
+	}
+	// A journal of another definition is not resumed, however little the definitions differ: here
+	// by one policy, which the functions bound to the engine do not show.
+	_, journal, _ := runOnce(t, scenarioNamed(t, "merge"))
+	other := load(t, "merge")
+	setPolicy("dashboard", "archive", PolicyStop)(other)
+	if EncodeHeader(other) == EncodeHeader(p) {
+		t.Fatal("the definitions are the same")
+	}
+	otherEngine, err := NewEngine(other, mustRegistry(t, mergeBindings(mergeKnobs{})...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, text := range map[string]string{
+		"another definition": journal,
+		"cut inside a line":  journal[:len(journal)-5],
+		"only the start":     header + start + "{\"seq\":2,\"commit\":true}\n",
+	} {
+		j := newMemJournal(text)
+		if _, err := otherEngine.Resume(context.Background(), j); err != ErrDefinitionMismatch {
+			t.Errorf("%s: %v", label, err)
+		}
+		if j.text() != text {
+			t.Errorf("%s: the journal changed", label)
+		}
+	}
+	// The same definition in another form is the same definition: the header is compared in its
+	// canonical form, whatever the key order and the white space.
+	file, err := os.ReadFile(filepath.Join(repoRoot(t), "Test", "definitions", "merge.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(file, &fields); err != nil {
+		t.Fatal(err)
+	}
+	sorted, err := json.MarshalIndent(fields, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reformatted := "{ \"definition\" : " + strings.ReplaceAll(string(sorted), "\n", " ") + " }\n" + journal[len(header):]
+	if reformatted == journal || strings.HasPrefix(reformatted, header) {
+		t.Fatal("the header was not reformatted")
+	}
+	x, err := e.Resume(context.Background(), newMemJournal(reformatted))
+	if err != nil {
+		t.Fatalf("a header in another form: %v", err)
+	}
+	if _, err := wait(t, x); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -272,7 +328,7 @@ func TestRuntimeResumeErrors(t *testing.T) {
 // execution continues in the same file.
 func TestFileJournal(t *testing.T) {
 	sc := scenarioNamed(t, "users")
-	p := load(t, sc.program)
+	p := load(t, sc.definition)
 	path := filepath.Join(t.TempDir(), "users.jsonl")
 	j, err := CreateJournal(path)
 	if err != nil {

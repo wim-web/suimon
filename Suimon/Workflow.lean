@@ -92,7 +92,7 @@ structure Workflow where
   connections : List Connection := []
   deriving DecidableEq, Repr
 
-structure Program where
+structure Definition where
   functions : List FunctionDecl := []
   judges : List JudgeDecl := []
   transforms : List TransformDecl := []
@@ -100,12 +100,12 @@ structure Program where
   main : String
   deriving DecidableEq, Repr
 
-namespace Program
-def function? (p : Program) (id : String) : Option FunctionDecl := p.functions.find? (·.id == id)
-def judge? (p : Program) (id : String) : Option JudgeDecl := p.judges.find? (·.id == id)
-def transform? (p : Program) (id : String) : Option TransformDecl := p.transforms.find? (·.id == id)
-def workflow? (p : Program) (id : String) : Option Workflow := p.workflows.find? (·.id == id)
-end Program
+namespace Definition
+def function? (p : Definition) (id : String) : Option FunctionDecl := p.functions.find? (·.id == id)
+def judge? (p : Definition) (id : String) : Option JudgeDecl := p.judges.find? (·.id == id)
+def transform? (p : Definition) (id : String) : Option TransformDecl := p.transforms.find? (·.id == id)
+def workflow? (p : Definition) (id : String) : Option Workflow := p.workflows.find? (·.id == id)
+end Definition
 
 namespace Workflow
 def placement? (w : Workflow) (name : String) : Option Placement := w.placements.find? (·.name == name)

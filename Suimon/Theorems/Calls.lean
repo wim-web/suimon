@@ -337,7 +337,7 @@ theorem Keys.frame {s t : State} (h : Keys s) (hf : Frame s t) : Keys t where
     exact hcalls c' hc'
 
 /-- Every step keeps the identities of calls apart from executions, run owners and aggregates. --/
-theorem step_keys {p : Program} {s t : State} {op : Op} (h : Keys s) (hs : step p s op = .ok t) : Keys t := by
+theorem step_keys {p : Definition} {s t : State} {op : Op} (h : Keys s) (hs : step p s op = .ok t) : Keys t := by
   cases op with
   | start input =>
     obtain ⟨-, -, _, -, -, rfl⟩ := Step.start_inv hs
@@ -458,7 +458,7 @@ theorem step_keys {p : Program} {s t : State} {op : Op} (h : Keys s) (hs : step 
       exact h.frame (hf.trans (Frame.of_eq rfl rfl rfl rfl))
     · exact h.frame (Frame.of_eq rfl rfl rfl rfl)
 
-theorem reachable_keys {p : Program} {s : State} (h : Reachable p s) : Keys s := by
+theorem reachable_keys {p : Definition} {s : State} (h : Reachable p s) : Keys s := by
   induction h with
   | empty => exact Keys.empty
   | step op _ hs ih => exact step_keys ih hs
@@ -467,7 +467,7 @@ end Calls
 
 open State in
 /-- Once a call has stopped running, it never runs again (§11.3, §11.5, §11.6). --/
-theorem step_call_stays_stopped {p : Program} {s t : State} {op : Op} {id : String} {c : Call}
+theorem step_call_stays_stopped {p : Definition} {s t : State} {op : Op} {id : String} {c : Call}
     (hk : s.WellKeyed) (hs : step p s op = .ok t) (hc : s.call? id = some c)
     (stopped : c.status ≠ .running ∧ c.status ≠ .fetching) :
     ∀ c', t.call? id = some c' → c'.status ≠ .running ∧ c'.status ≠ .fetching := by
@@ -571,7 +571,7 @@ theorem step_call_stays_stopped {p : Program} {s t : State} {op : Op} {id : Stri
 
 /-- A value, an element or the end is accepted from a call only while it runs; after a failure, a
     timeout, a loss or a cancellation nothing more is accepted from it (§10.2, §11.5, §11.6). --/
-theorem step_report_requires_running {p : Program} {s t : State} {op : Op} {id : String}
+theorem step_report_requires_running {p : Definition} {s t : State} {op : Op} {id : String}
     (hs : step p s op = .ok t)
     (hop : (∃ v, op = .returned id v) ∨ (∃ v, op = .yielded id v) ∨ (∃ a, op = .judged id a) ∨ op = .ended id) :
     ∃ c, s.call? id = some c ∧ (c.status = .running ∨ c.status = .fetching) := by
@@ -587,7 +587,7 @@ theorem step_report_requires_running {p : Program} {s t : State} {op : Op} {id :
 
 /-- A generator is asked for its next element only when no request is outstanding, and answers
     only an outstanding request (§4.1.1). --/
-theorem step_fetch_sequential {p : Program} {s t : State} {id : String} :
+theorem step_fetch_sequential {p : Definition} {s t : State} {id : String} :
     (step p s (.fetch id) = .ok t → ∃ c, s.call? id = some c ∧ c.stream = true ∧ c.status = .running) ∧
     (∀ v, step p s (.yielded id v) = .ok t → ∃ c, s.call? id = some c ∧ c.stream = true ∧ c.status = .fetching) ∧
     (step p s (.ended id) = .ok t → ∃ c, s.call? id = some c ∧ c.stream = true ∧ c.status = .fetching) := by
@@ -601,7 +601,7 @@ theorem step_fetch_sequential {p : Program} {s t : State} {id : String} :
 
 open State in
 /-- A call's own results are accepted only while that call runs (§10.2). --/
-theorem Reachable.call_results {p : Program} {s t : State} {op : Op} (h : Reachable p s)
+theorem Reachable.call_results {p : Definition} {s t : State} {op : Op} (h : Reachable p s)
     (hs : Suimon.step p s op = .ok t) :
     ∀ r ∈ t.results, r ∉ s.results → ∀ c ∈ s.calls, r.producer = c.id → c.status = .running ∨ c.status = .fetching := by
   intro r hr hnew c hc hprod

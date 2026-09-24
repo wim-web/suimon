@@ -23,7 +23,7 @@ theorem failCall_live {s t : State} {c : Call} {status : CallStatus} {cause : Ca
 open State in
 /-- From a running state, a step keeps running, stops for a failure or for the caller's cancel, or
     is the conclusion. --/
-theorem step_of_running {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t)
+theorem step_of_running {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
     (running : s.status = .running) : Live t ∨ op = .conclude := by
   have keep : t.status = s.status → Live t ∨ op = .conclude := fun h => Or.inl (Or.inl (h.trans running))
   cases op with
@@ -100,7 +100,7 @@ theorem step_of_running {p : Program} {s t : State} {op : Op} (hs : step p s op 
 
 /-- A stopping state has a failure on record or was cancelled by the caller (§11.3): a stop comes
     from a failure with the stop policy or from the cancel, and failures and the cancel are kept. --/
-theorem stop_reason {p : Program} {s : State} (h : Reachable p s) :
+theorem stop_reason {p : Definition} {s : State} (h : Reachable p s) :
     s.status = .stopping → s.failures ≠ [] ∨ s.cancelled = true := by
   induction h with
   | empty => intro h; cases h
@@ -131,7 +131,7 @@ theorem stop_reason {p : Program} {s : State} (h : Reachable p s) :
         split <;> simp
 
 /-- The final status rules of §11.3, §11.4 and §13.3 for a state. --/
-def Decided (p : Program) (s : State) : Prop :=
+def Decided (p : Definition) (s : State) : Prop :=
   (s.status = .failed ↔ s.failures ≠ []) ∧
   (s.status = .cancelled → s.cancelled = true ∧ s.failures = []) ∧
   (s.status = .skipped → s.failures = [] ∧ ∀ r w, s.run? [] = some r → p.workflow? r.workflow = some w →
@@ -139,7 +139,7 @@ def Decided (p : Program) (s : State) : Prop :=
 
 /-- The conclusion from a running state: failed with a failure on record, otherwise skipped when
     every endpoint of the root run settled skipped, otherwise succeeded (§11.4, §13.3). --/
-theorem decided_of_running {p : Program} {s t : State} {r : Run} {w : Workflow}
+theorem decided_of_running {p : Definition} {s t : State} {r : Run} {w : Workflow}
     (hr : s.run? [] = some r) (hw : p.workflow? r.workflow = some w)
     (ht : t = { s.setRun { r with complete := true } with
       status := if !s.failures.isEmpty then .failed
@@ -183,7 +183,7 @@ theorem decided_of_running {p : Program} {s t : State} {r : Run} {w : Workflow}
       · cases hsk
 
 /-- The conclusion from a stopping state: failed with a failure on record, otherwise cancelled (§11.3). --/
-theorem decided_of_stopping {p : Program} {s t : State} (reason : s.failures ≠ [] ∨ s.cancelled = true)
+theorem decided_of_stopping {p : Definition} {s t : State} (reason : s.failures ≠ [] ∨ s.cancelled = true)
     (ht : t = { s with status := if s.failures.isEmpty then .cancelled else .failed }) : Decided p t := by
   subst ht
   by_cases hf : s.failures = []
@@ -196,7 +196,7 @@ end FinalStatus
 /-- The final status follows §11.3, §11.4 and §13.3: failed exactly when a failure was recorded;
     cancelled only if the caller cancelled; skipped only when every endpoint of the workflow was
     skipped; succeeded otherwise. --/
-theorem Reachable.final_status {p : Program} {s : State} (h : Reachable p s) (done : s.status.terminal = true) :
+theorem Reachable.final_status {p : Definition} {s : State} (h : Reachable p s) (done : s.status.terminal = true) :
     (s.status = .failed ↔ s.failures ≠ []) ∧
     (s.status = .cancelled → s.cancelled = true ∧ s.failures = []) ∧
     (s.status = .skipped → s.failures = [] ∧ ∀ r w, s.run? [] = some r → p.workflow? r.workflow = some w →
@@ -221,7 +221,7 @@ theorem Reachable.final_status {p : Program} {s : State} (h : Reachable p s) (do
       · exact FinalStatus.decided_of_stopping (FinalStatus.stop_reason h0 hstop) ht
 
 /-- Once final, the status never changes (§13.3). --/
-theorem Reachable.final_kept {p : Program} {s t : State} {op : Op} (h : Reachable p s) (done : s.status.terminal = true) :
+theorem Reachable.final_kept {p : Definition} {s t : State} {op : Op} (h : Reachable p s) (done : s.status.terminal = true) :
     Suimon.step p s op ≠ .ok t := by
   -- Reachability is not needed: a final state accepts no operation at all.
   have _ := h
@@ -229,7 +229,7 @@ theorem Reachable.final_kept {p : Program} {s t : State} {op : Op} (h : Reachabl
   rcases step_source_status hs with h | h <;> simp [h, Status.terminal] at done
 
 /-- The workflow ends normally only after every placement of the root run settled (§13.3). --/
-theorem step_conclude_running {p : Program} {s t : State} (hs : step p s .conclude = .ok t)
+theorem step_conclude_running {p : Definition} {s t : State} (hs : step p s .conclude = .ok t)
     (running : s.status = .running) :
     ∃ r w, s.run? [] = some r ∧ p.workflow? r.workflow = some w ∧ ∀ pl ∈ w.placements, (s.settled? [] pl.name).isSome := by
   obtain ⟨-, ⟨-, r, w, hr, hw, hall, -⟩ | ⟨h, -⟩⟩ := Step.conclude_inv hs

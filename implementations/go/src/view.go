@@ -238,7 +238,7 @@ func (v view) run(path Path) (*Run, bool) {
 	return &v.s.Runs[pos], true
 }
 
-func (v view) workflow(p *Program, path Path) (*Workflow, bool) {
+func (v view) workflow(p *Definition, path Path) (*Workflow, bool) {
 	r, ok := v.run(path)
 	if !ok {
 		return nil, false
@@ -543,7 +543,7 @@ func (v view) slotsHeld(e *Execution) int {
 	return n
 }
 
-func (v view) placementOf(p *Program, path Path, name string) (*Placement, error) {
+func (v view) placementOf(p *Definition, path Path, name string) (*Placement, error) {
 	w, ok := v.workflow(p, path)
 	if !ok {
 		return nil, reject("UNKNOWN_RUN")
@@ -555,7 +555,7 @@ func (v view) placementOf(p *Program, path Path, name string) (*Placement, error
 	return pl, nil
 }
 
-func (v view) concurrencyOf(p *Program, e *Execution) (*Concurrency, error) {
+func (v view) concurrencyOf(p *Definition, e *Execution) (*Concurrency, error) {
 	pl, err := v.placementOf(p, e.Run, e.Placement)
 	if err != nil {
 		return nil, err
@@ -567,7 +567,7 @@ func (v view) concurrencyOf(p *Program, e *Execution) (*Concurrency, error) {
 	return &c.Spec, nil
 }
 
-func (v view) taskSpec(p *Program, e *Execution, name string) (*TaskSpec, error) {
+func (v view) taskSpec(p *Definition, e *Execution, name string) (*TaskSpec, error) {
 	c, err := v.concurrencyOf(p, e)
 	if err != nil {
 		return nil, err

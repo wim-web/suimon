@@ -1,10 +1,10 @@
-import type { Body, Connection, Control, Placement, Program, ValueType, Workflow } from '../types';
+import type { Body, Connection, Control, Definition, Placement, ValueType, Workflow } from '../types';
 
 export type Kind = 'single' | 'stream';
 export interface IndexedConnection extends Connection { index: number }
 
-export function findWorkflow(program: Program, id: string): Workflow | undefined {
-  return program.workflows.find(w => w.id === id);
+export function findWorkflow(definition: Definition, id: string): Workflow | undefined {
+  return definition.workflows.find(w => w.id === id);
 }
 export function findPlacement(workflow: Workflow | undefined, name: string): Placement | undefined {
   return workflow?.placements.find(p => p.name === name);
@@ -35,16 +35,16 @@ export function bodyLabel(body: Body): string {
   return body.type === 'function' ? body.function : `${body.workflow} → ${body.output}`;
 }
 
-function bodyKind(program: Program, body: Body): Kind | null {
-  if (body.type === 'subworkflow') return findWorkflow(program, body.workflow) ? 'single' : null;
-  const decl = program.functions.find(f => f.id === body.function);
+function bodyKind(definition: Definition, body: Body): Kind | null {
+  if (body.type === 'subworkflow') return findWorkflow(definition, body.workflow) ? 'single' : null;
+  const decl = definition.functions.find(f => f.id === body.function);
   return decl ? ('single' in decl.output ? 'single' : 'stream') : null;
 }
 
 /** Output kind of one control from its input kind (§5.2, §8.4); undefined input means no input. */
-function outputKind(program: Program, control: Control, input: Kind | undefined): Kind | null {
+function outputKind(definition: Definition, control: Control, input: Kind | undefined): Kind | null {
   switch (control.type) {
-    case 'function': case 'subworkflow': return input === 'stream' ? 'stream' : bodyKind(program, control);
+    case 'function': case 'subworkflow': return input === 'stream' ? 'stream' : bodyKind(definition, control);
     case 'branch': return input ?? null;
     case 'waitStream': return input === 'stream' ? 'single' : null;
     case 'merge': return input === 'single' ? 'single' : null;
@@ -54,9 +54,9 @@ function outputKind(program: Program, control: Control, input: Kind | undefined)
 
 /**
  * Single/Stream of each placement's output, derived as in Suimon/Derive.lean. A placement whose
- * kind cannot be derived (an invalid or unchecked program) gets null.
+ * kind cannot be derived (an invalid or unchecked definition) gets null.
  */
-export function deriveKinds(program: Program, workflow: Workflow): Record<string, Kind | null> {
+export function deriveKinds(definition: Definition, workflow: Workflow): Record<string, Kind | null> {
   const kinds: Record<string, Kind | null> = {};
   const visiting = new Set<string>();
   const kindOf = (name: string): Kind | null => {
@@ -70,7 +70,7 @@ export function deriveKinds(program: Program, workflow: Workflow): Record<string
     if (isEntry(workflow, name)) input = sources.length ? null : 'single';
     else if (!sources.length) input = undefined;
     else input = sources.every(k => k !== null && k === sources[0]) ? sources[0] : null;
-    const kind = input === null ? null : outputKind(program, placement.node, input);
+    const kind = input === null ? null : outputKind(definition, placement.node, input);
     kinds[name] = kind;
     return kind;
   };

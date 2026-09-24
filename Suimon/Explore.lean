@@ -17,12 +17,12 @@ structure Config where
 /-- Values in exploration are derived from where they come from, so a run is reproducible. --/
 def value (parts : List String) : Value := identity ("value" :: parts)
 
-def armsOf (p : Program) (s : State) (c : Call) : List String :=
+def armsOf (p : Definition) (s : State) (c : Call) : List String :=
   match (s.invocation? c.owner).bind fun i => (s.workflow? p i.run).bind (·.placement? i.placement) with
   | some { control := .branch _ arms, .. } => arms
   | _ => []
 
-def callCandidates (p : Program) (cfg : Config) (s : State) (c : Call) : List Op :=
+def callCandidates (p : Definition) (cfg : Config) (s : State) (c : Call) : List Op :=
   let failures (fetching : Bool) : List Op :=
     if cfg.failures then
       [.failed c.id, .timedOut c.id false, .lost c.id] ++ (if fetching then [.timedOut c.id true] else [])
@@ -38,7 +38,7 @@ def callCandidates (p : Program) (cfg : Config) (s : State) (c : Call) : List Op
   | .cancelling => [.terminated c.id, .lost c.id]
   | _ => []
 
-def invokeCandidates (p : Program) (s : State) (path : Path) (w : Workflow) (name : String) : List Op :=
+def invokeCandidates (p : Definition) (s : State) (path : Path) (w : Workflow) (name : String) : List Op :=
   match w.shape? p name with
   | some .none | some .entry => [.invoke path name none]
   | some (.single i c) => match s.resolveSingle path i c with
@@ -48,7 +48,7 @@ def invokeCandidates (p : Program) (s : State) (path : Path) (w : Workflow) (nam
     if d.outcome == .failed then none else some (.invoke path name (some d.source))
   | _ => []
 
-def deliveryCandidates (p : Program) (cfg : Config) (s : State) (r : Result) : List Op :=
+def deliveryCandidates (p : Definition) (cfg : Config) (s : State) (r : Result) : List Op :=
   match s.workflow? p r.run with
   | none => []
   | some w => w.connections.zipIdx.flatMap fun (c, i) =>
@@ -58,7 +58,7 @@ def deliveryCandidates (p : Program) (cfg : Config) (s : State) (r : Result) : L
           (if cfg.failures then [.transformFailed r.run i r.id] else [])
       | .discard => [.deliver r.run i r.id none]
 
-def taskCandidates (p : Program) (cfg : Config) (s : State) (e : Execution) : List Op :=
+def taskCandidates (p : Definition) (cfg : Config) (s : State) (e : Execution) : List Op :=
   let tasks := e.tasks.flatMap fun t =>
     match (s.taskSpec p e t.name).toOption, t.status with
     | some spec, .pending => match spec.input with
@@ -74,7 +74,7 @@ def taskCandidates (p : Program) (cfg : Config) (s : State) (e : Execution) : Li
   .closeExecution e.id :: tasks ++ outputs
 
 /-- Every operation that might be accepted; the step decides which ones are. --/
-def candidates (p : Program) (cfg : Config) (s : State) : List Op :=
+def candidates (p : Definition) (cfg : Config) (s : State) : List Op :=
   if !s.started then
     [.start (if ((p.workflow? p.main).bind (·.input)).isSome then some (value ["input"]) else none)]
   else match s.status with
@@ -92,7 +92,7 @@ def candidates (p : Program) (cfg : Config) (s : State) : List Op :=
       (s.calls.filter (·.status == .cancelling)).flatMap fun c => [.terminated c.id, .lost c.id]
   | _ => []
 
-def accepted (p : Program) (cfg : Config) (s : State) : List (Op × State) :=
+def accepted (p : Definition) (cfg : Config) (s : State) : List (Op × State) :=
   (candidates p cfg s).filterMap fun op => match step p s op with
     | .ok next => if next == s then none else some (op, next)
     | .error _ => none
@@ -113,7 +113,7 @@ def pick (cfg : Config) (s : State) (seed : Nat) (choices : List (Op × State)) 
   pool[(seed / cfg.disruption) % pool.length]?
 
 /-- A random walk until no operation is accepted, or the limit is reached. --/
-def walk (p : Program) (cfg : Config) (seed limit : Nat) : State × List Op := Id.run do
+def walk (p : Definition) (cfg : Config) (seed limit : Nat) : State × List Op := Id.run do
   let mut state : State := {}
   let mut trace : Array Op := #[]
   let mut seed := seed

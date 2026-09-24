@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Background, BackgroundVariant, MarkerType, Panel, ReactFlow, ReactFlowProvider, useNodesState, useReactFlow, useViewport } from '@xyflow/react';
 import type { Edge } from '@xyflow/react';
 import { Maximize, Minus, Plus } from 'lucide-react';
-import type { PlacementPresentations, Program } from '../types';
+import type { Definition, PlacementPresentations } from '../types';
 import { layoutWorkflow } from '../lib/layout';
 import type { RunOverlay } from '../lib/status';
 import { equalData } from '../lib/equal';
@@ -19,7 +19,7 @@ const fitOptions = { padding: { top: '84px', bottom: '48px', x: '40px' }, maxZoo
 type CanvasNode = PlacementFlowNode | InputFlowNode;
 
 export interface WorkflowCanvasProps {
-  program: Program;
+  definition: Definition;
   /** The workflow to draw, by id. */
   workflow: string;
   /** Status of one run of this workflow; without it the canvas shows the definition only. */
@@ -46,10 +46,10 @@ function CanvasControls() {
   </div></Panel>;
 }
 
-function Canvas({ program, workflow, overlay, selectedPlacement, highlightedPlacement, highlightedConnection, onSelectPlacement, onOpenWorkflow, presentations = emptyPresentations, theme = 'dark' }: WorkflowCanvasProps) {
+function Canvas({ definition, workflow, overlay, selectedPlacement, highlightedPlacement, highlightedConnection, onSelectPlacement, onOpenWorkflow, presentations = emptyPresentations, theme = 'dark' }: WorkflowCanvasProps) {
   const layout = useMemo(() => {
     const positions = Object.fromEntries(Object.entries(presentations).map(([name, p]) => [name, p.position]));
-    const result = layoutWorkflow(program, workflow, positions);
+    const result = layoutWorkflow(definition, workflow, positions);
     const nodes: CanvasNode[] = result.nodes.map(n => ({ id: `placement:${n.name}`, type: 'placement', position: n.position,
       data: { workflow: result.workflow.id, placement: n.placement, kind: n.kind, entry: n.entry, endpoint: n.endpoint, hasInput: n.entry || result.edges.some(e => e.connection.target === n.name) } }));
     if (result.input) nodes.push({ id: 'input', type: 'workflowInput', selectable: false, position: result.input.position, data: { type: result.input.type, placement: result.input.placement } });
@@ -57,7 +57,7 @@ function Canvas({ program, workflow, overlay, selectedPlacement, highlightedPlac
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 }, data: { index: e.index, connection: e.connection, kind: e.kind } } satisfies ConnectionFlowEdge));
     if (result.input) edges.push({ id: 'input', source: 'input', target: `placement:${result.input.placement}`, markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 } });
     return { nodes, edges, workflow: result.workflow };
-  }, [program, workflow, presentations]);
+  }, [definition, workflow, presentations]);
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(layout.nodes);
   useEffect(() => { setNodes(layout.nodes); }, [layout, setNodes]);
   const previous = useRef(new Map<string, CanvasNode>());

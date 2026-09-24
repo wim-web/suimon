@@ -11,7 +11,7 @@ that fail their transform). Each failure has exactly one source record, and the 
 determine the failure. -/
 
 section LedgerSection
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- The owner of a call failed: its invocation, or its task. -/
 def ownerFailed (s : State) (c : Call) : Bool :=
@@ -38,7 +38,7 @@ def callLedger (s : State) (c : Call) : Option Failure := do
     let e ← s.execution? c.owner
     pure { run := e.run, placement := e.placement, task := some name, cause }
 
-def deliveryLedger (p : Program) (s : State) (d : Delivery) : Option Failure := do
+def deliveryLedger (p : Definition) (s : State) (d : Delivery) : Option Failure := do
   guard (d.outcome == .failed)
   let w ← s.workflow? p d.run
   let c ← w.connections[d.connection]?
@@ -56,7 +56,7 @@ def taskOutputLedger (s : State) (r : TaskResult) : Option Failure := do
   pure { run := e.run, placement := e.placement, task := some r.task, cause := .transform }
 
 /-- The failures the records of `s` account for, one per source record. -/
-def ledger (p : Program) (s : State) : List Failure :=
+def ledger (p : Definition) (s : State) : List Failure :=
   s.calls.filterMap (callLedger s) ++ s.deliveries.filterMap (deliveryLedger p s) ++
     s.executions.flatMap (fun e => e.tasks.filterMap (taskInputLedger s e)) ++
     s.taskResults.filterMap (taskOutputLedger s)
@@ -112,7 +112,7 @@ theorem taskOutputLedger_eq (s : State) (r : TaskResult) : taskOutputLedger s r 
     rw [ite_eq_right h, hb]
     rfl
 
-theorem ledger_eq (p : Program) (s : State) : ledger p s = LedgerCore.ledgerL p s := by
+theorem ledger_eq (p : Definition) (s : State) : ledger p s = LedgerCore.ledgerL p s := by
   have h1 : callLedger s = LedgerCore.callL s := funext (callLedger_eq s)
   have h2 : deliveryLedger p s = LedgerCore.deliveryL p s := rfl
   have h3 : taskInputLedger s = LedgerCore.taskInputL s := funext fun e => funext (taskInputLedger_eq s e)
@@ -121,9 +121,9 @@ theorem ledger_eq (p : Program) (s : State) : ledger p s = LedgerCore.ledgerL p 
     LedgerCore.outputPart
   rw [h1, h2, h3, h4]
 
-/-- Every failure has exactly one source record, in every reachable state of a valid program, stopped
-    or not. Validity is needed: with two tasks of one name, a failed input transform fails both tasks
-    but records one failure (reviewers' counterexample `cex.lean`, CEX 5). -/
+/-- Every failure has exactly one source record, in every reachable state of a valid definition,
+    stopped or not. Validity is needed: with two tasks of one name, a failed input transform fails
+    both tasks but records one failure (reviewers' counterexample `cex.lean`, CEX 5). -/
 theorem Reachable.failures_ledger (valid : p.validate = .ok ()) (h : Reachable p s) :
     s.failures.Perm (ledger p s) := by
   rw [ledger_eq]

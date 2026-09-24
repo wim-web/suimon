@@ -97,7 +97,7 @@ end Lists
 /-! ### Invariants of reachable states that the ledger needs -/
 
 /-- The Round 2 invariants the ledger proof reads, bundled for one reachable state. -/
-structure LInv (p : Program) (s : State) : Prop where
+structure LInv (p : Definition) (s : State) : Prop where
   wk : s.WellKeyed
   lim : Limit.Inv s
   names : ∀ e ∈ s.executions, (e.tasks.map (·.name)).Nodup
@@ -107,7 +107,7 @@ structure LInv (p : Program) (s : State) : Prop where
   dinv : Delivery.Inv p s
   start : s = {} ∨ s.started = true
 
-theorem LInv.of_reachable {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
+theorem LInv.of_reachable {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
     LInv p s := by
   obtain ⟨own, act, -, -⟩ := Settle.reachable h
   exact ⟨h.wellKeyed, Limit.reachable_inv h, Reachable.taskNames valid h, own, act, Calls.reachable_keys h,
@@ -122,7 +122,7 @@ theorem nodup_of_map {α κ : Type} {f : α → κ} {l : List α} (h : (l.map f)
     exact List.nodup_cons.mpr ⟨fun ha => h.1 a ha rfl, ih h.2⟩
 
 section Inv
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 theorem LInv.calls_nodup (h : LInv p s) : s.calls.Nodup := nodup_of_map h.wk.calls
 theorem LInv.executions_nodup (h : LInv p s) : s.executions.Nodup := nodup_of_map h.wk.executions
@@ -183,7 +183,7 @@ def taskInputL (s : State) (e : Execution) (t : TaskState) : Option Failure :=
   else none
 
 /-- The ledger entry of a delivery. -/
-def deliveryL (p : Program) (s : State) (d : Delivery) : Option Failure := do
+def deliveryL (p : Definition) (s : State) (d : Delivery) : Option Failure := do
   guard (d.outcome == .failed)
   let w ← s.workflow? p d.run
   let c ← w.connections[d.connection]?
@@ -202,14 +202,14 @@ def taskOutputL (s : State) (r : TaskResult) : Option Failure :=
 /-- The entries of the calls. -/
 def callPart (s : State) : List Failure := s.calls.filterMap (callL s)
 /-- The entries of the deliveries. -/
-def deliveryPart (p : Program) (s : State) : List Failure := s.deliveries.filterMap (deliveryL p s)
+def deliveryPart (p : Definition) (s : State) : List Failure := s.deliveries.filterMap (deliveryL p s)
 /-- The entries of the tasks. -/
 def inputPart (s : State) : List Failure := s.executions.flatMap fun e => e.tasks.filterMap (taskInputL s e)
 /-- The entries of the task results. -/
 def outputPart (s : State) : List Failure := s.taskResults.filterMap (taskOutputL s)
 
 /-- The ledger, read through the views above. -/
-def ledgerL (p : Program) (s : State) : List Failure :=
+def ledgerL (p : Definition) (s : State) : List Failure :=
   callPart s ++ deliveryPart p s ++ inputPart s ++ outputPart s
 
 /-! ### Calls -/
@@ -344,7 +344,7 @@ end Calls
 /-! ### Task bodies, deliveries and task results -/
 
 section Others
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem find?_key_isSome {α κ : Type} [BEq κ] [LawfulBEq κ] (l : List α) (f : α → κ) (k : κ) :
     (l.find? fun x => f x == k).isSome = (l.map f).contains k := by
@@ -502,7 +502,7 @@ def StopSafe (s : State) : Prop :=
   ∀ c ∈ s.calls, (c.status = .running ∨ c.status = .fetching) → ∀ v, ownerView s c = some v → v.2.2 = false
 
 section Stop
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 theorem callPart_stop (h : StopSafe s) : callPart s.stop = callPart s := by
   unfold callPart

@@ -362,7 +362,7 @@ type shape struct {
 	merged []indexedConnection
 }
 
-func (w *Workflow) shape(p *Program, name string) (shape, bool) {
+func (w *Workflow) shape(p *Definition, name string) (shape, bool) {
 	pl, ok := w.placement(name)
 	if !ok {
 		return shape{}, false
@@ -429,7 +429,9 @@ func (s *State) view() view { return view{s: s} }
 
 func (s *State) run(path Path) (*Run, bool) { return s.view().run(path) }
 
-func (s *State) workflow(p *Program, path Path) (*Workflow, bool) { return s.view().workflow(p, path) }
+func (s *State) workflow(p *Definition, path Path) (*Workflow, bool) {
+	return s.view().workflow(p, path)
+}
 
 func (s *State) invocation(id string) (*Invocation, bool) { return s.view().invocation(id) }
 

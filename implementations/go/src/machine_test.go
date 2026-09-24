@@ -56,7 +56,7 @@ func checkMachine(t *testing.T, label string, m *machine) {
 }
 
 // agree compares Step and a fresh machine on op in s.
-func agree(t *testing.T, label string, p *Program, s *State, op Op) {
+func agree(t *testing.T, label string, p *Definition, s *State, op Op) {
 	t.Helper()
 	next, err := Step(p, s, op)
 	m := newMachine(p, cloneState(s))
@@ -80,9 +80,9 @@ func agree(t *testing.T, label string, p *Program, s *State, op Op) {
 }
 
 func TestMachineAgreesWithStep(t *testing.T) {
-	programs := append(append([]string{}, programNames...), extraPrograms...)
-	programs = append(programs, "limit")
-	for _, name := range programs {
+	definitions := append(append([]string{}, definitionNames...), extraDefinitions...)
+	definitions = append(definitions, "limit")
+	for _, name := range definitions {
 		p := load(t, name)
 		for _, cfg := range []Config{DefaultConfig(), {MaxYields: 3, Disruption: 40}} {
 			for seed := range 12 {
@@ -154,7 +154,7 @@ func TestMachineRejections(t *testing.T) {
 // The records of Recorder, which copies, and of the runtime's recorder, which changes its state
 // in place, are those of Transaction, and Check replays them to the state of the walk.
 func TestRecordersAgree(t *testing.T) {
-	for _, name := range append(append([]string{}, programNames...), extraPrograms...) {
+	for _, name := range append(append([]string{}, definitionNames...), extraDefinitions...) {
 		p := load(t, name)
 		for seed := range 8 {
 			label := fmt.Sprintf("%s seed %d", name, seed)
@@ -162,6 +162,7 @@ func TestRecordersAgree(t *testing.T) {
 			pure, owned := NewRecorder(p), newOwnedRecorder(p, &State{}, nil, 0)
 			s, known := &State{}, []Payload(nil)
 			var text strings.Builder
+			text.WriteString(EncodeHeader(p) + "\n")
 			for i, op := range ops {
 				identity := func(v string) (string, error) { return v, nil }
 				records, err := pure.RecordWith(op, identity)
@@ -194,7 +195,7 @@ func TestRecordersAgree(t *testing.T) {
 			if !pure.State().Equal(final) || !owned.machine.s.Equal(final) {
 				t.Fatalf("%s: the recorders reached another state", label)
 			}
-			c, err := Check(p, text.String())
+			c, err := Check(text.String(), sameDefinition(p))
 			if err != nil {
 				t.Fatalf("%s: %v", label, err)
 			}

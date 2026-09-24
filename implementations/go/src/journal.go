@@ -1,6 +1,7 @@
 package suimon
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,31 +36,48 @@ type RecoverableJournal interface {
 	Truncate(size int64) error
 }
 
+// ErrJournalLocked is wrapped by the error of CreateJournal and OpenJournal when another
+// FileJournal, in this process or another, has the file open.
+var ErrJournalLocked = errors.New("suimon: the journal is locked")
+
 // FileJournal is a RecoverableJournal in a file. Its methods must not be called concurrently; the
 // engine calls them from one goroutine.
+//
+// A FileJournal holds an exclusive lock on its file until Close: flock on Linux, macOS and the
+// BSDs, LockFileEx on Windows. Other platforms have no lock. The file is not opened for appending,
+// which on Windows would deny Truncate; the lock makes the journal the only writer of its file, so
+// Append writes at the end it finds.
 type FileJournal struct {
 	file *os.File
 }
 
 // CreateJournal creates a journal in a new file; it fails if the file exists.
 func CreateJournal(path string) (*FileJournal, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o644)
+	j, err := openJournal(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, err
 	}
 	// The new directory entry must survive a crash as well as the lines.
 	if err := syncDir(filepath.Dir(path)); err != nil {
-		f.Close()
+		j.Close()
 		return nil, err
 	}
-	return &FileJournal{file: f}, nil
+	return j, nil
 }
 
 // OpenJournal opens the journal in an existing file, to resume the execution it records.
 func OpenJournal(path string) (*FileJournal, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0)
+	return openJournal(path, os.O_RDWR, 0)
+}
+
+func openJournal(path string, flag int, perm os.FileMode) (*FileJournal, error) {
+	f, err := os.OpenFile(path, flag, perm)
 	if err != nil {
 		return nil, err
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, &os.PathError{Op: "lock", Path: path, Err: err}
 	}
 	return &FileJournal{file: f}, nil
 }
@@ -78,6 +96,9 @@ func syncDir(dir string) error {
 
 // Append writes lines at the end of the file.
 func (j *FileJournal) Append(lines []byte) error {
+	if _, err := j.file.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
 	_, err := j.file.Write(lines)
 	return err
 }
@@ -113,5 +134,12 @@ func (j *FileJournal) Truncate(size int64) error {
 // Name is the name of the file.
 func (j *FileJournal) Name() string { return j.file.Name() }
 
-// Close closes the file. Close it after the execution that writes it has ended.
-func (j *FileJournal) Close() error { return j.file.Close() }
+// Close releases the lock and closes the file. Close it after the execution that writes it has
+// ended.
+func (j *FileJournal) Close() error {
+	err := unlockFile(j.file)
+	if cerr := j.file.Close(); cerr != nil {
+		return cerr
+	}
+	return err
+}

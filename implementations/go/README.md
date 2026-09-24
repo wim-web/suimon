@@ -1,6 +1,6 @@
 # suimon Go 実装
 
-[Lean の定義](../../Suimon/)を Go に移した実装と、それを使ってプログラムを Go の関数で実行するランタイムです。ランタイムは移した状態遷移だけで実行を進め、[実行記録](../../schema/trace.schema.json)から再開します。
+[Lean の定義](../../Suimon/)を Go に移した実装と、それを使って workflow構成を Go の関数で実行するランタイムです。ランタイムは移した状態遷移だけで実行を進め、[実行記録](../../schema/trace.schema.json)から再開します。
 
 入口は [Engine](src/engine.go) と [Registry](src/registry.go) です。動く例として [playground](example/README.md) と [ランタイムのテスト](src/runtime_test.go) を参照してください。
 

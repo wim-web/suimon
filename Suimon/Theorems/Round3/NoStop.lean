@@ -16,7 +16,7 @@ so the step did not stop either. -/
 
 namespace NoStopAux
 
-variable {p : Program} {env : Env} {s t T : State}
+variable {p : Definition} {env : Env} {s t T : State}
 
 /-- A run of a state contained in `T` has the same workflow in `T`. -/
 theorem workflow?_eq (cov : Covers p T s) (hT : T.WellKeyed) {path : Path} (hr : (s.run? path).isSome) :
@@ -197,7 +197,7 @@ theorem taskOutput_continue (hs : Reachable p s) (hT : T.WellKeyed) (RT : RunCon
 end NoStopAux
 
 section NoStop
-variable {p : Program} {env : Env}
+variable {p : Definition} {env : Env}
 
 /-- If one conforming execution completes, no conforming execution of the same environment without the
     caller's cancel ever stops: every stopping step is a stop-policy failure, and the complete run met the

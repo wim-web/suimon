@@ -81,7 +81,7 @@ theorem indexFree_new_call {s : State} (hk : ResultKeys s) {c : Call} (hid : s.c
 
 /-- The call of a task that is ready has no task result yet: a task result comes from a call or a
     run of its task, and a task that has not begun has neither. -/
-theorem indexFree_new_taskCall {p : Program} {s : State} (linv : Limit.Inv s) (prov : Settle.Prov p s)
+theorem indexFree_new_taskCall {p : Definition} {s : State} (linv : Limit.Inv s) (prov : Settle.Prov p s)
     {e : Execution} {ts : TaskState} (he : e ∈ s.executions) (hts : ts ∈ e.tasks) (hready : ts.status = .ready)
     {c : Call} (howner : c.owner = e.id) (htask : c.task = some ts.name) (k : Nat) : IndexFree s c k := by
   have hb : ¬ Limit.Begun ts.status := fun h => h.2 hready
@@ -197,7 +197,7 @@ theorem setTaskResult_keys {s : State} {r : TaskResult} {x : TaskResult} (hr : r
   · exact ⟨r, hr, rfl, rfl, rfl⟩
   · exact ⟨x, hx, rfl, rfl, rfl⟩
 
-theorem step_callIndex {p : Program} {s t : State} {op : Op} (h : Reachable p s) (hci : CallIndexInv s)
+theorem step_callIndex {p : Definition} {s t : State} {op : Op} (h : Reachable p s) (hci : CallIndexInv s)
     (hs : step p s op = .ok t) : CallIndexInv t := by
   have wk := h.wellKeyed
   have rk := reachable_resultKeys h
@@ -377,7 +377,7 @@ theorem step_callIndex {p : Program} {s t : State} {op : Op} (h : Reachable p s)
     · exact hci.of_eq (CallsFrom.of_calls rfl) rfl rfl
     · exact hci.of_eq (CallsFrom.of_calls rfl) rfl rfl
 
-theorem reachable_callIndex {p : Program} {s : State} (h : Reachable p s) : CallIndexInv s := by
+theorem reachable_callIndex {p : Definition} {s : State} (h : Reachable p s) : CallIndexInv s := by
   induction h with
   | empty => intro c hc; simp at hc
   | step op hr hs ih => exact step_callIndex hr ih hs

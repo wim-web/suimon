@@ -15,10 +15,10 @@ half handles the rules that compute a value from a set of records (`settle`, `cl
 matter: `beginTask` in one run is matched by the completeness of the other. -/
 
 section CoversSection
-variable {p : Program} {env : Env}
+variable {p : Definition} {env : Env}
 
 /-- `Covers p T s`, read "`s` is contained in `T`". -/
-structure Covers (p : Program) (T s : State) : Prop where
+structure Covers (p : Definition) (T s : State) : Prop where
   runs : ∀ r ∈ s.runs, ∃ r' ∈ T.runs, r'.path = r.path ∧ r'.workflow = r.workflow ∧ r'.input = r.input ∧
     r'.owner = r.owner ∧ r'.task = r.task
   invocations : ∀ i ∈ s.invocations, ∃ i' ∈ T.invocations, i'.id = i.id ∧ i'.run = i.run ∧
@@ -45,7 +45,7 @@ structure Covers (p : Program) (T s : State) : Prop where
   /-- A completed execution of `s` has no task result in `T` beyond those of `s`. -/
   execution : ∀ e ∈ s.executions, e.complete = true → ∀ r ∈ T.taskResults, r.execution = e.id → r ∈ s.taskResults
 
-theorem covers_empty (p : Program) (T : State) : Covers p T {} where
+theorem covers_empty (p : Definition) (T : State) : Covers p T {} where
   runs _ h := nomatch h
   invocations _ h := nomatch h
   calls _ h := nomatch h
@@ -59,7 +59,7 @@ theorem covers_empty (p : Program) (T : State) : Covers p T {} where
 
 /-- The context of one step of run 1 (from `s` to `s'` by `op`) against the final state `T` of a
     complete run 2 of the same environment. -/
-structure StepCtx (p : Program) (env : Env) (T s : State) (op : Op) (s' : State) : Prop where
+structure StepCtx (p : Definition) (env : Env) (T s : State) (op : Op) (s' : State) : Prop where
   valid : p.validate = .ok ()
   run : ∃ tr, Conforming p env tr s
   conforms : Conforms env s op

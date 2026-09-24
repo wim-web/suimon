@@ -11,7 +11,7 @@ Single-run invariants of conforming executions that determinism needs. `callConf
 [14]; the other components are here. -/
 
 section RunConformSection
-variable {p : Program} {env : Env} {s t : State}
+variable {p : Definition} {env : Env} {s t : State}
 
 /-- A stop is never undone and only `conclude` from a running state completes the root run, so the
     state before an unstopped state is unstopped. -/
@@ -65,7 +65,7 @@ def OwnerConform (s : State) (c : Call) : Prop :=
 
 /-- A delivery holds what its transform gave (§4.2): the trigger through `discard`, otherwise the
     behavior's value or failure. -/
-def DeliveryConform (p : Program) (env : Env) (s : State) (d : Delivery) : Prop :=
+def DeliveryConform (p : Definition) (env : Env) (s : State) (d : Delivery) : Prop :=
   ∃ w c, s.workflow? p d.run = some w ∧ w.connections[d.connection]? = some c ∧
     match c.transform with
     | .discard => d.outcome = .trigger
@@ -80,7 +80,7 @@ def NotBegun (s : State) (e : Execution) (name : String) : Prop :=
 
 /-- Tasks follow the behavior's input and output transforms (§8.1); without a stop, a task past `ready`
     started its body unless its input transform failed. -/
-structure TaskConform (p : Program) (env : Env) (s : State) : Prop where
+structure TaskConform (p : Definition) (env : Env) (s : State) : Prop where
   input : ∀ e ∈ s.executions, ∀ t ∈ e.tasks, ∀ spec, s.taskSpec p e t.name = .ok spec → t.status ≠ .pending →
     match spec.input with
     | some (.declared _) =>
@@ -94,7 +94,7 @@ structure TaskConform (p : Program) (env : Env) (s : State) : Prop where
 
 /-- In a run that has not stopped, every failure was recorded under the continue policy (a stop policy
     would have stopped it, §11.3). -/
-structure PolicyConform (p : Program) (s : State) : Prop where
+structure PolicyConform (p : Definition) (s : State) : Prop where
   calls : ∀ c ∈ s.calls, (c.status = .failed ∨ c.status = .lost ∨ c.status = .cancelling ∨ c.status = .cancelled) →
     c.policy = .continue
   deliveries : ∀ d ∈ s.deliveries, d.outcome = .failed → ∀ w c pl, s.workflow? p d.run = some w →
@@ -105,7 +105,7 @@ structure PolicyConform (p : Program) (s : State) : Prop where
     s.taskSpec p e r.task = .ok spec → spec.policy = .continue
 
 /-- The single-run invariants of a conforming execution, in a state that has not stopped. -/
-structure RunConform (p : Program) (env : Env) (s : State) : Prop where
+structure RunConform (p : Definition) (env : Env) (s : State) : Prop where
   calls : ∀ c ∈ s.calls, CallConform env s c ∧ OwnerConform s c
   deliveries : ∀ d ∈ s.deliveries, DeliveryConform p env s d
   tasks : TaskConform p env s
@@ -167,7 +167,7 @@ theorem policyConform (h : Reachable p s) (us : Unstopped s) : PolicyConform p s
 
 /-- An invocation's input is what its trigger carries now: the run input for the entry, the delivered
     value otherwise (deliveries are immutable, and a Single connection carries at most one). -/
-def InputStable (p : Program) (s : State) : Prop :=
+def InputStable (p : Definition) (s : State) : Prop :=
   ∀ i ∈ s.invocations, ∃ r w, s.run? i.run = some r ∧ p.workflow? r.workflow = some w ∧
     Step.invocationInput p s r w i.placement i.trigger = .ok i.input
 
@@ -187,7 +187,7 @@ theorem Reachable.inputStable (valid : p.validate = .ok ()) (h : Reachable p s) 
       exact ⟨r', w, hr'', by rw [hwf]; exact hw, hinput'⟩
 
 /-- The Stream output of a concurrency is exactly its transformed task results (§8.3). -/
-def OutputResults (p : Program) (s : State) : Prop :=
+def OutputResults (p : Definition) (s : State) : Prop :=
   (∀ tr ∈ s.taskResults, ∀ v, tr.output = .value v → ∀ e cc, s.execution? tr.execution = some e →
       s.concurrencyOf p e = .ok cc → cc.output = .stream →
       ({ id := Key.taskOutput e.id tr.task tr.index, run := e.run, placement := e.placement, producer := e.id,

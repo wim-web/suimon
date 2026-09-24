@@ -7,10 +7,10 @@ namespace Suimon.Delivery
 open State
 
 section Placement
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- The placement of an invocation in the workflow of its run. --/
-def PlacementOf (p : Program) (s : State) (i : Invocation) (pl : Placement) : Prop :=
+def PlacementOf (p : Definition) (s : State) (i : Invocation) (pl : Placement) : Prop :=
   ∃ w, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl
 
 theorem PlacementOf.unique {i : Invocation} {pl pl' : Placement} (h : PlacementOf p s i pl) (h' : PlacementOf p s i pl') :
@@ -106,24 +106,24 @@ end Placement
 
 /-! ### Records after a step that belong to records from before -/
 
-theorem NewInvocation.fresh {p : Program} {s : State} {i : Invocation} (h : NewInvocation p s i) :
+theorem NewInvocation.fresh {p : Definition} {s : State} {i : Invocation} (h : NewInvocation p s i) :
     s.invocation? i.id = none := by
   obtain ⟨-, -, _, _, _, -, -, -, -, -, -, -, -, -, -, h⟩ := h
   exact h
 
-theorem NewInvocation.active {p : Program} {s : State} {i : Invocation} (h : NewInvocation p s i) :
+theorem NewInvocation.active {p : Definition} {s : State} {i : Invocation} (h : NewInvocation p s i) :
     i.status = .active := by
   obtain ⟨-, -, _, _, _, -, -, -, -, -, -, -, h, -⟩ := h
   exact h
 
-theorem NewInvocation.not_mem {p : Program} {s : State} {i i₀ : Invocation} (h : NewInvocation p s i)
+theorem NewInvocation.not_mem {p : Definition} {s : State} {i i₀ : Invocation} (h : NewInvocation p s i)
     (hi₀ : i₀ ∈ s.invocations) (hid : i.id = i₀.id) : False := by
   have := h.fresh
   rw [State.invocation?_eq_none_iff] at this
   exact this (List.mem_map.mpr ⟨i₀, hi₀, hid.symm⟩)
 
 section Owned
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- A call after a step, without a task, whose owner is an invocation from before, is a call from before. --/
 theorem call_of_old_owner (hs : step p s op = .ok t) {c : Call} (hc : c ∈ t.calls) (htask : c.task = none)
@@ -174,7 +174,7 @@ theorem setTask_executions_congr {s u : State} {e : Execution} {ts : TaskState} 
   simp only [State.setTask_eq, State.setExecution_executions, h]
 
 /-- What `closeExecution` checked before completing an execution. --/
-def ExecClosed (p : Program) (s t : State) (e₀ : Execution) : Prop :=
+def ExecClosed (p : Definition) (s t : State) (e₀ : Execution) : Prop :=
   ∃ c, s.concurrencyOf p e₀ = .ok c ∧ e₀.tasks.all (s.taskEnded e₀) = true ∧
     (s.taskResults.filter fun x => x.execution == e₀.id &&
       ((c.tasks.filter (·.output.isSome)).map (·.name)).contains x.task).all (·.output != .pending) = true ∧
@@ -182,7 +182,7 @@ def ExecClosed (p : Program) (s t : State) (e₀ : Execution) : Prop :=
 
 open State in
 /-- Only `closeExecution` completes an execution, after checking its tasks and outputs (§8.3). --/
-theorem step_execution_completed {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
+theorem step_execution_completed {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
     {e₀ e : Execution} (he₀ : e₀ ∈ s.executions) (he : e ∈ t.executions) (hid : e.id = e₀.id) :
     e.complete = e₀.complete ∨ ExecClosed p s t e₀ := by
   have same : e ∈ s.executions → e.complete = e₀.complete ∨ ExecClosed p s t e₀ := fun h =>
@@ -317,13 +317,13 @@ theorem step_execution_completed {p : Program} {s t : State} {op : Op} (wk : s.W
 
 /-- What completing a run checked: every placement of its workflow settled; and no invocation was
     added. --/
-def RunClosed (p : Program) (s t : State) (r₀ : Run) : Prop :=
+def RunClosed (p : Definition) (s t : State) (r₀ : Run) : Prop :=
   (∃ w, p.workflow? r₀.workflow = some w ∧ w.placements.all (fun pl => (s.settled? r₀.path pl.name).isSome) = true) ∧
   (∀ i ∈ t.invocations, InvOld s i)
 
 open State in
 /-- Only `closeRun` and `conclude` complete a run, after every placement settled (§4.5, §13.3). --/
-theorem step_run_completed {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hfresh : s.runs = [] ∨ s.started = true)
+theorem step_run_completed {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hfresh : s.runs = [] ∨ s.started = true)
     (hs : step p s op = .ok t) {r₀ r : Run} (hr₀ : r₀ ∈ s.runs) (hr : r ∈ t.runs) (hp : r.path = r₀.path) :
     r.complete = r₀.complete ∨ RunClosed p s t r₀ := by
   have same : r ∈ s.runs → r.complete = r₀.complete ∨ RunClosed p s t r₀ := fun h =>
@@ -434,7 +434,7 @@ theorem step_run_completed {p : Program} {s t : State} {op : Op} (wk : s.WellKey
 /-! ### Invocations that ended -/
 
 /-- An invocation that is no longer active is left unchanged by a step. --/
-theorem frozen {p : Program} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) {i₀ i : Invocation}
+theorem frozen {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) {i₀ i : Invocation}
     (hi₀ : i₀ ∈ s.invocations) (hna : i₀.status ≠ .active) (hi : i ∈ t.invocations) (hid : i.id = i₀.id) : i = i₀ := by
   rcases step_invocation_change inv.wk hs hi₀ hi hid with h | ⟨-, -, -, -, -, hc⟩
   · exact h
@@ -450,7 +450,7 @@ theorem frozen {p : Program} {s t : State} {op : Op} (inv : Inv p s) (hs : step 
       simp [hRc] at this
 
 /-- An ended invocation stays ended: nothing it owns starts again. --/
-theorem ended_kept {p : Program} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) {i₀ i : Invocation}
+theorem ended_kept {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) {i₀ i : Invocation}
     (hi₀ : i₀ ∈ s.invocations) (hend : s.invocationEnded i₀ = true) (hi : i ∈ t.invocations) (hid : i.id = i₀.id) :
     t.invocationEnded i = true := by
   have K := inv.kept hs

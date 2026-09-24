@@ -9,7 +9,7 @@ open State
 /-! ## [21] Round3/CoversView.lean — task F3 -/
 
 section CoversView
-variable {p : Program} {env : Env} {s s' T : State}
+variable {p : Definition} {env : Env} {s s' T : State}
 
 /-- At a `settle` of run 1 (state `s`), the view of the placement agrees with the complete run 2 (state
     `T`), shape by shape. Forward inclusions come from `Covers`. Backward ones: for a Stream input, from
@@ -79,7 +79,7 @@ theorem settle_view_agree {tr tr₂ : List Op} {path : Path} {r : Run} {w : Work
     | merge cs =>
       -- The inputs of a Merge are Single (`shape_fits`).
       intro jc hjc
-      obtain ⟨sh, k, hsh, -, -, -, -, hmerge⟩ := shape_fits valid w (Program.workflow?_eq_some hw).1 pl
+      obtain ⟨sh, k, hsh, -, -, -, -, hmerge⟩ := shape_fits valid w (Definition.workflow?_eq_some hw).1 pl
         (Workflow.placement?_eq_some hpl).1
       rw [hshape] at hsh
       cases hsh

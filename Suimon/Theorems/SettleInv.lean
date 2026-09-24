@@ -14,7 +14,7 @@ namespace Suimon.Settle
 open State
 
 /-- The placement a run's workflow declares under a name. --/
-def placementAt (p : Program) (s : State) (path : Path) (name : String) : Option Placement :=
+def placementAt (p : Definition) (s : State) (path : Path) (name : String) : Option Placement :=
   (s.workflow? p path).bind (·.placement? name)
 
 /-- Controls that are invoked: calls, branches and concurrencies. --/
@@ -26,7 +26,7 @@ def invocable : Control → Bool
 def included (cc : Concurrency) : List String := (cc.tasks.filter (·.output.isSome)).map (·.name)
 
 /-- The trigger of an invocation is available on its placement's input (§3.1, §5.3). --/
-def TriggerOk (p : Program) (s : State) (w : Workflow) (i : Invocation) : Prop :=
+def TriggerOk (p : Definition) (s : State) (w : Workflow) (i : Invocation) : Prop :=
   match w.shape? p i.placement with
   | some .none | some .entry => i.trigger = none
   | some (.single idx c) => ∃ src v, i.trigger = some src ∧ s.resolveSingle i.run idx c = .value src v
@@ -37,7 +37,7 @@ def TriggerOk (p : Program) (s : State) (w : Workflow) (i : Invocation) : Prop :
     invocation, an execution, or a completed sub-workflow run. A call without a Stream contract
     and an execution or run give results only to a succeeded invocation; a Stream call gives
     results to an invocation that is never skipped. --/
-def ResultOk (p : Program) (s : State) (r : Result) : Prop :=
+def ResultOk (p : Definition) (s : State) (r : Result) : Prop :=
   (∃ x ∈ s.settled, x.run = r.run ∧ x.placement = r.placement ∧ x.outcome = .normal ∧ x.arms = []) ∨
   (∃ c ∈ s.calls, c.task = none ∧ ∃ i ∈ s.invocations, i.id = c.owner ∧ i.run = r.run ∧ i.placement = r.placement ∧
     ((c.stream = false ∧ i.status = .succeeded ∧ r.arm = i.arm) ∨ (c.stream = true ∧ i.status ≠ .skipped))) ∨
@@ -48,7 +48,7 @@ def ResultOk (p : Program) (s : State) (r : Result) : Prop :=
     ∃ pl wf out, placementAt p s i.run i.placement = some pl ∧ pl.control = .call (.workflow wf out))
 
 /-- Layer 1: who owns each call, run and execution, and where each invocation is placed. --/
-structure Own (p : Program) (s : State) : Prop where
+structure Own (p : Definition) (s : State) : Prop where
   /-- A call of an invocation has the invocation's identity and belongs to a function call or a
       branch; its Stream flag follows the function's contract. --/
   callNone : ∀ c ∈ s.calls, c.task = none → c.id = c.owner ∧ ∃ i ∈ s.invocations, i.id = c.owner ∧ ∃ pl,
@@ -78,7 +78,7 @@ structure Own (p : Program) (s : State) : Prop where
     invocable pl.control = true
 
 /-- Layer 2: what keeps an owner active. --/
-structure Active (p : Program) (s : State) : Prop where
+structure Active (p : Definition) (s : State) : Prop where
   /-- A running or fetching call keeps its invocation active. --/
   callActive : ∀ c ∈ s.calls, c.task = none → (c.status = .running ∨ c.status = .fetching) →
     ∃ i ∈ s.invocations, i.id = c.owner ∧ i.status = .active
@@ -101,7 +101,7 @@ structure Active (p : Program) (s : State) : Prop where
   activeArm : ∀ i ∈ s.invocations, i.status = .active → i.arm = none
 
 /-- Layer 3: where triggers, results, task results and deliveries come from. --/
-structure Prov (p : Program) (s : State) : Prop where
+structure Prov (p : Definition) (s : State) : Prop where
   /-- An invocation took a trigger available on its placement's input. --/
   invTrigger : ∀ i ∈ s.invocations, ∃ w, s.workflow? p i.run = some w ∧ TriggerOk p s w i
   results : ∀ r ∈ s.results, ResultOk p s r
@@ -126,7 +126,7 @@ structure Prov (p : Program) (s : State) : Prop where
 /-- Why a settled placement takes no new input: the invocation for its trigger exists, or its
     Single input will never carry a value, or its Stream input ended and each delivered element
     started an invocation (§10.3). --/
-def Closed (p : Program) (s : State) (x : Settled) (w : Workflow) (pl : Placement) : Prop :=
+def Closed (p : Definition) (s : State) (x : Settled) (w : Workflow) (pl : Placement) : Prop :=
   match w.shape? p x.placement with
   | some .none | some .entry =>
     invocable pl.control = true → ∃ i ∈ s.invocationsOf x.run x.placement, i.trigger = none
@@ -140,7 +140,7 @@ def Closed (p : Program) (s : State) (x : Settled) (w : Workflow) (pl : Placemen
   | _ => True
 
 /-- The settlement invariant. --/
-structure SettledInv (p : Program) (s : State) : Prop where
+structure SettledInv (p : Definition) (s : State) : Prop where
   /-- The invocations of a settled placement ended (§10.3). --/
   ended : ∀ x ∈ s.settled, ∀ i ∈ s.invocationsOf x.run x.placement, s.invocationEnded i = true
   closed : ∀ x ∈ s.settled, ∃ w pl, s.workflow? p x.run = some w ∧ w.placement? x.placement = some pl ∧

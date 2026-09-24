@@ -14,7 +14,7 @@ theorem accept_results {s t : State} {c : Call} {index : Nat} {value : Value} {a
 
 open State in
 /-- A step accepts at most one result. --/
-theorem step_results_eq {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_results_eq {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     t.results = s.results ∨ ∃ x, t.results = s.results ++ [x] := by
   cases op with
   | start input =>
@@ -97,7 +97,7 @@ theorem step_results_eq {p : Program} {s t : State} {op : Op} (hs : step p s op 
   | conclude =>
     obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact Or.inl rfl
 
-theorem step_new_result_unique {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) {r r' : Result}
+theorem step_new_result_unique {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) {r r' : Result}
     (hr : r ∈ t.results) (hnew : r ∉ s.results) (hr' : r' ∈ t.results) (hnew' : r' ∉ s.results) : r = r' := by
   rcases step_results_eq hs with h | ⟨x, h⟩
   · exact absurd (h ▸ hr) hnew
@@ -105,7 +105,7 @@ theorem step_new_result_unique {p : Program} {s t : State} {op : Op} (hs : step 
     rw [hr.resolve_left hnew, hr'.resolve_left hnew']
 
 section
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- A placement with a Single output has at most one invocation in a run: its trigger is fixed by the
     input shape (§5.3). --/

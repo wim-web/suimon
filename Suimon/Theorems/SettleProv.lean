@@ -7,7 +7,7 @@ namespace Suimon.Settle
 
 open State
 
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem delivery?_of_prefix (h : s.deliveries <+: t.deliveries) {path : Path} {index : Nat} {source : ResultId}
     {d : Delivery} (hd : s.delivery? path index source = some d) : t.delivery? path index source = some d := by
@@ -54,7 +54,7 @@ theorem TriggerOk.mono {w : Workflow} {i i' : Invocation} (h : TriggerOk p s w i
     | merge cs => exact h
 
 /-- Every execution names a concurrency of its run's workflow. --/
-def ExecsResolved (p : Program) (s : State) : Prop := ∀ e ∈ s.executions, ∃ cc, s.concurrencyOf p e = .ok cc
+def ExecsResolved (p : Definition) (s : State) : Prop := ∀ e ∈ s.executions, ∃ cc, s.concurrencyOf p e = .ok cc
 
 theorem Own.execsResolved (own : Own p s) : ExecsResolved p s :=
   fun _ he => (own.exec_concurrency he).imp fun _ h => h.1
@@ -79,7 +79,7 @@ theorem concurrencyOf_back (hcc : ExecsResolved p s) (hw : KeepsWorkflows p s t)
   exact hcc0
 
 /-- Everything a result's origin refers to persists. --/
-structure Persists (p : Program) (s t : State) : Prop where
+structure Persists (p : Definition) (s t : State) : Prop where
   settled : ∀ x ∈ s.settled, x ∈ t.settled
   calls : ∀ c ∈ s.calls, ∃ c' ∈ t.calls, callKey c' = callKey c
   executions : ∀ e ∈ s.executions, ∃ e' ∈ t.executions, execKey e' = execKey e
@@ -89,7 +89,7 @@ structure Persists (p : Program) (s t : State) : Prop where
 /-- How an invocation may change without breaking the origin of its results: it keeps its status
     and arm, or it was active and changes so that a Stream call's invocation is not skipped and an
     execution's invocation with an output succeeds. --/
-def Compat (p : Program) (s : State) (i i' : Invocation) : Prop :=
+def Compat (p : Definition) (s : State) (i i' : Invocation) : Prop :=
   (i'.status = i.status ∧ i'.arm = i.arm) ∨
   (i.status = .active ∧ (∀ c ∈ s.calls, c.task = none → c.owner = i.id → c.stream = true → i'.status ≠ .skipped) ∧
     (∀ e ∈ s.executions, e.id = i.id → (∃ tr ∈ s.taskResults, tr.execution = e.id ∧

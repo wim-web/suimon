@@ -67,7 +67,7 @@ theorem run?_perm (wk : S.WellKeyed) (h : S.runs.Perm T.runs) (path : Path) : S.
     simp only [beq_iff_eq] at hx hy
     rw [hx, hy]
 
-theorem workflow?_perm {p : Program} (wk : S.WellKeyed) (h : S.runs.Perm T.runs) (path : Path) :
+theorem workflow?_perm {p : Definition} (wk : S.WellKeyed) (h : S.runs.Perm T.runs) (path : Path) :
     S.workflow? p path = T.workflow? p path := by
   unfold State.workflow?
   rw [run?_perm wk h]
@@ -103,7 +103,7 @@ Every part of the ledger reads the records through lookups by unique keys (`invo
 `execution?`, `call?`, `workflow?`) or through `any`, so it is the same function on permuted records. -/
 
 section LedgerPerm
-variable {p : Program} {S T : State}
+variable {p : Definition} {S T : State}
 
 theorem ownerFailed_perm (wk : S.WellKeyed) (hinv : S.invocations.Perm T.invocations)
     (hexec : S.executions.Perm T.executions) (c : Call) : ownerFailed S c = ownerFailed T c := by
@@ -154,7 +154,7 @@ So a complete state was concluded from a running state that was never cancelled,
 further step. -/
 
 section Root
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- The status `conclude` computes from a running state whose root run executes `w` (§11.4, §13.3). -/
 def concludedStatus (w : Workflow) (s : State) : Status :=
@@ -301,7 +301,7 @@ theorem step_root (hs : step p s op = .ok t) : RootStep op s t := by
 
 /-- The flags of a reachable state: a cancelled workflow is no longer running, and a complete one was
     concluded from a running state that was never cancelled. -/
-def Flags (p : Program) (s : State) : Prop :=
+def Flags (p : Definition) (s : State) : Prop :=
   (s.cancelled = true → s.status ≠ .running) ∧
   (Done s → ∃ r w, s.run? [] = some r ∧ p.workflow? r.workflow = some w ∧ s.started = true ∧
     s.cancelled = false ∧ s.status = concludedStatus w s)
@@ -348,7 +348,7 @@ end Root
 /-! ### The records of a complete state -/
 
 section Records
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- In a complete state every run and execution completed, every call ended, and no invocation is
     active (Round 2 `Reachable.done_complete`, `Delivery.invocation_ended`). -/

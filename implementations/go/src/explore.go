@@ -29,7 +29,7 @@ func ExploreValue(parts ...string) string {
 	return Identity(append([]string{"value"}, parts...)...)
 }
 
-func armsOf(p *Program, v view, c *Call) []string {
+func armsOf(p *Definition, v view, c *Call) []string {
 	i, ok := v.invocation(c.Owner)
 	if !ok {
 		return nil
@@ -48,7 +48,7 @@ func armsOf(p *Program, v view, c *Call) []string {
 	return nil
 }
 
-func callCandidates(p *Program, cfg Config, s *State, c *Call) []Op {
+func callCandidates(p *Definition, cfg Config, s *State, c *Call) []Op {
 	failures := func(fetching bool) []Op {
 		if !cfg.Failures {
 			return nil
@@ -83,7 +83,7 @@ func callCandidates(p *Program, cfg Config, s *State, c *Call) []Op {
 	return nil
 }
 
-func invokeCandidates(p *Program, s *State, path Path, w *Workflow, name string) []Op {
+func invokeCandidates(p *Definition, s *State, path Path, w *Workflow, name string) []Op {
 	sh, ok := w.shape(p, name)
 	if !ok {
 		return nil
@@ -107,7 +107,7 @@ func invokeCandidates(p *Program, s *State, path Path, w *Workflow, name string)
 	return nil
 }
 
-func deliveryCandidates(p *Program, cfg Config, s *State, r *Result) []Op {
+func deliveryCandidates(p *Definition, cfg Config, s *State, r *Result) []Op {
 	w, ok := s.workflow(p, r.Run)
 	if !ok {
 		return nil
@@ -133,7 +133,7 @@ func deliveryCandidates(p *Program, cfg Config, s *State, r *Result) []Op {
 	return ops
 }
 
-func taskCandidates(p *Program, cfg Config, s *State, e *Execution) []Op {
+func taskCandidates(p *Definition, cfg Config, s *State, e *Execution) []Op {
 	ops := []Op{OpCloseExecution{e.ID}}
 	for _, t := range e.Tasks {
 		spec, err := s.view().taskSpec(p, e, t.Name)
@@ -170,7 +170,7 @@ func taskCandidates(p *Program, cfg Config, s *State, e *Execution) []Op {
 }
 
 // Candidates are every operation that might be accepted; Step decides which ones are.
-func Candidates(p *Program, cfg Config, s *State) []Op {
+func Candidates(p *Definition, cfg Config, s *State) []Op {
 	if !s.Started {
 		var input *string
 		if w, ok := p.workflow(p.Main); ok && w.Input != nil {
@@ -234,7 +234,7 @@ type Choice struct {
 }
 
 // Accepted are the candidates that Step accepts and that change the state.
-func Accepted(p *Program, cfg Config, s *State) []Choice {
+func Accepted(p *Definition, cfg Config, s *State) []Choice {
 	var choices []Choice
 	for _, op := range Candidates(p, cfg, s) {
 		next, err := Step(p, s, op)
@@ -299,7 +299,7 @@ func Pick(cfg Config, s *State, seed uint64, choices []Choice) (Choice, bool) {
 
 // Walk is a random walk from the state before the start until no operation is accepted, or limit
 // operations were taken. It returns the final state and the operations.
-func Walk(p *Program, cfg Config, seed uint64, limit int) (*State, []Op) {
+func Walk(p *Definition, cfg Config, seed uint64, limit int) (*State, []Op) {
 	state := &State{}
 	var trace []Op
 	for range limit {

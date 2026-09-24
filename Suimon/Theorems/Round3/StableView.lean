@@ -8,7 +8,7 @@ namespace Suimon.Round3.StableAux
 open State
 
 section StableView
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 theorem invocationsOf_nodup (wk : s.WellKeyed) (path : Path) (name : String) :
     (s.invocationsOf path name).Nodup :=

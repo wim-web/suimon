@@ -6,7 +6,7 @@ namespace Routing
 
 /-! ### Static lookups -/
 
-theorem workflow?_eq_some {p : Program} {s : State} {path : Path} {w : Workflow} :
+theorem workflow?_eq_some {p : Definition} {s : State} {path : Path} {w : Workflow} :
     s.workflow? p path = some w ↔ ∃ r, s.run? path = some r ∧ p.workflow? r.workflow = some w := by
   unfold State.workflow?
   exact option_bind_eq_some
@@ -23,7 +23,7 @@ theorem mem_inputs {w : Workflow} {name : String} {i : Nat} {c : Connection} (h 
   · simp [ht] at heq
 
 /-- A Single or Stream input comes through the one input connection of the placement. --/
-theorem shape?_connection {p : Program} {w : Workflow} {name : String} {i : Nat} {c : Connection}
+theorem shape?_connection {p : Definition} {w : Workflow} {name : String} {i : Nat} {c : Connection}
     (h : w.shape? p name = some (.single i c) ∨ w.shape? p name = some (.stream i c)) :
     w.connections[i]? = some c ∧ c.target = name := by
   suffices w.inputs name = [(i, c)] from mem_inputs (this ▸ List.mem_singleton_self _)
@@ -94,7 +94,7 @@ theorem of_runs_eq_setRun {path : Path} {r : Run} (hr : s.run? path = some r)
     exact ⟨{ r with complete := true }, by rw [hr]; rfl, rfl⟩
   · exact ⟨r', hr', rfl⟩
 
-theorem workflow? {p : Program} (h : RunsKept s t) {path : Path} {w : Workflow}
+theorem workflow? {p : Definition} (h : RunsKept s t) {path : Path} {w : Workflow}
     (hw : s.workflow? p path = some w) : t.workflow? p path = some w := by
   obtain ⟨r, hr, hw⟩ := workflow?_eq_some.mp hw
   obtain ⟨r', hr', hrw⟩ := h hr
@@ -104,7 +104,7 @@ end RunsKept
 
 open State in
 /-- A step never removes a run or changes its workflow; closing a run only marks it complete. --/
-theorem step_runsKept {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t)
+theorem step_runsKept {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
     (h : s.runs = [] ∨ s.started = true) : RunsKept s t := by
   cases op with
   | start input =>
@@ -190,7 +190,7 @@ theorem step_runsKept {p : Program} {s t : State} {op : Op} (hs : step p s op = 
     · exact .of_runs_eq rfl
 
 /-- Before the start there are no runs; afterwards the workflow stays started. --/
-theorem runs_nil_or_started {p : Program} {s : State} (h : Reachable p s) : s.runs = [] ∨ s.started = true :=
+theorem runs_nil_or_started {p : Definition} {s : State} (h : Reachable p s) : s.runs = [] ∨ s.started = true :=
   h.eq_empty_or_started.imp (fun he => by rw [he]) id
 
 /-! ### Invocations keep their run, placement and trigger -/
@@ -243,7 +243,7 @@ end InvocationsKept
 open State in
 /-- Every invocation after a step is one from before with the same run, placement and trigger, or
     the one this step invoked. --/
-theorem step_invocations {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_invocations {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ x ∈ t.invocations, (∃ y ∈ s.invocations, y.run = x.run ∧ y.placement = x.placement ∧ y.trigger = x.trigger) ∨
       op = .invoke x.run x.placement x.trigger := by
   intro x hx
@@ -343,7 +343,7 @@ theorem failCall_deliveries {s t : State} {c : Call} {status : CallStatus} {caus
 
 open State in
 /-- Every delivery after a step is one from before, or one this step checked with `deliveryTarget`. --/
-theorem step_deliveries {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_deliveries {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ d ∈ t.deliveries, d ∈ s.deliveries ∨ ∃ w c, Step.deliveryTarget p s d.run d.connection d.source = .ok (w, c) := by
   intro d hd
   have keep : t.deliveries = s.deliveries →
@@ -432,7 +432,7 @@ theorem step_deliveries {p : Program} {s t : State} {op : Op} (hs : step p s op 
 end Routing
 
 /-- A delivery carries a result of its connection's source, on the connection's arm for a branch (§6, §7.2). --/
-theorem Reachable.deliveries_eligible {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.deliveries_eligible {p : Definition} {s : State} (h : Reachable p s) :
     ∀ d ∈ s.deliveries, ∃ r ∈ s.results, r.id = d.source ∧ r.run = d.run ∧
       ∃ w c, s.workflow? p d.run = some w ∧ w.connections[d.connection]? = some c ∧ r.placement = c.source ∧
         (c.arm = none ∨ r.arm = c.arm) := by
@@ -452,7 +452,7 @@ theorem Reachable.deliveries_eligible {p : Program} {s : State} (h : Reachable p
 
 /-- An invocation with a trigger starts only from a value delivered on its input connection (§5.3, §7.2);
     a failed transform starts nothing (§4.2). --/
-theorem Reachable.invocations_triggered {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.invocations_triggered {p : Definition} {s : State} (h : Reachable p s) :
     ∀ i ∈ s.invocations, ∀ src, i.trigger = some src →
       ∃ d ∈ s.deliveries, d.run = i.run ∧ d.source = src ∧ d.outcome ≠ .failed ∧
         ∃ w c, s.workflow? p i.run = some w ∧ w.connections[d.connection]? = some c ∧ c.target = i.placement := by
@@ -487,7 +487,7 @@ theorem Reachable.invocations_triggered {p : Program} {s : State} (h : Reachable
 
 /-- A branch result carries the arm its judge selected, so a connection of another arm never
     delivers it, and that arm's target and transform never see it (§7.2). --/
-theorem Reachable.other_arms_untouched {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.other_arms_untouched {p : Definition} {s : State} (h : Reachable p s) :
     ∀ d ∈ s.deliveries, ∀ r ∈ s.results, r.id = d.source → ∀ w c, s.workflow? p d.run = some w →
       w.connections[d.connection]? = some c → ∀ a, c.arm = some a → r.arm = some a := by
   intro d hd r hr hid w c hw hc a ha
@@ -503,7 +503,7 @@ theorem Reachable.other_arms_untouched {p : Program} {s : State} (h : Reachable 
   · rw [harm, ha]
 
 /-- An invocation belongs to an existing run, and a placement of that run's workflow. --/
-theorem Reachable.invocations_placed {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.invocations_placed {p : Definition} {s : State} (h : Reachable p s) :
     ∀ i ∈ s.invocations, ∃ w, s.workflow? p i.run = some w ∧ (w.placement? i.placement).isSome := by
   induction h with
   | empty => intro i hi; cases hi

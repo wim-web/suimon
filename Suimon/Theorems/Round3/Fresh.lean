@@ -7,7 +7,7 @@ open State
 /-! ## [5] Round3/Fresh.lean — task B3 -/
 
 section FreshSection
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- (N5) Every identity a step creates is free until that step, so no `DUPLICATE_*` guard blocks an
     operation the engine or a call needs. -/

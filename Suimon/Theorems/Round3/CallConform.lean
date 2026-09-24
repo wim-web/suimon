@@ -12,7 +12,7 @@ would not lead to an unstopped state. The helpers are in `CallConformBase`, `Cal
 `CallConformStep`. -/
 
 section CallConformSection
-variable {p : Program} {env : Env} {s : State}
+variable {p : Definition} {env : Env} {s : State}
 
 /-- In a conforming execution that has not stopped, every call stands where its script puts it and its
     owner carries its end. -/

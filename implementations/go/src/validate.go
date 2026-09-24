@@ -7,8 +7,8 @@ import (
 )
 
 // Validate performs the structural checks of §14 and returns the first failed check, with the
-// message and in the order of Suimon/Validate.lean. run executes only programs accepted here.
-func (p *Program) Validate() error {
+// message and in the order of Suimon/Validate.lean. run executes only definitions accepted here.
+func (p *Definition) Validate() error {
 	if !unique(ids(p.Functions, func(f FunctionDecl) string { return f.ID })) {
 		return errors.New("duplicate function id")
 	}
@@ -114,7 +114,7 @@ func workflowRefs(c Control) []string {
 }
 
 // callsAcyclic: a workflow may not call itself, directly or through other workflows (§13.1).
-func (p *Program) callsAcyclic() bool {
+func (p *Definition) callsAcyclic() bool {
 	var edges []edge
 	for _, w := range p.Workflows {
 		for _, pl := range w.Placements {
@@ -134,24 +134,29 @@ func (w *Workflow) acyclic() bool {
 	return acyclic(edges, len(w.Placements), ids(w.Placements, func(pl Placement) string { return pl.Name }))
 }
 
-func (p *Program) validateBody(at string, b Body) error {
+// validateBody checks a call body and returns its input, nil for a body without input.
+func (p *Definition) validateBody(at string, b Body) (*ValueType, error) {
 	if !b.Workflow {
-		if _, ok := p.function(b.ID); !ok {
-			return fmt.Errorf("%s: unknown function %s", at, b.ID)
+		f, ok := p.function(b.ID)
+		if !ok {
+			return nil, fmt.Errorf("%s: unknown function %s", at, b.ID)
 		}
-		return nil
+		return copyPtr(f.Input), nil
 	}
 	w, ok := p.workflow(b.ID)
 	if !ok {
-		return fmt.Errorf("%s: unknown workflow %s", at, b.ID)
+		return nil, fmt.Errorf("%s: unknown workflow %s", at, b.ID)
 	}
 	if _, ok := w.placement(b.Output); !ok {
-		return fmt.Errorf("%s: workflow %s has no placement %s", at, b.ID, b.Output)
+		return nil, fmt.Errorf("%s: workflow %s has no placement %s", at, b.ID, b.Output)
 	}
 	if !w.isEndpoint(b.Output) {
-		return fmt.Errorf("%s: %s is not an endpoint of workflow %s", at, b.Output, b.ID)
+		return nil, fmt.Errorf("%s: %s is not an endpoint of workflow %s", at, b.Output, b.ID)
 	}
-	return nil
+	if w.Input == nil {
+		return nil, nil
+	}
+	return ptr(w.Input.Type), nil
 }
 
 // validateTimeout: timeouts are for function calls and branch judges; element timeouts only for
@@ -172,17 +177,14 @@ func validateTimeout(at string, timeout Timeout, function *Contract, judge bool)
 	return nil
 }
 
-func (p *Program) validateTask(at string, c *Concurrency, task *TaskSpec) error {
+func (p *Definition) validateTask(at string, c *Concurrency, task *TaskSpec) error {
 	at = fmt.Sprintf("%s task %s", at, task.Name)
 	if task.Name == "" {
 		return fmt.Errorf("%s: empty task name", at)
 	}
-	if err := p.validateBody(at, task.Body); err != nil {
+	input, err := p.validateBody(at, task.Body)
+	if err != nil {
 		return err
-	}
-	input, known := p.bodyInput(task.Body)
-	if !known {
-		return fmt.Errorf("%s: unknown body", at)
 	}
 	switch {
 	case input == nil && task.Input == nil:
@@ -241,7 +243,7 @@ func (p *Program) validateTask(at string, c *Concurrency, task *TaskSpec) error 
 	return validateTimeout(at, task.Timeout, function, false)
 }
 
-func (p *Program) validateConnection(w *Workflow, c *Connection) error {
+func (p *Definition) validateConnection(w *Workflow, c *Connection) error {
 	at := fmt.Sprintf("%s: connection %s -> %s", w.ID, c.Source, c.Target)
 	source, ok := w.placement(c.Source)
 	if !ok {
@@ -292,7 +294,7 @@ func (p *Program) validateConnection(w *Workflow, c *Connection) error {
 	return nil
 }
 
-func (p *Program) validateEntry(w *Workflow, e *Entry) error {
+func (p *Definition) validateEntry(w *Workflow, e *Entry) error {
 	at := fmt.Sprintf("%s: entry %s", w.ID, e.Placement)
 	pl, ok := w.placement(e.Placement)
 	if !ok {
@@ -314,16 +316,21 @@ func (p *Program) validateEntry(w *Workflow, e *Entry) error {
 	return nil
 }
 
-func (p *Program) validatePlacement(w *Workflow, pl *Placement) error {
+func (p *Definition) validatePlacement(w *Workflow, pl *Placement) error {
 	at := fmt.Sprintf("%s.%s", w.ID, pl.Name)
 	incoming := w.incoming(pl.Name)
+	// expected is the input the control takes, nil for none.
+	var expected *ValueType
 	switch c := pl.Control.(type) {
 	case CallControl:
-		if err := p.validateBody(at, c.Body); err != nil {
+		input, err := p.validateBody(at, c.Body)
+		if err != nil {
 			return err
 		}
+		expected = input
 	case BranchControl:
-		if _, ok := p.judge(c.Judge); !ok {
+		j, ok := p.judge(c.Judge)
+		if !ok {
 			return fmt.Errorf("%s: unknown judge %s", at, c.Judge)
 		}
 		if len(c.Arms) == 0 || !unique(c.Arms) || slices.Contains(c.Arms, "") {
@@ -340,11 +347,14 @@ func (p *Program) validatePlacement(w *Workflow, pl *Placement) error {
 		if !connected {
 			return fmt.Errorf("%s: at least one arm needs a connection", at)
 		}
+		expected = ptr(j.Input)
 	case WaitStreamControl:
+		expected = ptr(c.Element)
 	case MergeControl:
 		if len(incoming) == 0 {
 			return fmt.Errorf("%s: Merge needs input connections", at)
 		}
+		expected = ptr(c.Element)
 	case ConcurrencyControl:
 		spec := &c.Spec
 		if spec.Limit == 0 {
@@ -364,10 +374,7 @@ func (p *Program) validatePlacement(w *Workflow, pl *Placement) error {
 				return err
 			}
 		}
-	}
-	expected, known := p.inputType(pl.Control)
-	if !known {
-		return fmt.Errorf("%s: unknown reference", at)
+		expected = copyPtr(spec.Input)
 	}
 	_, isMerge := pl.Control.(MergeControl)
 	if !isMerge {
@@ -407,7 +414,7 @@ func (p *Program) validatePlacement(w *Workflow, pl *Placement) error {
 	return validateTimeout(at, pl.Timeout, function, isBranch)
 }
 
-func (p *Program) validateWorkflow(w *Workflow) error {
+func (p *Definition) validateWorkflow(w *Workflow) error {
 	at := fmt.Sprintf("workflow %s", w.ID)
 	if w.ID == "" {
 		return errors.New("empty workflow id")

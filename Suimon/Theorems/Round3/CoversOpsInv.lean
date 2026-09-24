@@ -9,7 +9,7 @@ namespace Suimon.Round3
 namespace CoversOpsAux
 open State
 
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 /-! ### Lookups -/
 

@@ -5,12 +5,12 @@ open State
 
 /-! ## [9] Round3/Progress.lean — proven assembly
 
-A valid program never waits on the engine side: in a reachable, started, non-final state where no
+A valid definition never waits on the engine side: in a reachable, started, non-final state where no
 call waits for the outside world, some engine operation is accepted and changes the state, and it can
 be chosen to conform to any environment. -/
 
 section Progress
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- Stopping: `Quiet` leaves no call running or fetching, and not waiting leaves none cancelling, so
     every call ended and the conclusion is accepted (§11.3). -/
@@ -35,7 +35,7 @@ theorem progress_running (valid : p.validate = .ok ()) (h : Reachable p s) (star
     refine ⟨op, t, he, ?_, hs, hne⟩
     rcases hop with rfl | rfl | ⟨_, rfl⟩ | ⟨_, _, rfl⟩ | ⟨_, rfl⟩ | ⟨_, _, rfl⟩ <;> trivial
 
-/-- **Progress (進行, §15.2).** In a valid program, a reachable, started, non-final state in which no
+/-- **Progress (進行, §15.2).** In a valid definition, a reachable, started, non-final state in which no
     call waits for the outside world accepts an engine operation that changes the state, and the
     operation conforms to any given environment. -/
 theorem progress (valid : p.validate = .ok ()) (h : Reachable p s) (started : s.started = true)

@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Runtime scenarios: the programs of Test/programs and testdata run with the Go functions of
+// Runtime scenarios: the definitions of Test/definitions and testdata run with the Go functions of
 // fixtures_test.go. Every run writes a journal, which Check must replay to the final state of the
 // report; TestConformanceRuntime also has Lean check it.
 
@@ -29,10 +29,10 @@ type run struct {
 }
 
 type scenario struct {
-	name    string
-	program string
-	// adjust changes the loaded program, for example its runtime settings.
-	adjust  func(p *Program)
+	name       string
+	definition string
+	// adjust changes the loaded definition, for example its runtime settings.
+	adjust  func(p *Definition)
 	input   any
 	prepare func(t *testing.T, j *memJournal) run
 	// deterministic scenarios give the same report in every run and after every recovery in which
@@ -42,7 +42,7 @@ type scenario struct {
 
 // scaleTimeouts sets every timeout of p to ms, so that fast functions never time out on a busy
 // machine while the timers still run.
-func scaleTimeouts(ms uint64) func(p *Program) {
+func scaleTimeouts(ms uint64) func(p *Definition) {
 	scale := func(t *Timeout) {
 		if t.CallMs != nil {
 			t.CallMs = ptr(ms)
@@ -51,7 +51,7 @@ func scaleTimeouts(ms uint64) func(p *Program) {
 			t.ElementMs = ptr(ms)
 		}
 	}
-	return func(p *Program) {
+	return func(p *Definition) {
 		for i := range p.Workflows {
 			for j := range p.Workflows[i].Placements {
 				pl := &p.Workflows[i].Placements[j]
@@ -68,22 +68,22 @@ func scaleTimeouts(ms uint64) func(p *Program) {
 	}
 }
 
-func adjustAll(fs ...func(p *Program)) func(p *Program) {
-	return func(p *Program) {
+func adjustAll(fs ...func(p *Definition)) func(p *Definition) {
+	return func(p *Definition) {
 		for _, f := range fs {
 			f(p)
 		}
 	}
 }
 
-func setPolicy(workflow, placement string, policy Policy) func(p *Program) {
-	return func(p *Program) {
+func setPolicy(workflow, placement string, policy Policy) func(p *Definition) {
+	return func(p *Definition) {
 		mapWorkflow(p, workflow, mapPlacement(placement, func(pl *Placement) { pl.Policy = policy }))
 	}
 }
 
-func setTimeout(workflow, placement string, timeout Timeout) func(p *Program) {
-	return func(p *Program) {
+func setTimeout(workflow, placement string, timeout Timeout) func(p *Definition) {
+	return func(p *Definition) {
 		mapWorkflow(p, workflow, mapPlacement(placement, func(pl *Placement) { pl.Timeout = timeout }))
 	}
 }
@@ -206,10 +206,11 @@ func expectNoOutput(t *testing.T, r *Report, name string) {
 	}
 }
 
-// resultPayloads are the payloads of the results of a placement in the root run of a journal.
-func resultPayloads(t *testing.T, p *Program, journal, placement string) []string {
+// resultPayloads are the payloads of the results of a placement in the root run of a journal, which
+// replays against the definition of its header.
+func resultPayloads(t *testing.T, journal, placement string) []string {
 	t.Helper()
-	c, err := Check(p, journal)
+	c, err := Check(journal, loadHeader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,11 +239,21 @@ func callsWith(r *Report, fn string) []Call {
 
 func opIndex(journal, fragment string) int { return strings.Index(journal, fragment) }
 
+// recordLines are the lines of the records of a journal, after its header, or of a part of a journal
+// after the header.
+func recordLines(journal string) []string {
+	lines := strings.Split(strings.TrimSuffix(journal, "\n"), "\n")
+	if strings.HasPrefix(journal, `{"definition":`) {
+		lines = lines[1:]
+	}
+	return lines
+}
+
 // opsOf are the operations of a journal, in order.
 func opsOf(t *testing.T, journal string) []Op {
 	t.Helper()
 	var ops []Op
-	for _, line := range strings.Split(strings.TrimSuffix(journal, "\n"), "\n") {
+	for _, line := range recordLines(journal) {
 		r, err := DecodeRecord(line)
 		if err != nil {
 			t.Fatal(err)
@@ -257,11 +268,14 @@ func opsOf(t *testing.T, journal string) []Op {
 // firstOp is the index of the first operation that matches, or -1.
 func firstOp(ops []Op, match func(Op) bool) int { return slices.IndexFunc(ops, match) }
 
-// verifyJournal checks a journal against the report of its run: it replays completely to the
-// final state, and it is what the engine would write for its operations.
-func verifyJournal(t *testing.T, p *Program, journal string, r *Report) {
+// verifyJournal checks a journal against the report of its run: it records p, it replays completely
+// to the final state, and it is what the engine would write for its operations.
+func verifyJournal(t *testing.T, p *Definition, journal string, r *Report) {
 	t.Helper()
-	c, err := Check(p, journal)
+	if !strings.HasPrefix(journal, EncodeHeader(p)+"\n") {
+		t.Errorf("the journal does not start with the header of its definition")
+	}
+	c, err := Check(journal, sameDefinition(p))
 	if err != nil {
 		t.Fatalf("the journal does not replay: %v", err)
 	}
@@ -297,10 +311,10 @@ func wait(t *testing.T, x *WorkflowExecution) (*Report, error) {
 	return x.Wait()
 }
 
-// runOnce runs a scenario and returns its program, journal and report after the checks.
-func runOnce(t *testing.T, sc scenario) (*Program, string, *Report) {
+// runOnce runs a scenario and returns its definition, journal and report after the checks.
+func runOnce(t *testing.T, sc scenario) (*Definition, string, *Report) {
 	t.Helper()
-	p := load(t, sc.program)
+	p := load(t, sc.definition)
 	if sc.adjust != nil {
 		sc.adjust(p)
 	}
@@ -333,7 +347,7 @@ func runOnce(t *testing.T, sc scenario) (*Program, string, *Report) {
 func scenarios() []scenario {
 	return []scenario{
 		{
-			name: "merge", program: "merge", deterministic: true,
+			name: "merge", definition: "merge", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: mergeBindings(mergeKnobs{journal: j}), check: func(t *testing.T, r *Report, _ string) {
 					expectStatusOf(t, r, StatusSucceeded)
@@ -350,7 +364,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "merge continue failure", program: "merge", deterministic: true,
+			name: "merge continue failure", definition: "merge", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: mergeBindings(mergeKnobs{failSales: true}), check: func(t *testing.T, r *Report, _ string) {
 					expectStatusOf(t, r, StatusFailed)
@@ -367,7 +381,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "merge transform panic", program: "merge", deterministic: true,
+			name: "merge transform panic", definition: "merge", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: mergeBindings(mergeKnobs{panicSalesWidget: true}), check: func(t *testing.T, r *Report, _ string) {
 					// A failed transform is a failure of its target, under the target's policy (§4.2).
@@ -383,7 +397,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "merge stop", program: "merge", adjust: setPolicy("dashboard", "sales", PolicyStop),
+			name: "merge stop", definition: "merge", adjust: setPolicy("dashboard", "sales", PolicyStop),
 			prepare: func(t *testing.T, j *memJournal) run {
 				early := &atomic.Int32{}
 				return run{bindings: mergeBindings(mergeKnobs{failSales: true, blockStock: true, journal: j, early: early}),
@@ -408,7 +422,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "merge timeout", program: "merge", adjust: setTimeout("dashboard", "stock", Timeout{CallMs: ptr[uint64](40)}),
+			name: "merge timeout", definition: "merge", adjust: setTimeout("dashboard", "stock", Timeout{CallMs: ptr[uint64](40)}),
 			prepare: func(t *testing.T, j *memJournal) run {
 				early := &atomic.Int32{}
 				return run{bindings: mergeBindings(mergeKnobs{blockStock: true, journal: j, early: early}), check: func(t *testing.T, r *Report, journal string) {
@@ -429,7 +443,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users", program: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
+			name: "users", definition: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: usersBindings(usersKnobs{}), check: func(t *testing.T, r *Report, _ string) {
 					expectStatusOf(t, r, StatusSucceeded)
@@ -444,7 +458,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users task failure", program: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
+			name: "users task failure", definition: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: usersBindings(usersKnobs{failOrdersOf: 2}), check: func(t *testing.T, r *Report, _ string) {
 					expectStatusOf(t, r, StatusFailed)
@@ -462,7 +476,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users transform failures", program: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
+			name: "users transform failures", definition: "users", input: tenant{Name: "acme", Users: 3}, deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: usersBindings(usersKnobs{failUserIDOf: 2, failOrdersSummaryOf: 3}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -478,7 +492,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users sub-workflow failure", program: "users", input: tenant{Name: "acme", Users: 2}, deterministic: true,
+			name: "users sub-workflow failure", definition: "users", input: tenant{Name: "acme", Users: 2}, deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: usersBindings(usersKnobs{failProfileOf: 1}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -496,7 +510,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users stop", program: "users", input: tenant{Name: "acme", Users: 5},
+			name: "users stop", definition: "users", input: tenant{Name: "acme", Users: 5},
 			prepare: func(t *testing.T, j *memJournal) run {
 				s := newSignal()
 				return run{bindings: usersBindings(usersKnobs{failAfter: 2, blockOrders: true, signal: s}),
@@ -517,7 +531,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users cancel", program: "users", input: tenant{Name: "acme", Users: 3},
+			name: "users cancel", definition: "users", input: tenant{Name: "acme", Users: 3},
 			prepare: func(t *testing.T, j *memJournal) run {
 				s := newSignal()
 				return run{bindings: usersBindings(usersKnobs{blockOrders: true, signal: s}),
@@ -546,7 +560,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "users context cancel", program: "users", input: tenant{Name: "acme", Users: 2},
+			name: "users context cancel", definition: "users", input: tenant{Name: "acme", Users: 2},
 			prepare: func(t *testing.T, j *memJournal) run {
 				s := newSignal()
 				return run{bindings: usersBindings(usersKnobs{blockOrders: true, signal: s}),
@@ -563,7 +577,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch", program: "branch", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "branch", definition: "branch", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: branchBindings(branchKnobs{orders: orders(true, false, true), failAfter: -1, blockAfter: -1,
 					journal: j}),
@@ -574,7 +588,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch skipped", program: "branch", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "branch skipped", definition: "branch", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: branchBindings(branchKnobs{orders: orders(false, false, false), failAfter: -1, blockAfter: -1}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -586,7 +600,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch empty stream", program: "branch", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "branch empty stream", definition: "branch", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: branchBindings(branchKnobs{failAfter: -1, blockAfter: -1}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -597,7 +611,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch judge failure", program: "branch", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "branch judge failure", definition: "branch", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: branchBindings(branchKnobs{orders: orders(true, true, true), failAfter: -1, blockAfter: -1,
 					failJudgeOf: 2}),
@@ -609,7 +623,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch unknown arm", program: "branch", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "branch unknown arm", definition: "branch", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: branchBindings(branchKnobs{orders: orders(true, true), failAfter: -1, blockAfter: -1,
 					unknownArmOf: 1}),
@@ -624,7 +638,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch generator failure", program: "branch",
+			name: "branch generator failure", definition: "branch",
 			adjust:        adjustAll(scaleTimeouts(60000), setPolicy("shipping", "list", PolicyContinue)),
 			deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
@@ -638,7 +652,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch element timeout", program: "branch",
+			name: "branch element timeout", definition: "branch",
 			adjust: adjustAll(setPolicy("shipping", "list", PolicyContinue),
 				// Long enough that the elements before the blocked one never time out on a busy machine.
 				setTimeout("shipping", "list", Timeout{CallMs: ptr[uint64](60000), ElementMs: ptr[uint64](250)}),
@@ -659,7 +673,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "branch reads ahead", program: "branch", adjust: scaleTimeouts(60000),
+			name: "branch reads ahead", definition: "branch", adjust: scaleTimeouts(60000),
 			prepare: func(t *testing.T, j *memJournal) run {
 				// ship waits until the generator has yielded everything: the engine must read on
 				// without waiting for downstream work (§4.1.1, §12).
@@ -672,32 +686,32 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "calls large", program: "calls", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "calls large", definition: "calls", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: callsBindings(callsKnobs{size: "large", lines: 3}),
 					check: func(t *testing.T, r *Report, journal string) {
 						expectStatusOf(t, r, StatusSucceeded)
 						expectOutput(t, r, "notify", "notified")
-						if got := resultPayloads(t, load(t, "calls"), journal, "done"); !slices.Equal(got, []string{`["total 600"]`}) {
+						if got := resultPayloads(t, journal, "done"); !slices.Equal(got, []string{`["total 600"]`}) {
 							t.Errorf("done: %q", got)
 						}
 					}}
 			},
 		},
 		{
-			name: "calls small", program: "calls", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "calls small", definition: "calls", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: callsBindings(callsKnobs{size: "small"}),
 					check: func(t *testing.T, r *Report, journal string) {
 						expectStatusOf(t, r, StatusSucceeded)
-						if got := resultPayloads(t, load(t, "calls"), journal, "done"); !slices.Equal(got, []string{`["audited 7"]`}) {
+						if got := resultPayloads(t, journal, "done"); !slices.Equal(got, []string{`["audited 7"]`}) {
 							t.Errorf("done: %q", got)
 						}
 					}}
 			},
 		},
 		{
-			name: "calls ignored", program: "calls", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "calls ignored", definition: "calls", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: callsBindings(callsKnobs{size: "ignored"}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -708,7 +722,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "calls audit stop", program: "calls", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "calls audit stop", definition: "calls", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: callsBindings(callsKnobs{size: "small", failAudit: true}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -718,7 +732,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "fanout", program: "fanout", adjust: scaleTimeouts(60000), deterministic: true,
+			name: "fanout", definition: "fanout", adjust: scaleTimeouts(60000), deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				return run{bindings: fanoutBindings(fanoutKnobs{items: 3}),
 					check: func(t *testing.T, r *Report, _ string) {
@@ -731,7 +745,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "limit", program: "limit", deterministic: true,
+			name: "limit", definition: "limit", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				k := &limitKnobs{items: 3, signal: newSignal()}
 				return run{bindings: limitBindings(k), check: func(t *testing.T, r *Report, _ string) {
@@ -746,7 +760,7 @@ func scenarios() []scenario {
 		},
 		{
 			// Not deterministic in the sense of recovery: a resumed run may not reach the barrier.
-			name: "limit barrier", program: "limit",
+			name: "limit barrier", definition: "limit",
 			prepare: func(t *testing.T, j *memJournal) run {
 				k := &limitKnobs{items: 3, barrier: 6, signal: newSignal()}
 				return run{bindings: limitBindings(k), check: func(t *testing.T, r *Report, _ string) {
@@ -772,8 +786,8 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "limit slot held", program: "limit",
-			adjust: func(p *Program) {
+			name: "limit slot held", definition: "limit",
+			adjust: func(p *Definition) {
 				mapWorkflow(p, "limits", mapPlacement("each", mapConcurrency(func(c *Concurrency) {
 					c.Limit = 1
 					mapTask("a", func(t *TaskSpec) {
@@ -803,7 +817,7 @@ func scenarios() []scenario {
 			},
 		},
 		{
-			name: "panic", program: "merge", deterministic: true,
+			name: "panic", definition: "merge", deterministic: true,
 			prepare: func(t *testing.T, j *memJournal) run {
 				bindings := mergeBindings(mergeKnobs{})
 				for i, b := range bindings {
@@ -882,7 +896,7 @@ func compareReports(a, b *Report) string {
 func journalPayloads(t *testing.T, journal string) map[string]string {
 	t.Helper()
 	payloads := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSuffix(journal, "\n"), "\n") {
+	for _, line := range recordLines(journal) {
 		r, err := DecodeRecord(line)
 		if err != nil {
 			t.Fatal(err)
@@ -1015,17 +1029,28 @@ func TestRuntimeRegistry(t *testing.T) {
 	if _, err := NewRegistry(Func("price", func(context.Context, int) (int, error) { return 0, nil }), Passthrough("price")); err != nil {
 		t.Error(err)
 	}
+	// A definition built in code must survive recording, which the definition file cannot express an
+	// empty id for; validation does not reject an empty id nothing refers to.
+	unrecordable := load(t, "merge")
+	unrecordable.Functions = append(unrecordable.Functions, FunctionDecl{Output: Contract{Type: Named("T")}})
+	for label, newEngine := range map[string]func(*Definition, *Registry) (*Engine, error){
+		"NewEngine": NewEngine, "NewUncheckedEngine": NewUncheckedEngine} {
+		if _, err := newEngine(unrecordable, mustRegistry(t, full...)); err == nil ||
+			!strings.HasPrefix(err.Error(), "suimon: the definition cannot be recorded: ") {
+			t.Errorf("%s: an empty function id: %v", label, err)
+		}
+	}
 	invalid := load(t, "merge")
 	invalid.Main = "nope"
 	if _, err := NewEngine(invalid, mustRegistry(t, full...)); err == nil {
-		t.Error("NewEngine validates the program")
+		t.Error("NewEngine validates the definition")
 	}
 	unchecked, err := NewUncheckedEngine(invalid, mustRegistry(t, full...))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := unchecked.Start(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "UNKNOWN_MAIN") {
-		t.Errorf("an unchecked program without its main workflow: %v", err)
+		t.Errorf("an unchecked definition without its main workflow: %v", err)
 	}
 }
 
@@ -1071,6 +1096,39 @@ func TestRuntimeJournalFailure(t *testing.T) {
 			t.Errorf("fail at %d: %v", failAt, r.Status)
 		}
 	}
+}
+
+// firstSync is a journal that keeps what its first Sync made durable.
+type firstSync struct {
+	memJournal
+	first  string
+	synced bool
+}
+
+func (j *firstSync) Sync() error {
+	if !j.synced {
+		j.first, j.synced = j.text(), true
+	}
+	return j.memJournal.Sync()
+}
+
+// The header is appended with the records of the start, before the first sync: no journal is
+// durable with the header alone.
+func TestRuntimeJournalHeader(t *testing.T) {
+	p := load(t, "merge")
+	e, err := NewEngine(p, mustRegistry(t, mergeBindings(mergeKnobs{})...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &firstSync{}
+	r, err := e.Run(context.Background(), nil, WithJournal(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := EncodeHeader(p) + "\n{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"; !strings.HasPrefix(j.first, want) {
+		t.Errorf("the first sync made durable %q", j.first)
+	}
+	verifyJournal(t, p, j.text(), r)
 }
 
 // Executions leave no goroutine behind, whether they conclude, stop, time out or are cancelled.

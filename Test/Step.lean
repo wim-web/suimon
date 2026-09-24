@@ -10,7 +10,7 @@ def engineOp : Op → Bool
   | _ => false
 
 /-- Engine operations run first; then each running call reports what `decide` says. --/
-def drive (p : Program) (decide : State → Call → Option Op) (limit : Nat := 10000) : State := Id.run do
+def drive (p : Definition) (decide : State → Call → Option Op) (limit : Nat := 10000) : State := Id.run do
   let mut s : State := {}
   for _ in List.range limit do
     let engine := (Explore.candidates p { failures := false } s).filter engineOp
@@ -41,7 +41,7 @@ def expectStatus (label : String) (s : State) (status : Status) : IO Unit :=
   ensure (s.status == status) s!"{label}: expected {repr status}, got {repr s.status} with {s.failures.length} failures"
 
 /-- Invariants checked at every accepted transition of a random walk. --/
-def checkTransition (p : Program) (label : String) (before after : State) (op : Op) : IO Unit := do
+def checkTransition (p : Definition) (label : String) (before after : State) (op : Op) : IO Unit := do
   ensure (unique (after.results.map (·.id))) s!"{label}: duplicate result after {repr op}"
   ensure (unique (after.invocations.map (·.id))) s!"{label}: duplicate invocation after {repr op}"
   ensure (unique (after.deliveries.map fun d => (d.run, d.connection, d.source))) s!"{label}: duplicate delivery"
@@ -65,7 +65,7 @@ def checkTransition (p : Program) (label : String) (before after : State) (op : 
     unless before.results.contains r do
       ensure (producer == some r.producer) s!"{label}: result {r.id} with producer {r.producer} after {repr op}"
 
-def randomWalks (label : String) (p : Program) (cfg : Explore.Config) (seeds : Nat) : IO Unit := do
+def randomWalks (label : String) (p : Definition) (cfg : Explore.Config) (seeds : Nat) : IO Unit := do
   for seed in List.range seeds do
     let mut s : State := {}
     let mut rng := seed + 1

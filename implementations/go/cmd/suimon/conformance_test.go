@@ -48,11 +48,11 @@ func runLean(t *testing.T, cli string, args ...string) result {
 	return result{cmd.ProcessState.ExitCode(), stdout.String(), stderr.String()}
 }
 
-// conformancePrograms are the programs of the Lean tests and the extra programs of the Go tests.
-func conformancePrograms(t *testing.T) []string {
+// conformanceDefinitions are the definitions of the Lean tests and the extra ones of the Go tests.
+func conformanceDefinitions(t *testing.T) []string {
 	t.Helper()
 	var paths []string
-	for _, pattern := range []string{filepath.Join(repoRoot(t), "Test", "programs", "*.json"),
+	for _, pattern := range []string{filepath.Join(repoRoot(t), "Test", "definitions", "*.json"),
 		filepath.Join("..", "..", "src", "testdata", "*.json")} {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -67,7 +67,7 @@ func conformancePrograms(t *testing.T) []string {
 		}
 	}
 	if len(paths) < 5 {
-		t.Fatalf("programs not found: %v", paths)
+		t.Fatalf("definitions not found: %v", paths)
 	}
 	return paths
 }
@@ -82,13 +82,13 @@ func sameResult(t *testing.T, label string, lean, goResult result) {
 	}
 }
 
-// A program as a generic JSON document, so that mutations do not go through the Go codec.
+// A definition as a generic JSON document, so that mutations do not go through the Go codec.
 
 type doc = map[string]any
 
 func loadDoc(t *testing.T, name string) doc {
 	t.Helper()
-	data, err := os.ReadFile(program(t, name))
+	data, err := os.ReadFile(definition(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func drop(list any, keep func(doc) bool) []any {
 
 func task(pl doc, name string) doc { return find(pl["node"].(doc)["tasks"], "name", name) }
 
-// mutations mirror the rejected programs of Test/Validate.lean, and a few more.
+// mutations mirror the rejected definitions of Test/Validate.lean, and a few more.
 func mutations() map[string]func(t *testing.T) any {
 	with := func(name string, f func(d doc)) func(t *testing.T) any {
 		return func(t *testing.T) any {
@@ -238,6 +238,12 @@ func mutations() map[string]func(t *testing.T) any {
 			task(placement(workflow(d, "users"), "perUser"), "profile")["timeout"] = doc{"callMs": 5}
 		}),
 		"unknown judge": with("branch", func(d doc) { placement(workflow(d, "shipping"), "paid")["node"].(doc)["judge"] = "isFree" }),
+		// Without connections and not the entry, the branch reaches the check of its placement.
+		"unknown judge of a placement": with("branch", func(d doc) {
+			w := workflow(d, "shipping")
+			w["placements"] = append(items(w["placements"]),
+				doc{"name": "orphan", "node": doc{"type": "branch", "judge": "nope", "arms": []any{"a"}}, "policy": "stop"})
+		}),
 		"duplicate arms": with("branch", func(d doc) {
 			placement(workflow(d, "shipping"), "paid")["node"].(doc)["arms"] = []any{"paid", "paid"}
 		}),
@@ -254,43 +260,72 @@ func mutations() map[string]func(t *testing.T) any {
 	}
 }
 
-// texts are programs written as text: JSON syntax, strict decoding and numbers.
+// texts are definitions written as text: JSON syntax, strict decoding and numbers.
 var texts = map[string]string{
-	"empty":            "",
-	"syntax":           `{"main":"w",}`,
-	"trailing":         `{"main":"w","workflows":[]} x`,
-	"bad escape":       `{"main":"\q"}`,
-	"bad hex":          `{"main":"é\u00zz"}`,
-	"control char":     "{\"main\":\"a\x01\"}",
-	"lone surrogates":  `{"main":"\ud83d","workflows":[{"id":"\ude00","placements":[]}]}`,
-	"surrogate pair":   `{"main":"\ud83d\ude00","workflows":[]}`,
-	"unknown field":    `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"},"policy":"stop","retries":1}]}]}`,
-	"sorted unknown":   `{"z":1,"main":"w","b":2}`,
-	"missing policy":   `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"}}]}]}`,
-	"unknown policy":   `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"},"policy":"retry"}]}]}`,
-	"null optional":    `{"main":"w","functions":[{"id":"f","input":null,"output":{"single":"A"}}]}`,
-	"empty name":       `{"main":"w","workflows":[{"id":"","placements":[]}]}`,
-	"arms":             `{"main":"w","workflows":[{"id":"w","placements":[{"name":"b","node":{"type":"branch","judge":"j","arms":["a",1]},"policy":"stop"}]}]}`,
-	"limit 2.0":        `{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","node":{"type":"concurrency","limit":2.0},"policy":"stop"}]}]}`,
-	"limit -0":         `{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","node":{"type":"concurrency","limit":-0,"tasks":[],"output":"list","element":"T"},"policy":"stop"}]}]}`,
-	"limit 1e1":        `{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","node":{"type":"concurrency","limit":1e1,"tasks":[],"output":"list","element":"T"},"policy":"stop"}]}]}`,
-	"exp too large":    `{"main":"w","limit":1e99999999999999999999}`,
-	"duplicate key":    `{"main":"x","main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"function","function":"f"},"policy":"stop"}]}],"functions":[{"id":"f","output":{"single":"A"}}]}`,
-	"nested list":      `{"main":"w","functions":[{"id":"f","output":{"single":{"list":{"list":{"lst":"A"}}}}}]}`,
-	"body type":        `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"function"},"policy":"stop"}]}]}`,
-	"subworkflow body": `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"subworkflow","workflow":"v","output":"o","x":1},"policy":"stop"}]}]}`,
-	"not an object":    `[1,2]`,
+	"empty":           "",
+	"syntax":          `{"main":"w",}`,
+	"trailing":        `{"main":"w","workflows":[]} x`,
+	"bad escape":      `{"main":"\q"}`,
+	"bad hex":         `{"main":"é\u00zz"}`,
+	"control char":    "{\"main\":\"a\x01\"}",
+	"lone surrogates": `{"main":"\ud83d","workflows":[{"id":"\ude00","placements":[]}]}`,
+	"surrogate pair":  `{"main":"\ud83d\ude00","workflows":[]}`,
+	"unknown field":   `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"},"policy":"stop","retries":1}]}]}`,
+	"sorted unknown":  `{"z":1,"main":"w","b":2}`,
+	"missing policy":  `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"}}]}]}`,
+	"unknown policy":  `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T"},"policy":"retry"}]}]}`,
+	"null optional":   `{"main":"w","functions":[{"id":"f","input":null,"output":{"single":"A"}}]}`,
+	"empty name":      `{"main":"w","workflows":[{"id":"","placements":[]}]}`,
+	"arms":            `{"main":"w","workflows":[{"id":"w","placements":[{"name":"b","node":{"type":"branch","judge":"j","arms":["a",1]},"policy":"stop"}]}]}`,
+	"limit 2.0":       limitDefinition("2.0"),
+	"limit 20e-1":     limitDefinition("20e-1"),
+	"limit 0.2e1":     limitDefinition("0.2e1"),
+	"limit 0.0":       limitDefinition("0.0"),
+	"limit 2.5":       limitDefinition("2.5"),
+	"limit -1":        limitDefinition("-1"),
+	"limit 1e-1":      limitDefinition("1e-1"),
+	"limit 1e-10^9":   limitDefinition("1e-1000000000"),
+	"callMs 1.5e3":    callMsDefinition("1.5e3"),
+	"callMs 0.0":      callMsDefinition("0.0"),
+	"callMs 25e-1":    callMsDefinition("25e-1"),
+	"limit -0":        `{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","node":{"type":"concurrency","limit":-0,"tasks":[],"output":"list","element":"T"},"policy":"stop"}]}]}`,
+	"limit 1e1":       `{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","node":{"type":"concurrency","limit":1e1,"tasks":[],"output":"list","element":"T"},"policy":"stop"}]}]}`,
+	"exp too large":   `{"main":"w","limit":1e99999999999999999999}`,
+	"duplicate key":   `{"main":"x","main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"function","function":"f"},"policy":"stop"}]}],"functions":[{"id":"f","output":{"single":"A"}}]}`,
+	// A key repeated deep inside, one that only its escapes reveal, and one that quoting must escape.
+	"duplicate nested key":  `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"merge","element":"T","type":"merge"},"policy":"stop"}]}]}`,
+	"duplicate escaped key": `{"main":"x","workflows":[],"\u006d\u0061in":"w"}`,
+	"duplicate quoted key":  `{"main":"w","workflows":[{"id":"w","placements":[],"\n'\u0001\u007f\"é":1,"\n'\u0001\u007f\"\u00e9":2}]}`,
+	"nested list":           `{"main":"w","functions":[{"id":"f","output":{"single":{"list":{"list":{"lst":"A"}}}}}]}`,
+	"body type":             `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"function"},"policy":"stop"}]}]}`,
+	"subworkflow body":      `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"subworkflow","workflow":"v","output":"o","x":1},"policy":"stop"}]}]}`,
+	"not an object":         `[1,2]`,
+}
+
+// limitDefinition is a valid definition whose concurrency limit is the JSON number limit.
+func limitDefinition(limit string) string {
+	return `{"main":"w","functions":[{"id":"f","output":{"single":"T"}}],"transforms":[{"id":"t","input":"T","output":"T"}],` +
+		`"workflows":[{"id":"w","placements":[{"name":"c","policy":"stop","node":{"type":"concurrency","limit":` + limit +
+		`,"tasks":[{"name":"a","body":{"type":"function","function":"f"},"outputTransform":"t","policy":"stop"}],` +
+		`"output":"list","element":"T"}}]}]}`
+}
+
+// callMsDefinition is a valid definition whose call timeout is the JSON number callMs.
+func callMsDefinition(callMs string) string {
+	return `{"main":"w","functions":[{"id":"f","output":{"single":"T"}}],"workflows":[{"id":"w","placements":[` +
+		`{"name":"a","policy":"stop","timeout":{"callMs":` + callMs + `},"node":{"type":"function","function":"f"}}]}]}`
 }
 
 func TestConformanceValidate(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
-	check := func(label, path string) {
+	check := func(label, path string) result {
 		lean := runLean(t, cli, "validate", path)
 		t.Logf("%s: exit %d %s", label, lean.code, strings.TrimSpace(lean.stdout+lean.stderr))
 		sameResult(t, "validate "+label, lean, runGo("validate", path))
+		return lean
 	}
-	for _, path := range conformancePrograms(t) {
+	for _, path := range conformanceDefinitions(t) {
 		check(filepath.Base(path), path)
 	}
 	for label, mutate := range mutations() {
@@ -302,7 +337,10 @@ func TestConformanceValidate(t *testing.T) {
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		check(label, path)
+		lean := check(label, path)
+		if label == "unknown judge of a placement" && lean.stderr != "shipping.orphan: unknown judge nope\n" {
+			t.Errorf("%s: not the error of the placement: %q", label, lean.stderr)
+		}
 	}
 	for label, text := range texts {
 		path := filepath.Join(dir, strings.ReplaceAll(label, " ", "-")+".txt")
@@ -321,15 +359,15 @@ func TestConformanceValidate(t *testing.T) {
 
 func TestConformanceArguments(t *testing.T) {
 	cli := leanCLI(t)
-	merge := program(t, "merge")
+	merge := definition(t, "merge")
 	for _, args := range [][]string{
 		{}, {"--help"}, {"help"}, {"--help", "x"}, {"validate"}, {"validate", "a", "b"}, {"frobnicate"},
-		{"check", merge}, {"explore", merge, "--seeds"}, {"explore", merge, "--bogus", "1"},
+		{"check", merge}, {"check", "x.jsonl", "--definition", merge}, {"explore", merge, "--seeds"}, {"explore", merge, "--bogus", "1"},
 		{"explore", merge, "--seeds", "x"}, {"explore", merge, "--seeds", "1_0", "--steps", "5"},
 		{"explore", merge, "--seeds", "0"}, {"explore", merge, "--seeds", "3", "--seeds", "5"},
 		{"gen", merge, "--seed", "3", "--steps", "0"}, {"gen", merge, "--seed", "-1"}, {"gen", merge, "--steps", "1_"},
-		{"check", "x.jsonl", "--state"}, {"check", "x.jsonl", "--state", "--program"}, {"check", "x.jsonl", "--program"},
-		{"check", "x.jsonl", "--state", "1", "--program", merge}, {"explore", merge, "--state"},
+		{"check", "x.jsonl", "--state"}, {"check", "x.jsonl", "--state", "--definition"}, {"check", "x.jsonl", "--definition"},
+		{"check", "x.jsonl", "--state", "1", "--definition", merge}, {"explore", merge, "--state"},
 	} {
 		sameResult(t, fmt.Sprint(args), runLean(t, cli, args...), runGo(args...))
 	}
@@ -337,7 +375,7 @@ func TestConformanceArguments(t *testing.T) {
 
 func TestConformanceExplore(t *testing.T) {
 	cli := leanCLI(t)
-	for _, path := range conformancePrograms(t) {
+	for _, path := range conformanceDefinitions(t) {
 		for _, args := range [][]string{{"--seeds", "200"}, {"--seeds", "20", "--steps", "40"}, {"--seeds", "5", "--steps", "3"}} {
 			args = append([]string{"explore", path}, args...)
 			sameResult(t, fmt.Sprint(baseName(path), args[2:]), runLean(t, cli, args...), runGo(args...))
@@ -347,11 +385,21 @@ func TestConformanceExplore(t *testing.T) {
 
 var conformanceSeeds = []string{"1", "2", "3", "4", "5", "7", "11", "42"}
 
+// header is the header line of the records of the definition at path, as Lean gen writes it.
+func header(t *testing.T, cli, path string) string {
+	t.Helper()
+	generated := runLean(t, cli, "gen", path, "--steps", "0")
+	if generated.code != 0 || strings.Count(generated.stdout, "\n") != 1 {
+		t.Fatalf("Lean gen %s --steps 0: %q %s", path, generated.stdout, generated.stderr)
+	}
+	return generated.stdout
+}
+
 // Lean gen writes records that the Go checker accepts with the summary of Lean check.
 func TestConformanceCheck(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
-	for _, path := range conformancePrograms(t) {
+	for _, path := range conformanceDefinitions(t) {
 		name := baseName(path)
 		for _, seed := range conformanceSeeds {
 			generated := runLean(t, cli, "gen", path, "--seed", seed)
@@ -362,7 +410,7 @@ func TestConformanceCheck(t *testing.T) {
 			if err := os.WriteFile(trace, []byte(generated.stdout), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"check", trace, "--program", path}
+			args := []string{"check", trace}
 			sameResult(t, fmt.Sprintf("check Lean records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
 			// The replayed states are the same, compared as the JSON of Lean's ToJson State.
 			args = append(args, "--state")
@@ -373,7 +421,7 @@ func TestConformanceCheck(t *testing.T) {
 			if err := os.WriteFile(goTrace, []byte(goGenerated.stdout), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			args = []string{"check", goTrace, "--program", path}
+			args = []string{"check", goTrace}
 			sameResult(t, fmt.Sprintf("check Go records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
 			args = append(args, "--state")
 			sameResult(t, fmt.Sprintf("check --state Go records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
@@ -381,12 +429,12 @@ func TestConformanceCheck(t *testing.T) {
 	}
 }
 
-// A record cut at any line, or inside a line, is recovered to the same summary by both checkers;
-// a corrupted record is rejected by both with the same message.
+// A record cut at any line, or inside a line, the header included, is recovered to the same summary
+// by both checkers; a corrupted record is rejected by both with the same message.
 func TestConformanceTorn(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
-	for _, path := range conformancePrograms(t) {
+	for _, path := range conformanceDefinitions(t) {
 		generated := runGo("gen", path, "--seed", "3")
 		lines := strings.SplitAfter(generated.stdout, "\n")
 		lines = lines[:len(lines)-1]
@@ -395,7 +443,7 @@ func TestConformanceTorn(t *testing.T) {
 			if err := os.WriteFile(trace, []byte(text), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"check", trace, "--program", path}
+			args := []string{"check", trace}
 			sameResult(t, label, runLean(t, cli, args...), runGo(args...))
 		}
 		for cut := 0; cut <= len(lines); cut++ {
@@ -407,90 +455,137 @@ func TestConformanceTorn(t *testing.T) {
 				check(label+" half", prefix+string(runes[:len(runes)/2]))
 			}
 		}
-		if len(lines) >= 6 {
+		if len(lines) >= 7 {
 			corrupt := append([]string(nil), lines...)
-			corrupt[3] = "{\"seq\":4,\"commit\":tru\n"
+			corrupt[4] = "{\"seq\":4,\"commit\":tru\n"
 			check(baseName(path)+" corrupt", strings.Join(corrupt, ""))
-			check(baseName(path)+" reordered", lines[1]+lines[0]+strings.Join(lines[2:], ""))
-			check(baseName(path)+" commit twice", strings.Join(lines[:2], "")+strings.Replace(lines[1], "2", "3", 1))
+			check(baseName(path)+" reordered", lines[0]+lines[2]+lines[1]+strings.Join(lines[3:], ""))
+			check(baseName(path)+" commit twice", strings.Join(lines[:3], "")+strings.Replace(lines[2], "2", "3", 1))
+			check(baseName(path)+" no header", strings.Join(lines[1:], ""))
+			check(baseName(path)+" header twice", lines[0]+strings.Join(lines, ""))
 		}
 	}
 }
 
 // recordTexts are records that are malformed, out of order, rejected by the rules or missing
-// payloads, or that stress the parser; both checkers must give the same output for each.
+// payloads, or that stress the parser; both checkers must give the same output for each. They
+// follow the header of the definition.
 var recordTexts = map[string]string{
-	"empty":             "",
-	"empty line":        "\n",
-	"crlf":              "{\"seq\":1,\"op\":{\"type\":\"start\"}}\r\n{\"seq\":2,\"commit\":true}\r\n",
-	"spaces":            " { \"op\" : { \"type\" : \"start\" } , \"seq\" : 1 } \n{\"commit\":true,\"seq\":2}\n",
-	"unterminated":      "{\"seq\":1,\n",
-	"trailing":          "{\"seq\":1,\"op\":{\"type\":\"start\"}} x\n",
-	"leading zero":      "{\"seq\":01,\"commit\":true}\n",
-	"negative":          "{\"seq\":-1,\"commit\":true}\n",
-	"fraction":          "{\"seq\":1.0,\"commit\":true}\n",
-	"single quotes":     "{'seq':1}\n",
-	"bad escape":        "{\"seq\":1,\"op\":{\"type\":\"st\\art\"}}\n",
-	"truncated escape":  "{\"seq\":1,\"op\":{\"type\":\"\\u12\"}}\n",
-	"lone surrogate":    "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"\\ud800\"}}\n",
-	"surrogate pair":    "{\"seq\":1,\"op\":{\"type\":\"returned\",\"call\":\"\\ud83d\\ude00\",\"value\":\"v\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"control character": "{\"seq\":1,\"op\":{\"type\":\"a\tb\"}}\n",
-	"literal":           "{\"seq\":1,\"commit\":tru}\n",
-	"missing comma":     "{\"seq\":1 \"commit\":true}\n",
-	"trailing comma":    "{\"seq\":1,\"commit\":true,}\n",
-	"number key":        "{1:2}\n",
-	"not an object":     "[]\n",
-	"no seq":            "{\"commit\":true}\n",
-	"string seq":        "{\"seq\":\"1\",\"commit\":true}\n",
-	"neither":           "{\"seq\":1}\n",
-	"commit false":      "{\"seq\":1,\"commit\":false}\n",
-	"both":              "{\"seq\":1,\"op\":{\"type\":\"start\"},\"commit\":true}\n",
-	"unknown field":     "{\"seq\":1,\"commit\":true,\"x\":1}\n",
-	"op string":         "{\"seq\":1,\"op\":\"start\"}\n",
-	"op without type":   "{\"seq\":1,\"op\":{}}\n",
-	"type number":       "{\"seq\":1,\"op\":{\"type\":5}}\n",
-	"unknown op":        "{\"seq\":1,\"op\":{\"type\":\"retry\"}}\n",
-	"null input":        "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":null}}\n",
-	"run string":        "{\"seq\":1,\"op\":{\"type\":\"invoke\",\"run\":\"x\",\"placement\":\"a\"}}\n",
-	"run numbers":       "{\"seq\":1,\"op\":{\"type\":\"invoke\",\"run\":[1],\"placement\":\"a\"}}\n",
-	"element string":    "{\"seq\":1,\"op\":{\"type\":\"timedOut\",\"call\":\"c\",\"element\":\"no\"}}\n",
-	"connection string": "{\"seq\":1,\"op\":{\"type\":\"deliver\",\"run\":[],\"connection\":\"1\",\"source\":\"s\"}}\n",
-	"values array":      "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":[]}\n",
-	"payload number":    "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":1}}\n",
-	"op unknown field":  "{\"seq\":1,\"op\":{\"type\":\"fetch\",\"call\":\"c\",\"x\":1}}\n",
-	"op missing field":  "{\"seq\":1,\"op\":{\"type\":\"fetch\"}}\n",
-	"starts at 2":       "{\"seq\":2,\"op\":{\"type\":\"start\"}}\n",
-	"commit first":      "{\"seq\":1,\"commit\":true}\n",
-	"op twice":          "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"op\":{\"type\":\"cancel\"}}\n",
-	"commit twice":      "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"commit\":true}\n",
-	"rejected":          "{\"seq\":1,\"op\":{\"type\":\"judged\",\"call\":\"a\\\"b\\\\c\\n\\u0001é\",\"arm\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"rejected deliver":  "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"op\":{\"value\":\"v\",\"type\":\"deliver\",\"source\":\"s\",\"connection\":3,\"run\":[\"a\",\"b\"]}}\n{\"seq\":4,\"commit\":true}\n",
-	"duplicate fields":  "{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"},\"op\":{\"type\":\"cancel\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"duplicate payload": "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":\"a\",\"v\":\"b\"}}\n{\"seq\":2,\"commit\":true}\n",
-	"huge seq":          "{\"seq\":123456789012345678901234567890,\"commit\":true}\n",
-	"torn op":           "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"sales\"}}\n",
-	"torn line":         "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com",
+	"nothing":               "",
+	"empty line":            "\n",
+	"crlf":                  "{\"seq\":1,\"op\":{\"type\":\"start\"}}\r\n{\"seq\":2,\"commit\":true}\r\n",
+	"spaces":                " { \"op\" : { \"type\" : \"start\" } , \"seq\" : 1 } \n{\"commit\":true,\"seq\":2}\n",
+	"unterminated":          "{\"seq\":1,\n",
+	"trailing":              "{\"seq\":1,\"op\":{\"type\":\"start\"}} x\n",
+	"leading zero":          "{\"seq\":01,\"commit\":true}\n",
+	"negative":              "{\"seq\":-1,\"commit\":true}\n",
+	"fraction":              "{\"seq\":1.0,\"commit\":true}\n",
+	"single quotes":         "{'seq':1}\n",
+	"bad escape":            "{\"seq\":1,\"op\":{\"type\":\"st\\art\"}}\n",
+	"truncated escape":      "{\"seq\":1,\"op\":{\"type\":\"\\u12\"}}\n",
+	"lone surrogate":        "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"\\ud800\"}}\n",
+	"surrogate pair":        "{\"seq\":1,\"op\":{\"type\":\"returned\",\"call\":\"\\ud83d\\ude00\",\"value\":\"v\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"control character":     "{\"seq\":1,\"op\":{\"type\":\"a\tb\"}}\n",
+	"literal":               "{\"seq\":1,\"commit\":tru}\n",
+	"missing comma":         "{\"seq\":1 \"commit\":true}\n",
+	"trailing comma":        "{\"seq\":1,\"commit\":true,}\n",
+	"number key":            "{1:2}\n",
+	"not an object":         "[]\n",
+	"no seq":                "{\"commit\":true}\n",
+	"string seq":            "{\"seq\":\"1\",\"commit\":true}\n",
+	"neither":               "{\"seq\":1}\n",
+	"commit false":          "{\"seq\":1,\"commit\":false}\n",
+	"both":                  "{\"seq\":1,\"op\":{\"type\":\"start\"},\"commit\":true}\n",
+	"unknown field":         "{\"seq\":1,\"commit\":true,\"x\":1}\n",
+	"op string":             "{\"seq\":1,\"op\":\"start\"}\n",
+	"op without type":       "{\"seq\":1,\"op\":{}}\n",
+	"type number":           "{\"seq\":1,\"op\":{\"type\":5}}\n",
+	"unknown op":            "{\"seq\":1,\"op\":{\"type\":\"retry\"}}\n",
+	"null input":            "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":null}}\n",
+	"run string":            "{\"seq\":1,\"op\":{\"type\":\"invoke\",\"run\":\"x\",\"placement\":\"a\"}}\n",
+	"run numbers":           "{\"seq\":1,\"op\":{\"type\":\"invoke\",\"run\":[1],\"placement\":\"a\"}}\n",
+	"element string":        "{\"seq\":1,\"op\":{\"type\":\"timedOut\",\"call\":\"c\",\"element\":\"no\"}}\n",
+	"connection string":     "{\"seq\":1,\"op\":{\"type\":\"deliver\",\"run\":[],\"connection\":\"1\",\"source\":\"s\"}}\n",
+	"values array":          "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":[]}\n",
+	"payload number":        "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":1}}\n",
+	"op unknown field":      "{\"seq\":1,\"op\":{\"type\":\"fetch\",\"call\":\"c\",\"x\":1}}\n",
+	"op missing field":      "{\"seq\":1,\"op\":{\"type\":\"fetch\"}}\n",
+	"starts at 2":           "{\"seq\":2,\"op\":{\"type\":\"start\"}}\n",
+	"commit first":          "{\"seq\":1,\"commit\":true}\n",
+	"op twice":              "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"op\":{\"type\":\"cancel\"}}\n",
+	"commit twice":          "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"commit\":true}\n",
+	"rejected":              "{\"seq\":1,\"op\":{\"type\":\"judged\",\"call\":\"a\\\"b\\\\c\\n\\u0001é\",\"arm\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"rejected deliver":      "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"op\":{\"value\":\"v\",\"type\":\"deliver\",\"source\":\"s\",\"connection\":3,\"run\":[\"a\",\"b\"]}}\n{\"seq\":4,\"commit\":true}\n",
+	"duplicate fields":      "{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"},\"op\":{\"type\":\"cancel\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"duplicate payload":     "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":\"a\",\"v\":\"b\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"duplicate op key":      "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"sales\",\"placement\":\"stock\"}}\n{\"seq\":4,\"commit\":true}\n",
+	"duplicate escaped":     "{\"seq\":1,\"\\u0073eq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"duplicate commit":      "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true,\"commit\":true}\n",
+	"duplicate uncommitted": "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"seq\":3,\"op\":{\"type\":\"cancel\"}}\n",
+	"duplicate torn":        "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"seq\":3",
+	"huge seq":              "{\"seq\":123456789012345678901234567890,\"commit\":true}\n",
+	"torn op":               "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"sales\"}}\n",
+	"torn line":             "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com",
+	"header again":          "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n{\"definition\":{\"main\":\"x\"}}\n",
+}
+
+// headerTexts are whole records whose header is missing, torn, malformed, or holds a definition that
+// does not decode or validate, or is written in another form; both checkers must give the same
+// output for each.
+var headerTexts = map[string]string{
+	"empty":                "",
+	"torn header":          "{\"definition\":{\"main\":\"da",
+	"torn character":       "{\"definition\":{\"main\":\"\xe3\x81",
+	"no header":            "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"empty first line":     "\n",
+	"not an object":        "[]\n",
+	"without definition":   "{}\n",
+	"unknown field":        "{\"definition\":{},\"seq\":0}\n",
+	"null definition":      "{\"definition\":null}\n",
+	"empty definition":     "{\"definition\":{}}\n",
+	"invalid definition":   "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n",
+	"escaped name":         "{\"definition\":{\"main\":\"a\\nb\\u0001\\u00e9\\ud83d\\ude00\",\"workflows\":[]}}\n",
+	"duplicate definition": "{\"definition\":{\"main\":\"w\",\"workflows\":[]},\"definition\":{}}\n",
+	"duplicate main":       "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n",
+	"duplicate nested key": "{\"definition\":" + strings.TrimSuffix(limitDefinition("2"), "}]}]}") + ",\"policy\":\"stop\"}]}]}}\n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"duplicate escaped key":  "{\"definition\":{\"main\":\"w\",\"workflows\":[],\"m\\u0061in\":\"w\"}}\n",
+	"unknown definition key": "{\"definition\":{\"z\":1,\"main\":\"w\",\"b\":2}}\n",
+	"huge limit": "{\"definition\":" + limitDefinition("99999999999999999999999") + "}\n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
+	"spaced header": " { \"definition\" : " + limitDefinition("2") + " } \n" +
+		"{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n",
 }
 
 func TestConformanceRecords(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
-	programs := map[string]string{"merge": program(t, "merge"), "users": program(t, "users")}
+	headers := map[string]string{"merge": header(t, cli, definition(t, "merge")), "users": header(t, cli, definition(t, "users"))}
 	texts := map[string]string{}
 	for label, text := range recordTexts {
-		texts["merge "+label] = text
+		texts["merge "+label] = headers["merge"] + text
 	}
 	// users takes an input, whose payload the commit of the start needs.
-	texts["users missing payload"] = "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n{\"seq\":2,\"commit\":true}\n"
-	texts["users pending op"] = "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n"
-	texts["users payload"] = "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n"
-	texts["users huge connection"] = texts["users payload"] + "{\"seq\":3,\"op\":{\"type\":\"deliver\",\"run\":[],\"connection\":99999999999999999999,\"source\":\"s\"}}\n"
+	users := map[string]string{
+		"missing payload": "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n{\"seq\":2,\"commit\":true}\n",
+		"pending op":      "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n",
+		"payload":         "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n",
+	}
+	users["huge connection"] = users["payload"] + "{\"seq\":3,\"op\":{\"type\":\"deliver\",\"run\":[],\"connection\":99999999999999999999,\"source\":\"s\"}}\n"
+	for label, text := range users {
+		texts["users "+label] = headers["users"] + text
+		// The records replay against the definition of the header, not the one they were meant for.
+		texts["merge header, users "+label] = headers["merge"] + text
+	}
+	for label, text := range headerTexts {
+		texts["header "+label] = text
+	}
 	for label, text := range texts {
 		trace := filepath.Join(dir, strings.ReplaceAll(label, " ", "-")+".jsonl")
 		if err := os.WriteFile(trace, []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		args := []string{"check", trace, "--program", programs[strings.Fields(label)[0]]}
+		args := []string{"check", trace}
 		lean := runLean(t, cli, args...)
 		t.Logf("%s: exit %d %s", label, lean.code, strings.TrimSpace(lean.stdout+lean.stderr))
 		sameResult(t, label, lean, runGo(args...))
@@ -500,7 +595,7 @@ func TestConformanceRecords(t *testing.T) {
 // Go gen and Lean gen write the same records for a seed, compared as parsed JSON.
 func TestConformanceGen(t *testing.T) {
 	cli := leanCLI(t)
-	for _, path := range conformancePrograms(t) {
+	for _, path := range conformanceDefinitions(t) {
 		name := baseName(path)
 		for _, seed := range conformanceSeeds {
 			lean := runLean(t, cli, "gen", path, "--seed", seed)

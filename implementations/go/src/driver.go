@@ -51,7 +51,7 @@ type placementPlan struct {
 	outgoing []int
 }
 
-func newPlans(p *Program) map[string]*workflowPlan {
+func newPlans(p *Definition) map[string]*workflowPlan {
 	plans := map[string]*workflowPlan{}
 	for i := range p.Workflows {
 		w := &p.Workflows[i]
@@ -149,11 +149,11 @@ func (cr *callRuntime) stopElementTimer() {
 type internalError struct{ err error }
 
 type driver struct {
-	program  *Program
-	registry *Registry
-	plans    map[string]*workflowPlan
-	recorder *ownedRecorder
-	journal  Journal
+	definition *Definition
+	registry   *Registry
+	plans      map[string]*workflowPlan
+	recorder   *ownedRecorder
+	journal    Journal
 	// state is the state of the recorder, which changes in place; v reads it through its index.
 	state *State
 	v     view
@@ -191,7 +191,7 @@ type driver struct {
 
 func (e *Engine) newDriver(ctx context.Context, r *ownedRecorder, j Journal) *driver {
 	d := &driver{
-		program: e.program, registry: e.registry, plans: e.plans, recorder: r, journal: j,
+		definition: e.definition, registry: e.registry, plans: e.plans, recorder: r, journal: j,
 		state: r.machine.s, v: r.machine.view,
 		exec:     &WorkflowExecution{cancel: make(chan struct{}), done: make(chan struct{})},
 		base:     context.WithoutCancel(ctx),
@@ -561,7 +561,7 @@ func (d *driver) handle(ev event) {
 	}
 }
 
-func (d *driver) armsOf(c *Call) []string { return armsOf(d.program, d.v, c) }
+func (d *driver) armsOf(c *Call) []string { return armsOf(d.definition, d.v, c) }
 
 // pass tries the engine's operations once and reports whether one was accepted. The driver
 // repeats passes until none is, so every operation Step accepts is applied (§12: nothing waits
@@ -699,7 +699,7 @@ func (d *driver) transform(id, v string) (out string, err error) {
 }
 
 func (d *driver) concurrencyOf(e *Execution) *Concurrency {
-	c, err := d.v.concurrencyOf(d.program, e)
+	c, err := d.v.concurrencyOf(d.definition, e)
 	if err != nil {
 		panic(internalError{fmt.Errorf("suimon: execution %s: %w", e.ID, err)})
 	}
@@ -748,7 +748,7 @@ func (d *driver) tasks(try func(Op, error)) {
 		if !ok {
 			continue
 		}
-		spec, err := d.v.taskSpec(d.program, e, r.Task)
+		spec, err := d.v.taskSpec(d.definition, e, r.Task)
 		if err != nil || spec.Output == nil {
 			continue
 		}

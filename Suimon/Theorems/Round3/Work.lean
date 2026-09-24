@@ -13,7 +13,7 @@ final status, provided the input fits `main` and the behavior answers every call
 (`stuck_terminal`). Fairness is not needed, because executions are finite. -/
 
 section Work
-variable {p : Program} {env : Env} {s t : State}
+variable {p : Definition} {env : Env} {s t : State}
 
 /-- A call's progress: two per element (fetch, then the element), then its status. -/
 def callProgress (c : Call) : Nat :=

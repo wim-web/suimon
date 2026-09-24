@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { ArrowUpRight, ListTree } from 'lucide-react';
-import type { Execution, Invocation, Path, PlacementPresentation, Program, Result, Run, RuntimeState, Timeout, Workflow } from '../types';
-import { bodyLabel, deriveKinds, findPlacement, findWorkflow, incoming, isEndpoint, isEntry, outgoing, renderValueType } from '../lib/program';
-import type { IndexedConnection } from '../lib/program';
+import type { Definition, Execution, Invocation, Path, PlacementPresentation, Result, Run, RuntimeState, Timeout, Workflow } from '../types';
+import { bodyLabel, deriveKinds, findPlacement, findWorkflow, incoming, isEndpoint, isEntry, outgoing, renderValueType } from '../lib/definition';
+import type { IndexedConnection } from '../lib/definition';
 import { armOutcome, childRuns, invocationResults, resultSource, runOverlay, samePath } from '../lib/status';
 import type { ValueIndex } from '../lib/values';
 import { resolveValue } from '../lib/values';
@@ -12,7 +12,7 @@ import { StatusBadge, StatusCounts } from './StatusBadge';
 import { ValueView } from './ValueView';
 
 export interface PlacementInspectorProps {
-  program: Program;
+  definition: Definition;
   workflow: Workflow | string;
   placement: string;
   /** With a state and a run of this workflow, the inspector adds the placement's status in that run. */
@@ -45,17 +45,17 @@ function RunLinks({ runs, onSelectRun }: { runs: Run[]; onSelectRun?: (path: Pat
   </button>)}</div> : null;
 }
 
-export function PlacementInspector({ program, workflow: workflowRef, placement: name, state, run, values, presentation, onOpenWorkflow, onSelectRun, onShowRecords, recordCount, limit = 50 }: PlacementInspectorProps) {
-  const workflow = typeof workflowRef === 'string' ? findWorkflow(program, workflowRef) : workflowRef;
+export function PlacementInspector({ definition, workflow: workflowRef, placement: name, state, run, values, presentation, onOpenWorkflow, onSelectRun, onShowRecords, recordCount, limit = 50 }: PlacementInspectorProps) {
+  const workflow = typeof workflowRef === 'string' ? findWorkflow(definition, workflowRef) : workflowRef;
   const placement = findPlacement(workflow, name);
   if (!workflow || !placement) return <div className="sui-empty-inspector"><p>Unknown placement {name}</p></div>;
   const node = placement.node;
-  const kind = deriveKinds(program, workflow)[name] ?? null;
-  const overlay = state && run ? runOverlay(program, state, run) : null;
+  const kind = deriveKinds(definition, workflow)[name] ?? null;
+  const overlay = state && run ? runOverlay(definition, state, run) : null;
   const status = overlay?.run.workflow === workflow.id ? overlay.placements[name] : undefined;
   const connectionStatus = status ? overlay!.connections : undefined;
   const results = status && state ? state.results.filter(r => r.placement === name && samePath(r.run, overlay!.run.path)) : [];
-  const fn = node.type === 'function' ? program.functions.find(f => f.id === node.function) : undefined;
+  const fn = node.type === 'function' ? definition.functions.find(f => f.id === node.function) : undefined;
   const connectionRow = (c: IndexedConnection, direction: 'in' | 'out') => {
     const deliveries = connectionStatus?.[c.index];
     return <li key={c.index} className="sui-connection-row">

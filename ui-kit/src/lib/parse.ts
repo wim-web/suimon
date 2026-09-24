@@ -1,6 +1,6 @@
 import type {
-  Body, Call, CallTarget, Connection, Contract, Control, Delivered, Delivery, Execution, ExecutionRecord, Failure,
-  FunctionDecl, Invocation, JudgeDecl, Op, OpType, Path, Placement, Policy, Program, RecordLog, Result, Run,
+  Body, Call, CallTarget, Connection, Contract, Control, Definition, Delivered, Delivery, Execution, ExecutionRecord,
+  Failure, FunctionDecl, Invocation, JudgeDecl, Op, OpType, Path, Placement, Policy, RecordLog, Result, Run,
   RuntimeState, Settled, Task, TaskOutput, TaskResult, TaskState, Timeout, TransformDecl, ValueType, Workflow,
 } from '../types';
 
@@ -21,7 +21,7 @@ function string(value: unknown, at: string): string {
   if (typeof value !== 'string') fail(at, 'expected a string');
   return value;
 }
-/** Names in a program are non-empty (program.schema.json `name`). */
+/** Names in a definition are non-empty (definition.schema.json `name`). */
 function name(value: unknown, at: string): string {
   if (string(value, at) === '') fail(at, 'empty string');
   return value as string;
@@ -54,7 +54,43 @@ function unique(values: string[], at: string, what: string): void {
   for (const value of values) { if (seen.has(value)) fail(at, `duplicate ${what} ${value}`); seen.add(value); }
 }
 
-/* Program */
+/**
+ * The first key that repeats within one object of JSON text that JSON.parse accepted, compared after
+ * its escapes are decoded. JSON.parse keeps the last field of such a key, where suimon rejects the
+ * text, so the text itself is scanned: each open object keeps the keys read so far.
+ */
+function repeatedKey(text: string): string | undefined {
+  const open: (Set<string> | null)[] = []; // the keys of each open object, null for an array
+  let atKey = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let end = i + 1;
+      while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+      if (atKey) {
+        const key = JSON.parse(text.slice(i, end + 1)) as string, keys = open.at(-1)!;
+        if (keys.has(key)) return key;
+        keys.add(key);
+        atKey = false;
+      }
+      i = end;
+    } else if (c === '{') { open.push(new Set()); atKey = true; }
+    else if (c === '[') { open.push(null); atKey = false; }
+    else if (c === '}' || c === ']') { open.pop(); atKey = false; }
+    else if (c === ',') atKey = open.at(-1) instanceof Set;
+  }
+  return undefined;
+}
+/** JSON text as suimon reads it: no object may repeat a key. */
+function json(text: string, at: string, expected: string): unknown {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return fail(at, expected); }
+  const key = repeatedKey(text);
+  if (key !== undefined) fail(at, `duplicate key ${JSON.stringify(key)}`);
+  return value;
+}
+
+/* Definition */
 
 function valueType(value: unknown, at: string): ValueType {
   if (typeof value === 'string') return name(value, at);
@@ -142,7 +178,7 @@ function connection(value: unknown, at: string): Connection {
 function workflow(value: unknown, at: string): Workflow {
   const o = object(value, at, ['id', 'input', 'placements', 'connections']);
   const id = name(field(o, 'id', at), `${at}.id`);
-  at = `program.workflows[${id}]`;
+  at = `definition.workflows[${id}]`;
   const placements = array(field(o, 'placements', at), `${at}.placements`).map((item, i) => placement(item, `${at}.placements[${i}]`));
   if (!placements.length) fail(`${at}.placements`, 'expected at least one placement');
   const result: Workflow = { id, placements, connections: optionalArray(o, 'connections', at).map((item, i) => connection(item, `${at}.connections[${i}]`)) };
@@ -154,18 +190,18 @@ function workflow(value: unknown, at: string): Workflow {
 }
 
 /** The references the kit follows to draw and navigate: placements, arms and called workflows. */
-function checkReferences(program: Program): void {
-  unique(program.workflows.map(w => w.id), 'program.workflows', 'workflow');
-  const workflows = new Map(program.workflows.map(w => [w.id, w]));
-  if (!workflows.has(program.main)) fail('program.main', `unknown workflow ${program.main}`);
+function checkReferences(definition: Definition): void {
+  unique(definition.workflows.map(w => w.id), 'definition.workflows', 'workflow');
+  const workflows = new Map(definition.workflows.map(w => [w.id, w]));
+  if (!workflows.has(definition.main)) fail('definition.main', `unknown workflow ${definition.main}`);
   const checkBody = (b: Body, at: string) => {
     if (b.type !== 'subworkflow') return;
     const called = workflows.get(b.workflow);
     if (!called) fail(at, `unknown workflow ${b.workflow}`);
     if (!called.placements.some(p => p.name === b.output)) fail(at, `workflow ${b.workflow} has no placement ${b.output}`);
   };
-  for (const w of program.workflows) {
-    const at = `program.workflows[${w.id}]`;
+  for (const w of definition.workflows) {
+    const at = `definition.workflows[${w.id}]`;
     unique(w.placements.map(p => p.name), `${at}.placements`, 'placement');
     const placements = new Map(w.placements.map(p => [p.name, p]));
     if (w.input && !placements.has(w.input.placement)) fail(`${at}.input.placement`, `unknown placement ${w.input.placement}`);
@@ -188,13 +224,17 @@ function checkReferences(program: Program): void {
 }
 
 /**
- * Checks the structure of a program (program.schema.json) and the references the kit follows.
+ * Checks the structure of a definition (definition.schema.json) and the references the kit follows.
  * Types and Single/Stream kinds are left to `suimon validate`.
+ *
+ * The definition is a parsed value, or the text of a definition file, in which no object may repeat
+ * a key, as `suimon validate` reads it; a parsed value has already lost such keys.
  */
-export function parseProgram(value: unknown): Program {
-  const at = 'program';
-  const o = object(value, at, ['main', 'functions', 'judges', 'transforms', 'workflows']);
-  const program: Program = {
+export function parseDefinition(value: unknown): Definition {
+  const at = 'definition';
+  const o = object(typeof value === 'string' ? json(value, at, 'expected a JSON definition') : value, at,
+    ['main', 'functions', 'judges', 'transforms', 'workflows']);
+  const definition: Definition = {
     main: name(field(o, 'main', at), `${at}.main`),
     functions: optionalArray(o, 'functions', at).map((item, i): FunctionDecl => {
       const fat = `${at}.functions[${i}]`, f = object(item, fat, ['id', 'input', 'output']);
@@ -212,8 +252,8 @@ export function parseProgram(value: unknown): Program {
     }),
     workflows: array(field(o, 'workflows', at), `${at}.workflows`).map((item, i) => workflow(item, `${at}.workflows[${i}]`)),
   };
-  checkReferences(program);
-  return program;
+  checkReferences(definition);
+  return definition;
 }
 
 /* Runtime state (derived JSON of Suimon/State.lean). Unknown fields are ignored. */
@@ -359,8 +399,15 @@ function payloads(value: unknown, at: string): Record<string, string> {
   for (const [id, payload] of Object.entries(o)) result[id] = string(payload, `${at}.${id}`);
   return result;
 }
+/** The header, the first line of a record: the definition of the execution, checked by parseDefinition. */
+function header(value: unknown, at: string): Definition {
+  if (!isObject(value) || !Object.hasOwn(value, 'definition')) fail(at, 'expected the header with the definition');
+  const o = object(value, at, ['definition']);
+  try { return parseDefinition(o.definition); } catch (error) { return fail(at, error instanceof Error ? error.message : String(error)); }
+}
 function record(value: unknown, at: string): ExecutionRecord {
   const o = object(value, at);
+  if (Object.hasOwn(o, 'definition')) fail(at, 'the header must be the first line');
   const seq = positive(field(o, 'seq', at), `${at}.seq`);
   if (Object.hasOwn(o, 'commit')) {
     object(o, at, ['seq', 'commit']);
@@ -384,20 +431,23 @@ export interface RecordOptions {
 /**
  * Checks execution record lines, as `suimon check` reads them, and keeps the torn tail apart.
  *
- * Text is split at newlines: each complete line (followed by a newline) must be one record, and
- * the text after the last newline is the tail. A crash can leave a partial line there; the tail is
- * never committed, even when it parses as a record, so it is returned as text and not read.
+ * Text is split at newlines: the first complete line (followed by a newline) must be the header,
+ * whose definition is checked with parseDefinition, each later complete line one record, and the
+ * text after the last newline is the tail. A crash can leave a partial line there, even of the
+ * header; the tail is never committed, even when it parses, so it is returned as text and not read.
+ * No object of a line may repeat a key, at any depth, the definition of the header included.
  *
- * An array holds complete lines, as strings or parsed records, for hosts that split lines
- * themselves. Each item must be a record. A host that kept a final line without its newline passes
- * it as `options.tail` instead of as an item, since an item is a complete line.
+ * An array holds complete lines, as strings or parsed objects, for hosts that split lines
+ * themselves: the header, then records. A parsed object has already lost the repeated keys of its
+ * line. A host that kept a final line without its newline passes it as `options.tail` instead of as
+ * an item, since an item is a complete line.
  *
  * Records must follow each other from seq 1, each op followed by its commit; an op without its
  * commit may only come last, and is uncommitted.
  */
 export function parseRecordLog(value: unknown, options: RecordOptions = {}): RecordLog {
   let items: { value: unknown; at: string }[], tail: string;
-  const line = (text: string, at: string) => { try { return JSON.parse(text) as unknown; } catch { return fail(at, 'expected a JSON record'); } };
+  const line = (text: string, at: string) => json(text, at, 'expected a JSON record');
   if (typeof value === 'string') {
     const lines = value.split('\n');
     tail = lines.pop() ?? '';
@@ -408,8 +458,9 @@ export function parseRecordLog(value: unknown, options: RecordOptions = {}): Rec
     items = array(value, 'records').map((item, i) => ({ value: typeof item === 'string' ? line(item, `records[${i}]`) : item, at: `records[${i}]` }));
   }
   const records: ExecutionRecord[] = [];
-  let pending = false;
-  for (const item of items) {
+  let definition: Definition | null = null, pending = false;
+  for (const [i, item] of items.entries()) {
+    if (i === 0) { definition = header(item.value, item.at); continue; }
     const r = record(item.value, item.at);
     const expected = records.length + 1;
     if (r.seq !== expected) fail(item.at, `expected sequence ${expected}, got ${r.seq}`);
@@ -417,10 +468,10 @@ export function parseRecordLog(value: unknown, options: RecordOptions = {}): Rec
     else { if (pending) fail(item.at, 'an op before the previous commit'); pending = true; }
     records.push(r);
   }
-  return { records, tail };
+  return { definition, records, tail };
 }
 
-/** The records of `parseRecordLog`, without the tail. */
+/** The records of `parseRecordLog`, without the header and the tail. */
 export function parseRecords(value: unknown, options?: RecordOptions): ExecutionRecord[] {
   return parseRecordLog(value, options).records;
 }

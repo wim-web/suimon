@@ -9,7 +9,7 @@ import (
 	"iter"
 )
 
-// A program names its functions, judges and transforms; a Registry supplies their Go
+// A definition names its functions, judges and transforms; a Registry supplies their Go
 // implementations (§14). Values cross the engine boundary as JSON: the engine keeps and records
 // each value as the encoding/json encoding of the Go value a function returned, yielded or a
 // transform produced, and decodes that JSON into the parameter type of the function that receives
@@ -29,7 +29,7 @@ func (k bindingKind) String() string {
 	return [...]string{"Single function", "Stream function", "judge", "transform"}[k]
 }
 
-// A Binding binds one identifier of a program to its implementation. Make bindings with Func,
+// A Binding binds one identifier of a definition to its implementation. Make bindings with Func,
 // FuncNoInput, Stream, StreamNoInput, Judge, Transform and Passthrough, and collect them with
 // NewRegistry.
 type Binding struct {
@@ -125,7 +125,8 @@ func encodeAll[T any](seq iter.Seq2[T, error], yield func([]byte, error) bool) {
 }
 
 // Judge binds a branch judge (§7.1): it receives the branch input and returns the name of one arm
-// of the branch. An error, or a name that is not an arm, fails the judgement.
+// of the branch. An error, or a name that is not an arm, fails the judgement. As for Func, f must
+// return when ctx is cancelled.
 func Judge[In any](id string, f func(ctx context.Context, in In) (arm string, err error)) Binding {
 	return Binding{id: id, kind: bindJudge, input: true,
 		judge: func(ctx context.Context, input []byte) (string, error) {
@@ -181,10 +182,10 @@ func decodeValue[T any](data []byte) (T, error) {
 	return v, nil
 }
 
-// Registry holds the implementations of the functions, judges and transforms of programs. It is
+// Registry holds the implementations of the functions, judges and transforms of definitions. It is
 // immutable, and safe for concurrent use.
 type Registry struct {
-	// functions holds Single and Stream functions, which share the identifiers of a program's
+	// functions holds Single and Stream functions, which share the identifiers of a definition's
 	// functions; judges and transforms have their own identifiers.
 	functions, judges, transforms map[string]Binding
 }
@@ -229,7 +230,7 @@ func (r *Registry) namespace(kind bindingKind) map[string]Binding {
 // check reports the functions, judges and transforms that p uses but r does not bind, or binds
 // with another shape than p declares: a Single or a Stream function, with or without input.
 // Unknown declarations are left to validation.
-func (r *Registry) check(p *Program) error {
+func (r *Registry) check(p *Definition) error {
 	var errs []error
 	seen := map[string]bool{}
 	fail := func(key string, err error) {

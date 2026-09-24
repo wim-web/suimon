@@ -9,7 +9,7 @@ Forward lemmas: when the guards of one rule of `Step.lean` hold, the operation i
 the state. Each is a direct computation of one `Step.*` function; no invariant is involved. -/
 
 section Enabled
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- The owner record of a call exists: its invocation, or its execution with the task. -/
 def OwnerFound (s : State) (c : Call) : Prop :=

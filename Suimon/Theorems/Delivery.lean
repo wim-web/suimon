@@ -6,9 +6,9 @@ namespace Suimon
 
 /-- In a workflow that finished without a stop, every accepted result reached every connection that
     carries it (§6, §15.2 受け渡し); with `WellKeyed.deliveries`, it reached each of them once.
-    Each connection must target a placement of its workflow, as in a valid program: a connection to an
-    unknown placement is never waited for, so nothing obliges its delivery. --/
-theorem Reachable.delivered {p : Program} {s : State}
+    Each connection must target a placement of its workflow, as in a valid definition: a connection to
+    an unknown placement is never waited for, so nothing obliges its delivery. --/
+theorem Reachable.delivered {p : Definition} {s : State}
     (targets : ∀ w ∈ p.workflows, ∀ c ∈ w.connections, (w.placement? c.target).isSome)
     (h : Reachable p s) (done : (s.run? []).any (·.complete) = true) :
     ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → ∀ i c, w.connections[i]? = some c →
@@ -22,7 +22,7 @@ theorem Reachable.delivered {p : Program} {s : State}
   obtain ⟨hrunm, hrunp⟩ := State.run?_eq_some hrun
   have hsettled := (inv.sett.runs run hrunm (hruns run hrunm)).2 w hwf
   obtain ⟨dst, hdst⟩ := Option.isSome_iff_exists.mp
-    (targets w (Program.workflow?_eq_some hwf).1 c (List.mem_of_getElem? hc))
+    (targets w (Definition.workflow?_eq_some hwf).1 c (List.mem_of_getElem? hc))
   obtain ⟨hdstm, hdstn⟩ := Workflow.placement?_eq_some hdst
   obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp (hsettled dst hdstm)
   obtain ⟨hxm, hxr, hxp⟩ := State.settled?_eq_some hx
@@ -31,8 +31,8 @@ theorem Reachable.delivered {p : Program} {s : State}
     (by rw [hxp, hdstn])).1 r (Delivery.mem_eligible.mpr ⟨hr, by rw [hxr, hrunp], hsrc.symm, harm.imp id Eq.symm⟩)
   rwa [hxr, hrunp] at hdel
 
-/-- `Reachable.delivered` for a valid program. --/
-theorem Reachable.delivered_of_validate {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s)
+/-- `Reachable.delivered` for a valid definition. --/
+theorem Reachable.delivered_of_validate {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s)
     (done : (s.run? []).any (·.complete) = true) :
     ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → ∀ i c, w.connections[i]? = some c →
       c.source = r.placement → (c.arm = none ∨ c.arm = r.arm) → (s.delivery? r.run i r.id).isSome := by
@@ -43,14 +43,14 @@ theorem Reachable.delivered_of_validate {p : Program} {s : State} (valid : p.val
 
 /-- In a workflow that finished without a stop, every run and every concurrency execution completed,
     and no call is still running (§13.3). --/
-theorem Reachable.done_complete {p : Program} {s : State} (h : Reachable p s) (done : (s.run? []).any (·.complete) = true) :
+theorem Reachable.done_complete {p : Definition} {s : State} (h : Reachable p s) (done : (s.run? []).any (·.complete) = true) :
     (∀ r ∈ s.runs, r.complete = true) ∧ (∀ e ∈ s.executions, e.complete = true) ∧ (∀ c ∈ s.calls, c.status.ended = true) := by
   obtain ⟨root, hroot, hrc⟩ := Delivery.root_of_done done
   exact Delivery.all_done (Delivery.Reachable.inv h) hroot hrc
 
 /-- In a completed execution, every result of a task in the output went through its output
     transform (§8.3). --/
-theorem Reachable.execution_outputs {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.execution_outputs {p : Definition} {s : State} (h : Reachable p s) :
     ∀ e ∈ s.executions, e.complete = true → ∀ c, s.concurrencyOf p e = .ok c →
       ∀ r ∈ s.taskResults, r.execution = e.id → (∃ spec ∈ c.tasks, spec.name = r.task ∧ spec.output.isSome) →
         r.output ≠ .pending :=

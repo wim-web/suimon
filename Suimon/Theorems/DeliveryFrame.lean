@@ -275,7 +275,7 @@ theorem ended_of_running {c : Call} (h : c.status = .running ∨ c.status = .fet
 
 open State in
 /-- Every accepted step keeps the records of the state before it. --/
-theorem step_kept {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hfresh : s.runs = [] ∨ s.started = true)
+theorem step_kept {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hfresh : s.runs = [] ∨ s.started = true)
     (hs : step p s op = .ok t) : Kept s t := by
   cases op with
   | start input =>
@@ -425,12 +425,12 @@ theorem step_kept {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hfre
 
 /-! ### Lookups that a step keeps -/
 
-theorem workflow?_iff {p : Program} {s : State} {path : Path} {w : Workflow} :
+theorem workflow?_iff {p : Definition} {s : State} {path : Path} {w : Workflow} :
     s.workflow? p path = some w ↔ ∃ r, s.run? path = some r ∧ p.workflow? r.workflow = some w := by
   unfold State.workflow?
   exact option_bind_eq_some
 
-theorem concurrencyOf_iff {p : Program} {s : State} {e : Execution} {c : Concurrency} :
+theorem concurrencyOf_iff {p : Definition} {s : State} {e : Execution} {c : Concurrency} :
     s.concurrencyOf p e = .ok c ↔
       ∃ w pl, s.workflow? p e.run = some w ∧ w.placement? e.placement = some pl ∧ pl.control = .concurrency c := by
   rw [State.concurrencyOf_eq_ok]
@@ -442,12 +442,12 @@ theorem concurrencyOf_iff {p : Program} {s : State} {e : Execution} {c : Concurr
     exact ⟨pl, ⟨w, hw, hpl⟩, hc⟩
 
 /-- The concurrency spec of an execution depends only on its run and placement. --/
-theorem concurrencyOf_congr {p : Program} {s : State} {e e' : Execution} (hrun : e'.run = e.run)
+theorem concurrencyOf_congr {p : Definition} {s : State} {e e' : Execution} (hrun : e'.run = e.run)
     (hpl : e'.placement = e.placement) : s.concurrencyOf p e' = s.concurrencyOf p e := by
   unfold State.concurrencyOf
   rw [hrun, hpl]
 
-theorem taskSpec_congr {p : Program} {s : State} {e e' : Execution} {name : String} (hrun : e'.run = e.run)
+theorem taskSpec_congr {p : Definition} {s : State} {e e' : Execution} {name : String} (hrun : e'.run = e.run)
     (hpl : e'.placement = e.placement) : s.taskSpec p e' name = s.taskSpec p e name := by
   unfold State.taskSpec
   rw [concurrencyOf_congr hrun hpl]
@@ -462,19 +462,19 @@ theorem run? (hk : Kept s t) (wk : t.WellKeyed) {path : Path} {r : Run} (h : s.r
   obtain ⟨r', hr', a1, a2, a3, a4, a5, a6⟩ := hk.run r hr
   exact ⟨r', a1 ▸ wk.run?_of_mem hr', a2, a3, a4, a5, a6⟩
 
-theorem workflow? (hk : Kept s t) (wk : t.WellKeyed) {p : Program} {path : Path} {w : Workflow}
+theorem workflow? (hk : Kept s t) (wk : t.WellKeyed) {p : Definition} {path : Path} {w : Workflow}
     (h : s.workflow? p path = some w) : t.workflow? p path = some w := by
   obtain ⟨r, hr, hw⟩ := workflow?_iff.mp h
   obtain ⟨r', hr', hwf, -⟩ := hk.run? wk hr
   exact workflow?_iff.mpr ⟨r', hr', hwf ▸ hw⟩
 
-theorem concurrencyOf (hk : Kept s t) (wk : t.WellKeyed) {p : Program} {e e' : Execution} {c : Concurrency}
+theorem concurrencyOf (hk : Kept s t) (wk : t.WellKeyed) {p : Definition} {e e' : Execution} {c : Concurrency}
     (hrun : e'.run = e.run) (hpl : e'.placement = e.placement) (h : s.concurrencyOf p e = .ok c) :
     t.concurrencyOf p e' = .ok c := by
   obtain ⟨w, pl, hw, hpl', hc⟩ := concurrencyOf_iff.mp h
   exact concurrencyOf_iff.mpr ⟨w, pl, hrun ▸ hk.workflow? wk hw, hpl ▸ hpl', hc⟩
 
-theorem taskSpec (hk : Kept s t) (wk : t.WellKeyed) {p : Program} {e e' : Execution} {name : String}
+theorem taskSpec (hk : Kept s t) (wk : t.WellKeyed) {p : Definition} {e e' : Execution} {name : String}
     {spec : TaskSpec} (hrun : e'.run = e.run) (hpl : e'.placement = e.placement) (h : s.taskSpec p e name = .ok spec) :
     t.taskSpec p e' name = .ok spec := by
   obtain ⟨c, hc, hf⟩ := State.taskSpec_eq_ok.mp h

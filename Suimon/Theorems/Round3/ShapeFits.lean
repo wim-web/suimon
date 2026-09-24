@@ -6,7 +6,7 @@ open State
 /-! ## [6] Round3/ShapeFits.lean — task B4 (static) -/
 
 section ShapeFitsSection
-variable {p : Program}
+variable {p : Definition}
 
 /-- How a placement takes its input, by its control (§3.2, §9). -/
 def ShapeFits : Control → Workflow.Shape → Prop
@@ -95,7 +95,7 @@ private theorem shape_exists {w : Workflow} {pl : Placement} (hwc : WorkflowChec
       have hnone := ShapeFits.inputKind?_none hentry hinc.symm hin
       subst hnone
       refine ⟨_, hshape, ?_⟩
-      cases hc : pl.control <;> rw [hc] at hrule <;> simp [Program.outputKind] at hrule <;>
+      cases hc : pl.control <;> rw [hc] at hrule <;> simp [Definition.outputKind] at hrule <;>
         first | exact absurd hc (hm' _) | trivial
     | [(i, c)], hshape =>
       rw [hinputs, List.map_cons, List.map_nil] at hinc
@@ -104,7 +104,7 @@ private theorem shape_exists {w : Workflow} {pl : Placement} (hwc : WorkflowChec
       rw [hk'] at hshape
       cases k'
       · refine ⟨_, hshape, ?_⟩
-        cases hc : pl.control <;> rw [hc] at hrule <;> simp [Program.outputKind] at hrule <;>
+        cases hc : pl.control <;> rw [hc] at hrule <;> simp [Definition.outputKind] at hrule <;>
           first | exact absurd hc (hm' _) | trivial
       · refine ⟨_, hshape, ?_⟩
         cases hc : pl.control <;> first | exact absurd hc (hm' _) | trivial
@@ -117,10 +117,10 @@ private theorem shape_exists {w : Workflow} {pl : Placement} (hwc : WorkflowChec
     have hsingle := ShapeFits.inputKind?_entry hentry hin
     subst hsingle
     refine ⟨_, hshape, ?_⟩
-    cases hc : pl.control <;> rw [hc] at hrule <;> simp [Program.outputKind] at hrule <;>
+    cases hc : pl.control <;> rw [hc] at hrule <;> simp [Definition.outputKind] at hrule <;>
       first | exact absurd hc (hm' _) | trivial
 
-/-- (N6) Every placement of a valid program has an input shape that fits its control and an output
+/-- (N6) Every placement of a valid definition has an input shape that fits its control and an output
     kind; a Single input comes from a Single source, a Stream input from a Stream source, and a Merge
     reads all its inputs, which are Single. -/
 theorem shape_fits (valid : p.validate = .ok ()) :
@@ -130,7 +130,7 @@ theorem shape_fits (valid : p.validate = .ok ()) :
       (∀ j c, sh = .stream j c → w.outputKind? p c.source = some .stream ∧ (j, c) ∈ w.inputs pl.name) ∧
       (∀ cs, sh = .merge cs → cs = w.inputs pl.name ∧ ∀ jc ∈ cs, w.outputKind? p jc.2.source = some .single) := by
   intro w hw pl hpl
-  have hwc := (Program.validate_ok valid).workflows w hw
+  have hwc := (Definition.validate_ok valid).workflows w hw
   have hplc := hwc.placements pl hpl
   have hfind : w.placement? pl.name = some pl := Workflow.placement?_of_mem hwc.names hpl
   obtain ⟨k, hk⟩ := Option.isSome_iff_exists.mp hplc.kind

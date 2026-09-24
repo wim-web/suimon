@@ -1,5 +1,5 @@
-import type { Program, RuntimeState } from '../types';
-import { findPlacement, findWorkflow, incoming } from './program';
+import type { Definition, RuntimeState } from '../types';
+import { findPlacement, findWorkflow, incoming } from './definition';
 import { findExecution, findRun, samePath, taskOutputValue } from './status';
 
 /**
@@ -14,10 +14,10 @@ export type ResolvedValue =
   | { kind: 'missing'; id: string };
 
 /** Members of the engine-built list values of the state. */
-function lists(program: Program, state: RuntimeState): Map<string, string[]> {
+function lists(definition: Definition, state: RuntimeState): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const result of state.results) {
-    const run = findRun(state, result.run), workflow = run && findWorkflow(program, run.workflow);
+    const run = findRun(state, result.run), workflow = run && findWorkflow(definition, run.workflow);
     const placement = findPlacement(workflow, result.placement);
     if (!workflow || !placement) continue;
     const node = placement.node;
@@ -36,8 +36,8 @@ function lists(program: Program, state: RuntimeState): Map<string, string[]> {
   return found;
 }
 
-export function valueIndex(program: Program, state?: RuntimeState, payloads: Record<string, string> = {}): ValueIndex {
-  return { payloads: new Map(Object.entries(payloads)), lists: state ? lists(program, state) : new Map() };
+export function valueIndex(definition: Definition, state?: RuntimeState, payloads: Record<string, string> = {}): ValueIndex {
+  return { payloads: new Map(Object.entries(payloads)), lists: state ? lists(definition, state) : new Map() };
 }
 
 export function resolveValue(index: ValueIndex | undefined, id: string, depth = 0): ResolvedValue {

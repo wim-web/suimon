@@ -10,12 +10,12 @@ namespace Suimon.Round3.SettledAux
 open State
 
 /-- A succeeded invocation of a Single body has its result, on the invocation's arm. -/
-def SuccResult (p : Program) (s : State) : Prop :=
+def SuccResult (p : Definition) (s : State) : Prop :=
   ∀ i ∈ s.invocations, i.status = .succeeded → ∀ pl, Settle.placementAt p s i.run i.placement = some pl →
     SingleBody p pl.control → ∃ r ∈ s.results, r.run = i.run ∧ r.placement = i.placement ∧ r.arm = i.arm
 
 namespace SuccResult
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem empty : SuccResult p {} := fun _ h => nomatch h
 
@@ -261,7 +261,7 @@ theorem step (h : SuccResult p s) (hr : Reachable p s) {op : Op} (hs : Suimon.st
 end SuccResult
 
 /-- A succeeded invocation of a Single body has its result in every reachable state. -/
-theorem reachable_succResult {p : Program} {s : State} (h : Reachable p s) : SuccResult p s := by
+theorem reachable_succResult {p : Definition} {s : State} (h : Reachable p s) : SuccResult p s := by
   induction h with
   | empty => exact SuccResult.empty
   | step op hr hs ih => exact ih.step hr hs

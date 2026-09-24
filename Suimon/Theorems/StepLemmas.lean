@@ -148,7 +148,7 @@ theorem Workflow.placement?_eq_some {w : Workflow} {name : String} {pl : Placeme
     (h : w.placement? name = some pl) : pl ∈ w.placements ∧ pl.name = name :=
   find?_key_eq_some h
 
-theorem Program.workflow?_eq_some {p : Program} {id : String} {w : Workflow} (h : p.workflow? id = some w) :
+theorem Definition.workflow?_eq_some {p : Definition} {id : String} {w : Workflow} (h : p.workflow? id = some w) :
     w ∈ p.workflows ∧ w.id = id :=
   find?_key_eq_some h
 

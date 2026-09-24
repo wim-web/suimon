@@ -7,7 +7,7 @@ namespace Suimon.Round3.StableAux
 open State
 
 section StableFrame
-variable {p : Program} {s t u : State} {op : Op}
+variable {p : Definition} {s t u : State} {op : Op}
 
 /-! ### Lists -/
 

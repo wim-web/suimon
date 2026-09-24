@@ -17,14 +17,14 @@ namespace SettledAux
 
 /-- (N4) in the form the induction keeps: for the outcome (arm `none`) and for the arm of each
     connection out of the placement, a value read on that arm names a result of the state. -/
-def ValueInv (p : Program) (s : State) : Prop :=
+def ValueInv (p : Definition) (s : State) : Prop :=
   ∀ x ∈ s.settled, ∀ w, s.workflow? p x.run = some w → w.outputKind? p x.placement = some .single →
     ∀ a : Option String, (a = none ∨ ∃ (j : Nat) (c : Connection), w.connections[j]? = some c ∧
         c.source = x.placement ∧ c.arm = a) →
       armOutcome x a = .normal →
         ∃ r ∈ s.results, r.run = x.run ∧ r.placement = x.placement ∧ (a = none ∨ r.arm = a)
 
-theorem ValueInv.step {p : Program} {s t : State} (valid : p.validate = .ok ()) (h : ValueInv p s)
+theorem ValueInv.step {p : Definition} {s t : State} (valid : p.validate = .ok ()) (h : ValueInv p s)
     (hr : Reachable p s) {op : Op} (hs : Suimon.step p s op = .ok t) : ValueInv p t := by
   have wk' := step_wellKeyed hr.wellKeyed hs
   have hk := Delivery.Inv.kept (Delivery.Reachable.inv hr) hs
@@ -46,13 +46,13 @@ theorem ValueInv.step {p : Program} {s t : State} (valid : p.validate = .ok ()) 
     cases hwt
     rw [hkind] at hkind'
     cases hkind'
-    have hwm : w ∈ p.workflows := (Program.workflow?_eq_some hw').1
+    have hwm : w ∈ p.workflows := (Definition.workflow?_eq_some hw').1
     have hname : pl.name = x.placement := (Workflow.placement?_eq_some hpl).2
     -- By validation, the arm is `none` or a declared arm of the branch.
     have harm' : a = none ∨ ∃ j arms b, pl.control = .branch j arms ∧ a = some b ∧ b ∈ arms := by
       rcases ha with rfl | ⟨j, c, hc, hsrc, rfl⟩
       · exact Or.inl rfl
-      · have hcv := ((Program.validate_ok valid).workflows w hwm).connections c (List.mem_of_getElem? hc)
+      · have hcv := ((Definition.validate_ok valid).workflows w hwm).connections c (List.mem_of_getElem? hc)
         rw [← hsrc] at hpl
         obtain ⟨hbr, hnb⟩ := connection_arm hcv hpl
         by_cases hb : ∃ j arms, pl.control = .branch j arms
@@ -80,7 +80,7 @@ theorem ValueInv.step {p : Program} {s t : State} (valid : p.validate = .ok ()) 
       · exact Or.inl h'
       · exact Or.inr (h3.trans h')
 
-theorem reachable_valueInv {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
+theorem reachable_valueInv {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
     ValueInv p s := by
   induction h with
   | empty => intro x hx; cases hx
@@ -89,7 +89,7 @@ theorem reachable_valueInv {p : Program} {s : State} (valid : p.validate = .ok (
 end SettledAux
 
 section SettledValue
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- (N4) A Single placement settled normally has its result, and a connection whose arm settled
     normally carries one; the converse of Round 2 `SettledInv.noEligible`. Stated for the outcome and

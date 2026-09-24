@@ -8,17 +8,17 @@ namespace Suimon.Settle
 
 open State
 
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 /-- A delivery that does not reopen the input of a settled placement: it is not on a Stream input
     that ended, and it is on a Single input only after its first delivery. --/
-def DeliveryFits (p : Program) (s : State) (d : Delivery) : Prop :=
+def DeliveryFits (p : Definition) (s : State) (d : Delivery) : Prop :=
   ∀ x ∈ s.settled, d.run = x.run → ∀ w, s.workflow? p x.run = some w → ∀ idx c,
     (w.shape? p x.placement = some (.stream idx c) → d.connection ≠ idx) ∧
     (w.shape? p x.placement = some (.single idx c) → d.connection = idx → s.deliveriesOn x.run idx ≠ [])
 
 /-- What a step keeps for the placements settled before it. --/
-structure Facts (p : Program) (s t : State) : Prop where
+structure Facts (p : Definition) (s t : State) : Prop where
   workflows : KeepsWorkflows p s t
   settled : s.settled <+: t.settled
   results : ∃ new, t.results = s.results ++ new ∧ ∀ r ∈ new, s.settled? r.run r.placement = none

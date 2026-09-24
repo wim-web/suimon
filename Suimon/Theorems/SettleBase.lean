@@ -132,7 +132,7 @@ theorem mem_inputs {w : Workflow} {name : String} {i : Nat} {c : Connection} (h 
   · simp [ht] at hif
 
 /-- How a placement's input shape arises (§3.2, §5.3). --/
-theorem shape?_cases {p : Program} {w : Workflow} {name : String} {sh : Workflow.Shape}
+theorem shape?_cases {p : Definition} {w : Workflow} {name : String} {sh : Workflow.Shape}
     (h : w.shape? p name = some sh) : ∃ pl, w.placement? name = some pl ∧
       ((∃ e, pl.control = .merge e) ∧ sh = .merge (w.inputs name) ∨
        (∀ e, pl.control ≠ .merge e) ∧
@@ -167,7 +167,7 @@ theorem shape?_cases {p : Program} {w : Workflow} {name : String} {sh : Workflow
         · simp at h
 
 /-- A Single or Stream input names one input connection of the placement. --/
-theorem shape?_connection {p : Program} {w : Workflow} {name : String} {i : Nat} {c : Connection}
+theorem shape?_connection {p : Definition} {w : Workflow} {name : String} {i : Nat} {c : Connection}
     (h : w.shape? p name = some (.single i c) ∨ w.shape? p name = some (.stream i c)) :
     w.connections[i]? = some c ∧ c.target = name := by
   have key : ∀ sh, w.shape? p name = some sh → (sh = .single i c ∨ sh = .stream i c) →
@@ -180,7 +180,7 @@ theorem shape?_connection {p : Program} {w : Workflow} {name : String} {i : Nat}
   · exact mem_inputs (key _ h (Or.inl rfl))
   · exact mem_inputs (key _ h (Or.inr rfl))
 
-theorem shape?_of_merge {p : Program} {w : Workflow} {name : String} {pl : Placement} {e : ValueType}
+theorem shape?_of_merge {p : Definition} {w : Workflow} {name : String} {pl : Placement} {e : ValueType}
     (hpl : w.placement? name = some pl) (he : pl.control = .merge e) :
     w.shape? p name = some (.merge (w.inputs name)) := by
   unfold Workflow.shape?
@@ -419,7 +419,7 @@ theorem settleOutcome_call {s : State} {path : Path} {pl : Placement} {shape : W
          obtain ⟨rfl, rfl⟩ := h
          exact ⟨rfl, rfl, rfl, rfl, Or.inr (Or.inl ⟨_, _, rfl, by simp [hres], Or.inr fun _ _ => by simp [hres]⟩)⟩)
 /-- A function call placement of Single kind calls a function with a Single contract. --/
-theorem outputKind?_function {p : Program} {w : Workflow} {name : String} {pl : Placement} {f : String}
+theorem outputKind?_function {p : Definition} {w : Workflow} {name : String} {pl : Placement} {f : String}
     (hk : w.outputKind? p name = some .single) (hpl : w.placement? name = some pl)
     (hc : pl.control = .call (.function f)) :
     ∃ decl, p.function? f = some decl ∧ decl.output.kind = .single := by
@@ -432,16 +432,16 @@ theorem outputKind?_function {p : Program} {w : Workflow} {name : String} {pl : 
   rw [hc] at hk
   cases input with
   | none =>
-    simp only [Program.outputKind, Program.bodyKind, Option.map_eq_some_iff] at hk
+    simp only [Definition.outputKind, Definition.bodyKind, Option.map_eq_some_iff] at hk
     obtain ⟨decl, hdecl, hkind⟩ := hk
     exact ⟨decl, hdecl, hkind⟩
   | some k =>
     cases k with
     | single =>
-      simp only [Program.outputKind, Program.bodyKind, Option.map_eq_some_iff] at hk
+      simp only [Definition.outputKind, Definition.bodyKind, Option.map_eq_some_iff] at hk
       obtain ⟨decl, hdecl, hkind⟩ := hk
       exact ⟨decl, hdecl, hkind⟩
-    | stream => simp [Program.outputKind] at hk
+    | stream => simp [Definition.outputKind] at hk
 
 /-- An invocation outcome without a value comes from a skipped invocation, or from a Single placement
     whose invocation did not succeed. --/

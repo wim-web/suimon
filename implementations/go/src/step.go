@@ -29,7 +29,7 @@ func require(ok bool, code string) error {
 }
 
 // Step applies one operation. It returns a new state and leaves s unchanged.
-func Step(p *Program, s *State, op Op) (*State, error) {
+func Step(p *Definition, s *State, op Op) (*State, error) {
 	t := *s
 	st := &stepper{view: view{s: &t}, p: p}
 	if err := st.apply(op); err != nil {
@@ -42,13 +42,13 @@ func Step(p *Program, s *State, op Op) (*State, error) {
 // the values it mentions. Nothing else may hold the state while the machine changes it.
 type machine struct {
 	view
-	p *Program
+	p *Definition
 	// seen holds every value the state mentions.
 	seen map[string]struct{}
 }
 
 // newMachine takes s over; s must not be used elsewhere while the machine changes it.
-func newMachine(p *Program, s *State) *machine {
+func newMachine(p *Definition, s *State) *machine {
 	m := &machine{view: view{s: s, ix: newStateIndex(s)}, p: p, seen: map[string]struct{}{}}
 	for _, v := range s.Values() {
 		m.seen[v] = struct{}{}
@@ -75,7 +75,7 @@ func (m *machine) apply(op Op) ([]string, error) {
 // is owned and changes in place.
 type stepper struct {
 	view
-	p     *Program
+	p     *Definition
 	owned uint16
 	// mentions are the values of the records the step added or changed, where they are mentioned.
 	mentions []mention
@@ -726,7 +726,7 @@ func (v view) settleOutcome(path Path, pl *Placement, sh shape, kind Kind) (Sett
 }
 
 // designatedOutput is the endpoint whose result a sub-workflow call returns.
-func (v view) designatedOutput(p *Program, r *Run) (string, error) {
+func (v view) designatedOutput(p *Definition, r *Run) (string, error) {
 	if r.Owner == nil {
 		return "", reject("ROOT_RUN")
 	}

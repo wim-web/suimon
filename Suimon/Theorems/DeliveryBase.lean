@@ -110,7 +110,7 @@ theorem inputs_map_snd (w : Workflow) (name : String) : (w.inputs name).map (·.
 /-! ### Kinds -/
 
 /-- More fuel never changes a derived kind. --/
-theorem kind?_mono {p : Program} {w : Workflow} :
+theorem kind?_mono {p : Definition} {w : Workflow} :
     ∀ {n m : Nat} {x : String} {k : Kind}, w.kind? p n x = some k → n ≤ m → w.kind? p m x = some k
   | 0, _, _, _, h, _ => by simp [Workflow.kind?] at h
   | n + 1, m, x, k, h, hle => by
@@ -130,7 +130,7 @@ def shapeInput : Workflow.Shape → Option (Option Kind)
 
 /-- The derived kind of a placement other than Merge is the §5.2 rule applied to the input its shape
     supplies; an entry has no input connection. --/
-theorem outputKind?_shape {p : Program} {w : Workflow} {name : String} {sh : Workflow.Shape} {k : Kind}
+theorem outputKind?_shape {p : Definition} {w : Workflow} {name : String} {sh : Workflow.Shape} {k : Kind}
     {pl : Placement} (hsh : w.shape? p name = some sh) (hk : w.outputKind? p name = some k)
     (hpl : w.placement? name = some pl) (hm : ∀ e, pl.control ≠ .merge e) :
     ∃ inp, shapeInput sh = some inp ∧ p.outputKind pl.control inp = some k ∧
@@ -193,7 +193,7 @@ theorem mapM_mem {α β : Type} {f : α → Option β} :
       exact ⟨y', List.mem_cons_of_mem _ hy', hfy⟩
 
 /-- A Merge with a derived kind takes only Single inputs (§9.2). --/
-theorem merge_input_single {p : Program} {w : Workflow} {name : String} {pl : Placement} {e : ValueType} {k : Kind}
+theorem merge_input_single {p : Definition} {w : Workflow} {name : String} {pl : Placement} {e : ValueType} {k : Kind}
     (hpl : w.placement? name = some pl) (hm : pl.control = .merge e) (hk : w.outputKind? p name = some k)
     {c : Connection} (hc : c ∈ w.incoming name) : w.outputKind? p c.source = some .single := by
   unfold Workflow.outputKind? Workflow.depth at hk ⊢
@@ -201,7 +201,7 @@ theorem merge_input_single {p : Program} {w : Workflow} {name : String} {pl : Pl
   obtain ⟨sources, hsrc, inp, hcomb, hk⟩ := hk
   rw [hm] at hk
   have hinp : inp = some .single := by
-    rcases inp with _ | (_ | _) <;> simp [Program.outputKind] at hk ⊢
+    rcases inp with _ | (_ | _) <;> simp [Definition.outputKind] at hk ⊢
   subst hinp
   obtain ⟨kc, hkc, hfc⟩ := mapM_mem hsrc c hc
   have hall : ∀ k' ∈ sources, k' = .single := by

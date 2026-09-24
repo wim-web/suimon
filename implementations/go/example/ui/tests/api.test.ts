@@ -3,15 +3,15 @@ import { expect, it } from 'vitest';
 import { applyProgress, parseProgress, parseReport, parseScenarios } from '../src/api';
 
 // branch.progress.json is the response of GET /api/runs/{id} for a finished run of the branch
-// scenario, as the Go server wrote it.
+// scenario, as the Go server wrote it: its records start with the header.
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/branch.progress.json', import.meta.url), 'utf8')) as Record<string, unknown>;
-const program = JSON.parse(readFileSync(new URL('../../programs/branch.json', import.meta.url), 'utf8')) as unknown;
+const definition = JSON.parse(readFileSync(new URL('../../definitions/branch.json', import.meta.url), 'utf8')) as unknown;
 
-it('parses the scenarios with their programs', () => {
-  const [scenario] = parseScenarios([{ id: 'branch', title: 'Branch and Merge', description: 'd', program, input: { id: 'A-1', amount: 1 } }]);
-  expect(scenario!.program.workflows[0]!.placements.map(p => p.name)).toEqual(['route', 'review', 'approve', 'decide']);
+it('parses the scenarios with their definitions', () => {
+  const [scenario] = parseScenarios([{ id: 'branch', title: 'Branch and Merge', description: 'd', definition, input: { id: 'A-1', amount: 1 } }]);
+  expect(scenario!.definition.workflows[0]!.placements.map(p => p.name)).toEqual(['route', 'review', 'approve', 'decide']);
   expect(scenario!.input).toEqual({ id: 'A-1', amount: 1 });
-  expect(() => parseScenarios([{ id: 'x', title: 't', description: 'd', program: {} }])).toThrow(/main/);
+  expect(() => parseScenarios([{ id: 'x', title: 't', description: 'd', definition: {} }])).toThrow(/main/);
 });
 
 it('accumulates the records of progress messages and rejects a gap', () => {
@@ -23,7 +23,10 @@ it('accumulates the records of progress messages and rejects a gap', () => {
   const tail = parseProgress({ ...fixture, offset: 4, records: full.records.slice(4) });
   const view = applyProgress(applyProgress(null, head), tail);
   expect(view.lines).toEqual(full.records);
-  expect(view.records.length).toBe(full.records.length);
+  // The header holds the definition of the scenario; the records follow it.
+  expect(JSON.parse(full.records[0]!)).toEqual({ definition });
+  expect(view.records.length).toBe(full.records.length - 1);
+  expect(view.records[0]).toMatchObject({ seq: 1, op: { type: 'start' } });
   expect(view.done).toBe(true);
   expect(() => applyProgress(applyProgress(null, head), { ...tail, offset: 5 })).toThrow(/record 5/);
   // A new run starts over.

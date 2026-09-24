@@ -5,12 +5,12 @@ import Suimon.Theorems.Round3.Conformance
 How one accepted step changes the records that the structural invariants of progress read, one lemma
 per kind of record, each by cases on the operation: invocations (`step_invocations`), ended calls
 (`step_calls`), runs (`step_runs`), executions and their tasks (`step_executions`), and the root run
-(`step_root`). Then the static facts of a valid program that the invariants need. -/
+(`step_root`). Then the static facts of a valid definition that the invariants need. -/
 
 namespace Suimon.Round3.ProgressInvAux
 open State
 
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 /-! ### Lookups -/
 
@@ -89,7 +89,7 @@ theorem ended_of_begun {st : TaskStatus} (hb : Limit.Begun st) (hna : st ≠ .ac
 /-! ### Invocations -/
 
 /-- The body an invocation's control creates with it in the same step (N2). -/
-def InvBody (p : Program) (s : State) (i : Invocation) : Prop :=
+def InvBody (p : Definition) (s : State) (i : Invocation) : Prop :=
   ∀ w pl, s.workflow? p i.run = some w → w.placement? i.placement = some pl →
     (((∃ f, pl.control = .call (.function f)) ∨ (∃ j arms, pl.control = .branch j arms)) →
         ∃ c ∈ s.calls, c.id = i.id ∧ c.owner = i.id ∧ c.task = none) ∧
@@ -148,7 +148,7 @@ end InvKept
 
 /-- An invocation after a step: stored before, updated to a status that is not active, or the new one
     `invoke` created, with its body. -/
-def InvCase (p : Program) (s t : State) (i : Invocation) : Prop :=
+def InvCase (p : Definition) (s t : State) (i : Invocation) : Prop :=
   (i ∈ s.invocations ∨ (Delivery.InvOld s i ∧ i.status ≠ .active)) ∨
   (s.invocation? i.id = none ∧ i.status = .active ∧ InvBody p t i)
 
@@ -542,12 +542,12 @@ def RunOwnerClosed (t : State) (r : Run) : Prop :=
 
 /-- The workflows a run can have: the main workflow, or one that a placement of a declared workflow
     calls. -/
-def Referenced (p : Program) (wf : String) : Prop :=
+def Referenced (p : Definition) (wf : String) : Prop :=
   wf = p.main ∨ ∃ w ∈ p.workflows, ∃ pl ∈ w.placements, wf ∈ pl.control.workflowRefs
 
 /-- A run after a step: stored before, completed in this step with its owner closed (the root has no
     owner), or created in this step for a referenced workflow. -/
-def RunCase (p : Program) (s t : State) (r : Run) : Prop :=
+def RunCase (p : Definition) (s t : State) (r : Run) : Prop :=
   r ∈ s.runs ∨
   (∃ r₀ ∈ s.runs, r₀.path = r.path ∧ r₀.workflow = r.workflow ∧ r₀.owner = r.owner ∧ r₀.task = r.task ∧
     r.complete = true ∧ (r.owner = none ∨ RunOwnerClosed t r)) ∨
@@ -616,7 +616,7 @@ theorem step_runs {op : Op} (inv : Delivery.Inv p s) (hs : step p s op = .ok t) 
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨wf, out, hwf, hrun, rfl⟩ | ⟨_, -, -, rfl⟩
     · exact RunCase.of_eq rfl
     · exact RunCase.of_eq rfl
-    · exact RunCase.append rfl hrun rfl (Or.inr ⟨w, (Program.workflow?_eq_some hw).1, pl,
+    · exact RunCase.append rfl hrun rfl (Or.inr ⟨w, (Definition.workflow?_eq_some hw).1, pl,
         (Workflow.placement?_eq_some hpl).1, by simp [hwf, Control.workflowRefs, Body.workflowRef]⟩)
     · exact RunCase.of_eq rfl
   | fetch id =>
@@ -666,7 +666,7 @@ theorem step_runs {op : Op} (inv : Delivery.Inv p s) (hs : step p s op = .ok t) 
     · obtain ⟨c', hc', hfind⟩ := State.taskSpec_eq_ok.mp hspec
       obtain ⟨w, pl, hw, hpl, hcc⟩ := Delivery.concurrencyOf_iff.mp hc'
       obtain ⟨r, -, hwf⟩ := Delivery.workflow?_iff.mp hw
-      refine RunCase.append rfl hrun rfl (Or.inr ⟨w, (Program.workflow?_eq_some hwf).1, pl,
+      refine RunCase.append rfl hrun rfl (Or.inr ⟨w, (Definition.workflow?_eq_some hwf).1, pl,
         (Workflow.placement?_eq_some hpl).1, ?_⟩)
       rw [hcc]
       exact List.mem_filterMap.mpr ⟨spec, List.mem_of_find?_eq_some hfind, by simp [hbody, Body.workflowRef]⟩
@@ -729,7 +729,7 @@ def Moved (t : State) (e : Execution) (name : String) (a b : TaskStatus) : Prop 
 
 /-- An execution after a step: a stored one in the same place, completed only together with its
     invocation, whose tasks moved; or the new one `invoke` created, whose tasks wait. -/
-def ExecCase (p : Program) (s t : State) (e : Execution) : Prop :=
+def ExecCase (p : Definition) (s t : State) (e : Execution) : Prop :=
   (∃ e₀ ∈ s.executions, e₀.id = e.id ∧ e₀.run = e.run ∧ e₀.placement = e.placement ∧
     (e.complete = true → e₀.complete = true ∨ ∀ i ∈ t.invocations, i.id = e.id → i.status ≠ .active) ∧
     ∀ tk ∈ e.tasks, ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ Moved t e tk.name tk₀.status tk.status) ∨
@@ -1146,7 +1146,7 @@ theorem step_root {op : Op} (hs : step p s op = .ok t) (started : s.started = tr
     · exact keep rfl
 
 /-- While started, the root run exists; it completes only when the workflow ends. -/
-theorem root_inv {p : Program} {s : State} (h : Reachable p s) :
+theorem root_inv {p : Definition} {s : State} (h : Reachable p s) :
     s.started = true → ∃ r, s.run? [] = some r ∧ (r.complete = true → s.status.terminal = true) := by
   induction h with
   | empty => intro h; cases h
@@ -1177,7 +1177,7 @@ local macro "vsimp" " at " h:ident : tactic =>
 /-- Validation checks every declared workflow. -/
 theorem validateWorkflow_of_validate (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
     p.validateWorkflow w = .ok () := by
-  unfold Program.validate at valid
+  unfold Definition.validate at valid
   vsimp at valid
   obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
   exact Static.forIn_yield_ok hloop w hw
@@ -1186,7 +1186,7 @@ theorem validateWorkflow_of_validate (valid : p.validate = .ok ()) {w : Workflow
 theorem validatePlacement_of_validate (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) : p.validatePlacement w pl = .ok () := by
   have h := validateWorkflow_of_validate valid hw
-  unfold Program.validateWorkflow at h
+  unfold Definition.validateWorkflow at h
   vsimp at h
   obtain ⟨-, -, -, -, u, -, -, h⟩ := h
   split at h <;> vsimp at h
@@ -1198,38 +1198,38 @@ theorem validatePlacement_of_validate (valid : p.validate = .ok ()) {w : Workflo
 /-- The body of a call placement is checked. -/
 theorem body_of_call (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) {body : Body} (hc : pl.control = .call body) :
-    ∃ at_ u, p.validateBody at_ body = .ok u := by
+    ∃ at_ input, p.validateBody at_ body = .ok input := by
   have h := validatePlacement_of_validate valid hw hpl
   rcases pl with ⟨name, control, policy, timeout⟩
   simp only at hc
   subst hc
-  unfold Program.validatePlacement at h
+  unfold Definition.validatePlacement at h
   vsimp at h
-  obtain ⟨u, hb, -⟩ := h
-  exact ⟨_, u, hb⟩
+  obtain ⟨input, hb, -⟩ := h
+  exact ⟨_, input, hb⟩
 
 /-- A checked workflow body names a declared workflow. -/
-theorem workflow_of_validateBody {at_ id output : String} {u : Unit}
-    (h : p.validateBody at_ (.workflow id output) = .ok u) : (p.workflow? id).isSome := by
-  unfold Program.validateBody at h
+theorem workflow_of_validateBody {at_ id output : String} {input : Option ValueType}
+    (h : p.validateBody at_ (.workflow id output) = .ok input) : (p.workflow? id).isSome := by
+  unfold Definition.validateBody at h
   vsimp at h
   obtain ⟨w, hw, -⟩ := h
   simp [hw]
 
 /-- The body of a checked task is checked. -/
 theorem body_of_validateTask {at_ : String} {c : Concurrency} {task : TaskSpec}
-    (h : p.validateTask at_ c task = .ok ()) : ∃ at' u, p.validateBody at' task.body = .ok u := by
-  unfold Program.validateTask at h
+    (h : p.validateTask at_ c task = .ok ()) : ∃ at' input, p.validateBody at' task.body = .ok input := by
+  unfold Definition.validateTask at h
   vsimp at h
-  obtain ⟨-, u, hb, -⟩ := h
-  exact ⟨_, u, hb⟩
+  obtain ⟨-, input, hb, -⟩ := h
+  exact ⟨_, input, hb⟩
 
 /-- A checked task of a concurrency with an input has an input transform (§8.1). -/
 theorem input_of_validateTask {at_ : String} {c : Concurrency} {task : TaskSpec}
     (h : p.validateTask at_ c task = .ok ()) (hc : c.input.isSome = true) : task.input.isSome = true := by
-  unfold Program.validateTask at h
+  unfold Definition.validateTask at h
   vsimp at h
-  obtain ⟨-, u, -, input, -, h⟩ := h
+  obtain ⟨-, input, -, h⟩ := h
   cases hti : task.input with
   | some _ => rfl
   | none =>
@@ -1245,13 +1245,13 @@ theorem input_of_validateTask {at_ : String} {c : Concurrency} {task : TaskSpec}
 theorem tasks_of_validate (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) {c : Concurrency} (hc : pl.control = .concurrency c) :
     ∀ task ∈ c.tasks, ∃ at_, p.validateTask at_ c task = .ok () :=
-  ((((Program.validate_ok valid).workflows w hw).placements pl hpl).concurrency c hc).2.2.2
+  ((((Definition.validate_ok valid).workflows w hw).placements pl hpl).concurrency c hc).2.2.2
 
-/-- A referenced workflow exists in a valid program. -/
+/-- A referenced workflow exists in a valid definition. -/
 theorem referenced_workflow (valid : p.validate = .ok ()) {wf : String} (h : Referenced p wf) :
     (p.workflow? wf).isSome := by
   rcases h with rfl | ⟨w, hw, pl, hpl, href⟩
-  · exact (Program.validate_ok valid).main
+  · exact (Definition.validate_ok valid).main
   · rcases hctl : pl.control with body | ⟨judge, arms⟩ | e | e | c <;>
       rw [hctl] at href <;> simp only [Control.workflowRefs, List.not_mem_nil] at href
     · cases body with
@@ -1259,11 +1259,11 @@ theorem referenced_workflow (valid : p.validate = .ok ()) {wf : String} (h : Ref
       | workflow id out =>
         simp only [Body.workflowRef, Option.toList_some, List.mem_singleton] at href
         subst href
-        obtain ⟨at_, u, hb⟩ := body_of_call valid hw hpl hctl
+        obtain ⟨at_, _, hb⟩ := body_of_call valid hw hpl hctl
         exact workflow_of_validateBody hb
     · obtain ⟨task, htask, href⟩ := List.mem_filterMap.mp href
       obtain ⟨at_, hv⟩ := tasks_of_validate valid hw hpl hctl task htask
-      obtain ⟨at', u, hb⟩ := body_of_validateTask hv
+      obtain ⟨at', _, hb⟩ := body_of_validateTask hv
       cases hbody : task.body with
       | function f => rw [hbody] at href; simp [Body.workflowRef] at href
       | workflow id out =>

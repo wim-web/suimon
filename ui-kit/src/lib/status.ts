@@ -1,5 +1,5 @@
-import type { Call, CallStatus, Execution, Failure, Invocation, InvocationStatus, Path, Program, Result, Run, RuntimeState, Settled, TaskOutput, TaskStatus } from '../types';
-import { findWorkflow } from './program';
+import type { Call, CallStatus, Definition, Execution, Failure, Invocation, InvocationStatus, Path, Result, Run, RuntimeState, Settled, TaskOutput, TaskStatus } from '../types';
+import { findWorkflow } from './definition';
 
 export function samePath(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((segment, i) => segment === b[i]);
@@ -137,9 +137,9 @@ function count<T extends string>(values: T[]): Partial<Record<T, number>> {
 }
 
 /** The status of every placement in one run of the state. */
-export function runOverlay(program: Program, state: RuntimeState, path: readonly string[]): RunOverlay | null {
+export function runOverlay(definition: Definition, state: RuntimeState, path: readonly string[]): RunOverlay | null {
   const run = findRun(state, path);
-  const workflow = run && findWorkflow(program, run.workflow);
+  const workflow = run && findWorkflow(definition, run.workflow);
   if (!run || !workflow) return null;
   const inRun = <T extends { run: Path }>(items: T[]) => items.filter(item => samePath(item.run, path));
   const invocations = inRun(state.invocations), executions = inRun(state.executions), results = inRun(state.results);

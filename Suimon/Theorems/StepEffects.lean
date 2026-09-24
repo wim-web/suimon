@@ -167,7 +167,7 @@ end State
 open State in
 /-- Accepted results, deliveries, settlements and failures are never withdrawn, and stored records
     keep their identities (§10.2, §11.4). --/
-theorem step_grows {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) : s.Grows t := by
+theorem step_grows {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) : s.Grows t := by
   cases op with
   | start input =>
     obtain ⟨-, -, _, -, -, rfl⟩ := Step.start_inv hs
@@ -242,7 +242,7 @@ theorem step_grows {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok
 
 open State in
 /-- Runs are never removed or renamed once the workflow started; before the start there are none. --/
-theorem step_runs_grow {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t)
+theorem step_runs_grow {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
     (h : s.runs = [] ∨ s.started = true) : s.runs.map (·.path) <+: t.runs.map (·.path) := by
   have keep : ∀ {u : State}, u.runs = s.runs → s.runs.map (·.path) <+: u.runs.map (·.path) := fun hu =>
     hu ▸ List.prefix_refl _
@@ -331,7 +331,7 @@ theorem step_runs_grow {p : Program} {s t : State} {op : Op} (hs : step p s op =
 
 open State in
 /-- Every accepted step leaves the workflow started. --/
-theorem step_started {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) : t.started = true := by
+theorem step_started {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) : t.started = true := by
   cases op with
   | start input =>
     obtain ⟨-, -, _, -, -, rfl⟩ := Step.start_inv hs
@@ -405,7 +405,7 @@ theorem step_started {p : Program} {s t : State} {op : Op} (hs : step p s op = .
 
 open State in
 /-- From a running state, a step that stops leaves no call running or fetching (§11.3). --/
-theorem step_stopping_quiet_of_running {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t)
+theorem step_stopping_quiet_of_running {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
     (running : s.status = .running) (stopping : t.status = .stopping) :
     ∀ c ∈ t.calls, c.status ≠ .running ∧ c.status ≠ .fetching := by
   have absurd : ∀ {P : Prop}, t.status = .running → P := fun h => by simp [h] at stopping
@@ -490,7 +490,7 @@ theorem step_stopping_quiet_of_running {p : Program} {s t : State} {op : Op} (hs
 
 /-- A stopping or final state accepts only the end of a call, the caller's cancel, and the
     conclusion; the first case is a call that was still running or fetching (§11.3). --/
-theorem step_of_status_ne_running {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t)
+theorem step_of_status_ne_running {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
     (h : s.status ≠ .running) :
     s.status = .stopping ∧ s.started = true ∧
     ((∃ c ∈ s.calls, (c.status = .running ∨ c.status = .fetching) ∧ s.failCall c .lost .lost = .ok t) ∨

@@ -10,9 +10,9 @@
 
 ```sh
 lake build
-lake exe suimon validate Test/programs/users.json
-lake exe suimon gen Test/programs/users.json --seed 1 > /tmp/users.jsonl
-lake exe suimon check /tmp/users.jsonl --program Test/programs/users.json
+lake exe suimon validate Test/definitions/users.json
+lake exe suimon gen Test/definitions/users.json --seed 1 > /tmp/users.jsonl
+lake exe suimon check /tmp/users.jsonl
 ```
 
 CLI のオプションは `lake exe suimon --help` で確認できます。

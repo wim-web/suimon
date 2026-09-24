@@ -13,7 +13,7 @@ namespace Suimon.Round3
 namespace CoversOpsAux
 open State
 
-variable {p : Program} {env : Env} {s s' t T : State}
+variable {p : Definition} {env : Env} {s s' t T : State}
 
 /-! ### Unstopped states -/
 

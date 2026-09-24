@@ -7,7 +7,7 @@ namespace Suimon.Round3
 namespace RunConformAux
 open State
 
-variable {p : Program} {env : Env} {s t : State} {op : Op}
+variable {p : Definition} {env : Env} {s t : State} {op : Op}
 
 /-! ### Validity -/
 
@@ -21,9 +21,9 @@ local macro "rc_validate_simp" " at " h:ident : tactic =>
 theorem validateTask_declared {at_ : String} {c : Concurrency} {task : TaskSpec}
     (h : p.validateTask at_ c task = .ok ()) {tid : String} (hin : task.input = some (.declared tid)) :
     c.input.isSome = true := by
-  unfold Program.validateTask at h
+  unfold Definition.validateTask at h
   rc_validate_simp at h
-  obtain ⟨-, u, -, input, -, h⟩ := h
+  obtain ⟨-, input, -, h⟩ := h
   rw [hin] at h
   cases input with
   | none => simp at h
@@ -33,16 +33,16 @@ theorem validateTask_declared {at_ : String} {c : Concurrency} {task : TaskSpec}
     rw [hsource]
     rfl
 
-/-- In a valid program, a task with a declared input transform belongs to a concurrency that takes an
-    input, so its tasks start pending. -/
+/-- In a valid definition, a task with a declared input transform belongs to a concurrency that takes
+    an input, so its tasks start pending. -/
 theorem declared_input (valid : p.validate = .ok ()) {e : Execution} {c : Concurrency}
     (hc : t.concurrencyOf p e = .ok c) {spec : TaskSpec} (hspec : spec ∈ c.tasks) {tid : String}
     (hin : spec.input = some (.declared tid)) : c.input.isSome = true := by
   obtain ⟨w, pl, hw, hpl, hctrl⟩ := Delivery.concurrencyOf_iff.mp hc
   obtain ⟨r, -, hwr⟩ := Delivery.workflow?_iff.mp hw
-  have hwm := (Program.workflow?_eq_some hwr).1
+  have hwm := (Definition.workflow?_eq_some hwr).1
   have hplm := (Workflow.placement?_eq_some hpl).1
-  obtain ⟨-, -, -, htasks⟩ := (((Program.validate_ok valid).workflows w hwm).placements pl hplm).concurrency c hctrl
+  obtain ⟨-, -, -, htasks⟩ := (((Definition.validate_ok valid).workflows w hwm).placements pl hplm).concurrency c hctrl
   obtain ⟨at_, hv⟩ := htasks spec hspec
   exact validateTask_declared hv hin
 
@@ -191,7 +191,7 @@ theorem step_taskResultFrom (hs : step p s op = .ok t) {r : TaskResult} (hr : r 
 /-! ### Tasks follow the behavior -/
 
 /-- `TaskConform` by identities and without matches, with the empty input of pending tasks. -/
-structure TaskInv (p : Program) (env : Env) (s : State) : Prop where
+structure TaskInv (p : Definition) (env : Env) (s : State) : Prop where
   pending : ∀ e ∈ s.executions, ∀ tk ∈ e.tasks, tk.status = .pending → tk.input = none
   declared : ∀ e ∈ s.executions, ∀ tk ∈ e.tasks, ∀ spec, s.taskSpec p e tk.name = .ok spec → tk.status ≠ .pending →
     ∀ tid, spec.input = some (.declared tid) →
@@ -322,7 +322,7 @@ def CallFailed (c : Call) : Prop :=
   c.status = .failed ∨ c.status = .lost ∨ c.status = .cancelling ∨ c.status = .cancelled
 
 /-- `PolicyConform` by identities. -/
-structure PolicyInv (p : Program) (s : State) : Prop where
+structure PolicyInv (p : Definition) (s : State) : Prop where
   calls : ∀ c ∈ s.calls, (c.status = .failed ∨ c.status = .lost ∨ c.status = .cancelling ∨ c.status = .cancelled) →
     c.policy = .continue
   deliveries : ∀ d ∈ s.deliveries, d.outcome = .failed → ∀ w c pl, s.workflow? p d.run = some w →

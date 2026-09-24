@@ -8,7 +8,7 @@ open State
 /-! ## [25] Round3/CoversStep.lean — proven assembly -/
 
 section CoversStep
-variable {p : Program} {env : Env} {s s' T : State}
+variable {p : Definition} {env : Env} {s s' T : State}
 
 theorem covers_step {op : Op} (h : StepCtx p env T s op s') : Covers p T s' := by
   cases op with

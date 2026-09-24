@@ -12,14 +12,14 @@ open State
 
 namespace CoversCloseAux
 
-variable {p : Program} {s t T : State}
+variable {p : Definition} {s t T : State}
 
 /-! ### Lookups carried by `Covers` -/
 
-/-- The workflow of a run is a workflow of the program. -/
+/-- The workflow of a run is a workflow of the definition. -/
 theorem workflow_mem {path : Path} {w : Workflow} (hw : s.workflow? p path = some w) : w ∈ p.workflows := by
   obtain ⟨_, -, hwf⟩ := Routing.workflow?_eq_some.mp hw
-  exact (Program.workflow?_eq_some hwf).1
+  exact (Definition.workflow?_eq_some hwf).1
 
 /-- A run of `s` runs the same workflow in `T`. -/
 theorem covers_workflow? (cov : Covers p T s) (wkT : T.WellKeyed) {path : Path} {w : Workflow}
@@ -169,7 +169,7 @@ local macro "close_validate_simp" " at " h:ident : tactic =>
 
 theorem validateWorkflow_of_valid (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
     p.validateWorkflow w = .ok () := by
-  unfold Program.validate at valid
+  unfold Definition.validate at valid
   close_validate_simp at valid
   obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
   exact Static.forIn_yield_ok hloop w hw
@@ -177,7 +177,7 @@ theorem validateWorkflow_of_valid (valid : p.validate = .ok ()) {w : Workflow} (
 theorem validatePlacement_of_valid (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) : p.validatePlacement w pl = .ok () := by
   have h := validateWorkflow_of_valid valid hw
-  unfold Program.validateWorkflow at h
+  unfold Definition.validateWorkflow at h
   close_validate_simp at h
   obtain ⟨-, -, -, -, u, -, -, h⟩ := h
   split at h <;> close_validate_simp at h
@@ -187,33 +187,34 @@ theorem validatePlacement_of_valid (valid : p.validate = .ok ()) {w : Workflow} 
     exact Static.forIn_yield_ok h1 pl hpl
 
 theorem validateBody_of_call {w : Workflow} {pl : Placement} (h : p.validatePlacement w pl = .ok ())
-    {body : Body} (hc : pl.control = .call body) : ∃ at_, p.validateBody at_ body = .ok () := by
+    {body : Body} (hc : pl.control = .call body) : ∃ at_ input, p.validateBody at_ body = .ok input := by
   rcases pl with ⟨name, control, policy, timeout⟩
   simp only at hc
   subst hc
-  unfold Program.validatePlacement at h
+  unfold Definition.validatePlacement at h
   close_validate_simp at h
-  obtain ⟨_, hb, -⟩ := h
-  exact ⟨_, hb⟩
+  obtain ⟨input, hb, -⟩ := h
+  exact ⟨_, input, hb⟩
 
 theorem validateBody_of_task {at_ : String} {c : Concurrency} {task : TaskSpec}
-    (h : p.validateTask at_ c task = .ok ()) : ∃ at', p.validateBody at' task.body = .ok () := by
-  unfold Program.validateTask at h
+    (h : p.validateTask at_ c task = .ok ()) : ∃ at' input, p.validateBody at' task.body = .ok input := by
+  unfold Definition.validateTask at h
   close_validate_simp at h
-  obtain ⟨-, u, hb, -⟩ := h
-  exact ⟨_, hb⟩
+  obtain ⟨-, input, hb, -⟩ := h
+  exact ⟨_, input, hb⟩
 
-theorem workflow_of_validateBody {at_ wf out : String} (h : p.validateBody at_ (.workflow wf out) = .ok ()) :
+theorem workflow_of_validateBody {at_ wf out : String} {input : Option ValueType}
+    (h : p.validateBody at_ (.workflow wf out) = .ok input) :
     ∃ w, p.workflow? wf = some w ∧ (w.placement? out).isSome = true ∧ w.isEndpoint out = true := by
-  unfold Program.validateBody at h
+  unfold Definition.validateBody at h
   close_validate_simp at h
-  obtain ⟨w, hw, h1, h2⟩ := h
+  obtain ⟨w, hw, h1, h2, -⟩ := h
   exact ⟨w, hw, h1, h2⟩
 
 /-- The designated output of a validated workflow body is a placement of that workflow with a Single
     output. -/
-theorem body_output (valid : p.validate = .ok ()) {at_ wf out : String}
-    (h : p.validateBody at_ (.workflow wf out) = .ok ()) :
+theorem body_output (valid : p.validate = .ok ()) {at_ wf out : String} {input : Option ValueType}
+    (h : p.validateBody at_ (.workflow wf out) = .ok input) :
     ∃ w plo, p.workflow? wf = some w ∧ w.placement? out = some plo ∧ plo ∈ w.placements ∧
       w.outputKind? p out = some .single := by
   obtain ⟨w, hw, hplo, hend⟩ := workflow_of_validateBody h
@@ -221,7 +222,7 @@ theorem body_output (valid : p.validate = .ok ()) {at_ wf out : String}
   obtain ⟨hplom, hplon⟩ := Workflow.placement?_eq_some hplo'
   refine ⟨w, plo, hw, hplo', hplom, ?_⟩
   rw [← hplon]
-  exact (kinds_of_validate valid w (Program.workflow?_eq_some hw).1 plo hplom).2.1 (by rw [hplon]; exact hend)
+  exact (kinds_of_validate valid w (Definition.workflow?_eq_some hw).1 plo hplom).2.1 (by rw [hplon]; exact hend)
 
 /-- The run of a sub-workflow invocation, and its designated output. -/
 theorem subrun_output (valid : p.validate = .ok ()) (h : Reachable p s) {i : Invocation} (hi : i ∈ s.invocations)
@@ -234,7 +235,7 @@ theorem subrun_output (valid : p.validate = .ok ()) (h : Reachable p s) {i : Inv
   refine ⟨R, hR, hRp, hRo, hRt, hRwf, ?_, ?_⟩
   · exact State.designatedOutput_eq_ok.mpr ⟨i.id, hRo, Or.inl ⟨hRt, i, pl, wf, h.wellKeyed.invocation?_of_mem hi,
       State.placementOf_eq_ok.mpr ⟨w, hw, hpl⟩, hctrl⟩⟩
-  · obtain ⟨at_, hbv⟩ := validateBody_of_call
+  · obtain ⟨at_, _, hbv⟩ := validateBody_of_call
       (validatePlacement_of_valid valid (workflow_mem hw) (Workflow.placement?_eq_some hpl).1) hctrl
     exact body_output valid hbv
 
@@ -267,10 +268,10 @@ theorem run_output (valid : p.validate = .ok ()) (h : Reachable p s) {r : Run} (
       obtain ⟨cc, hcc, hfind⟩ := State.taskSpec_eq_ok.mp hspec
       obtain ⟨plc, hplc, hctrl⟩ := State.concurrencyOf_eq_ok.mp hcc
       obtain ⟨we, hwe, hplce⟩ := State.placementOf_eq_ok.mp hplc
-      obtain ⟨-, -, -, htasks⟩ := ((Program.validate_ok valid).workflows we (workflow_mem hwe)).placements plc
+      obtain ⟨-, -, -, htasks⟩ := ((Definition.validate_ok valid).workflows we (workflow_mem hwe)).placements plc
         (Workflow.placement?_eq_some hplce).1 |>.concurrency cc hctrl
       obtain ⟨at_, hv⟩ := htasks spec' (List.mem_of_find?_eq_some hfind)
-      obtain ⟨at', hbv⟩ := validateBody_of_task hv
+      obtain ⟨at', _, hbv⟩ := validateBody_of_task hv
       rw [hbody] at hbv
       exact body_output valid hbv
   rw [hw] at hw'

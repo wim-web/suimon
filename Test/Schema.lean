@@ -12,16 +12,30 @@ private def require (condition : Bool) (message : String) : Except String Unit :
 private def field (json : Json) (name : String) : Option Json :=
   (json.getObjVal? name).toOption
 
-private def resolve (root : Json) (reference : String) : Except String Json := do
-  let ["#", "$defs", name] := reference.splitOn "/"
-    | throw s!"only local $defs references are supported: {reference}"
-  let definitions ← root.getObjVal? "$defs"
-  definitions.getObjVal? ((name.replace "~1" "/").replace "~0" "~")
+/-- The schema a reference names, with the document it is in: `#/$defs/name` in the document of the
+    reference, or another document by its file name, whole or `file#/$defs/name`. --/
+private def resolve (documents : List (String × Json)) (root : Json) (reference : String) :
+    Except String (Json × Json) := do
+  let (document, pointer) ← match reference.splitOn "#" with
+    | ["", pointer] => pure (root, pointer)
+    | [file] => pure (← find file, "")
+    | [file, pointer] => pure (← find file, pointer)
+    | _ => throw s!"invalid reference: {reference}"
+  if pointer.isEmpty then return (document, document)
+  let ["", "$defs", name] := pointer.splitOn "/"
+    | throw s!"only $defs references are supported: {reference}"
+  let definitions ← document.getObjVal? "$defs"
+  return (document, ← definitions.getObjVal? ((name.replace "~1" "/").replace "~0" "~"))
+where
+  find (file : String) : Except String Json :=
+    match documents.lookup file with
+    | some document => pure document
+    | none => throw s!"unknown schema document: {file}"
 
 private def types := ["object", "array", "string", "integer", "number", "boolean", "null"]
 
 /-- Check the entire schema, including unused definitions and alternatives. --/
-private def checkSchema (root : Json) : Nat → Json → Except String Unit
+private def checkSchema (documents : List (String × Json)) (root : Json) : Nat → Json → Except String Unit
   | 0, _ => .error "schema nesting limit exceeded"
   | fuel + 1, rule => do
     if rule matches .bool _ then return ()
@@ -30,15 +44,15 @@ private def checkSchema (root : Json) : Nat → Json → Except String Unit
       | "$schema" =>
         require ((← value.getStr?) == "https://json-schema.org/draft/2020-12/schema") "unsupported schema dialect"
       | "$id" | "title" | "description" => let _ ← value.getStr?; pure ()
-      | "$ref" => let _ ← resolve root (← value.getStr?); pure ()
+      | "$ref" => let _ ← resolve documents root (← value.getStr?); pure ()
       | "type" => require (types.contains (← value.getStr?)) "unsupported schema type"
       | "properties" | "$defs" =>
-        for (_, child) in (← value.getObj?).toList do checkSchema root fuel child
-      | "items" | "additionalProperties" => checkSchema root fuel value
+        for (_, child) in (← value.getObj?).toList do checkSchema documents root fuel child
+      | "items" | "additionalProperties" => checkSchema documents root fuel value
       | "prefixItems" | "oneOf" | "anyOf" =>
         let children ← value.getArr?
         require (!children.isEmpty) s!"{key} must not be empty"
-        for child in children do checkSchema root fuel child
+        for child in children do checkSchema documents root fuel child
       | "uniqueItems" => let _ ← value.getBool?; pure ()
       | "minLength" | "minItems" | "maxItems" => let _ ← value.getNat?; pure ()
       | "minimum" => let _ ← value.getNum?; pure ()
@@ -51,24 +65,60 @@ private def checkSchema (root : Json) : Nat → Json → Except String Unit
         require (names.eraseDups.length == names.length) "duplicate required property"
       | _ => throw s!"unsupported schema keyword: {key}"
 
+/-- JSON Schema counts any number with a zero fractional part as an integer, so `2.0` and `20e-1`
+    are integers. The parser does not normalize numbers: both have mantissa 20 and exponent 1.
+    Stripping trailing zeros, rather than computing a power of ten, takes at most one step per digit
+    of the mantissa whatever the exponent. --/
+private def isInteger : Json → Bool
+  | .num ⟨m, e⟩ => m == 0 || strip m.natAbs e
+  | _ => false
+where
+  strip (m : Nat) : Nat → Bool
+    | 0 => true
+    | e + 1 => m % 10 == 0 && strip (m / 10) e
+
+/-- `a < b`. Lean's `JsonNumber.lt` compares zero with a negative number wrongly: it says `-1 < 0` is
+    false. A number is its mantissa over a power of ten; numbers of one sign compare by the position
+    of their first digit, then by their digits, so no power of ten beyond the digits of the mantissas
+    is computed, whatever the exponents. --/
+def numberLt (a b : JsonNumber) : Bool :=
+  if sign a != sign b then sign a < sign b
+  else if sign a == 0 then false
+  else if sign a > 0 then magnitudeLt a b
+  else magnitudeLt b a
+where
+  sign (n : JsonNumber) : Int := if n.mantissa > 0 then 1 else if n.mantissa < 0 then -1 else 0
+  digits (n : Nat) : Nat := (toString n).length
+  /-- `|a| < |b|` for non-zero numbers, whose values lie in `[10^(k-1), 10^k)` for `k` the number of
+      digits of the mantissa less the exponent. --/
+  magnitudeLt (a b : JsonNumber) : Bool :=
+    let am := a.mantissa.natAbs
+    let bm := b.mantissa.natAbs
+    let ak : Int := digits am - a.exponent
+    let bk : Int := digits bm - b.exponent
+    if ak != bk then ak < bk
+    else if digits am < digits bm then am * 10 ^ (digits bm - digits am) < bm
+    else am < bm * 10 ^ (digits am - digits bm)
+
 private def hasType (value : Json) : String → Bool
   | "object" => (value matches .obj _)
   | "array" => (value matches .arr _)
   | "string" => (value matches .str _)
-  | "integer" => value.getInt?.toOption.isSome
+  | "integer" => isInteger value
   | "number" => (value matches .num _)
   | "boolean" => (value matches .bool _)
   | "null" => value.isNull
   | _ => false
 
-private def checkValue (root : Json) : Nat → Json → Json → Except String Unit
+private def checkValue (documents : List (String × Json)) (root : Json) : Nat → Json → Json → Except String Unit
   | 0, _, _ => .error "schema evaluation nesting limit exceeded"
   | fuel + 1, rule, value => do
     if let .bool accept := rule then
       require accept "false schema"
       return ()
     if let some reference := field rule "$ref" then
-      checkValue root fuel (← resolve root (← reference.getStr?)) value
+      let (document, target) ← resolve documents root (← reference.getStr?)
+      checkValue documents document fuel target value
     if let some kind := field rule "type" then
       require (hasType value (← kind.getStr?)) s!"expected type {kind.compress}"
     if let some expected := field rule "const" then
@@ -78,7 +128,7 @@ private def checkValue (root : Json) : Nat → Json → Json → Except String U
     for keyword in ["oneOf", "anyOf"] do
       if let some choices := field rule keyword then
         let accepted := (← choices.getArr?).filter fun child =>
-          (checkValue root fuel child value).toOption.isSome
+          (checkValue documents root fuel child value).toOption.isSome
         require (if keyword == "oneOf" then accepted.size == 1 else !accepted.isEmpty)
           s!"{keyword}: {accepted.size} matching alternatives"
     match value with
@@ -91,11 +141,11 @@ private def checkValue (root : Json) : Nat → Json → Json → Except String U
       for (key, child) in values.toList do
         match properties.get? key with
         | some childRule =>
-          (checkValue root fuel childRule child).mapError (fun e => s!"{key}: {e}")
+          (checkValue documents root fuel childRule child).mapError (fun e => s!"{key}: {e}")
         | none =>
           match field rule "additionalProperties" with
           | some (.bool accept) => require accept s!"unexpected property {key}"
-          | some additional => (checkValue root fuel additional child).mapError (fun e => s!"{key}: {e}")
+          | some additional => (checkValue documents root fuel additional child).mapError (fun e => s!"{key}: {e}")
           | none => pure ()
     | .arr values =>
       if let some minimum := field rule "minItems" then
@@ -107,26 +157,28 @@ private def checkValue (root : Json) : Nat → Json → Json → Except String U
       let heads ← ((field rule "prefixItems").getD (.arr #[])).getArr?
       for (child, idx) in values.toList.zipIdx do
         if let some childRule := heads[idx]? then
-          checkValue root fuel childRule child
+          checkValue documents root fuel childRule child
         else if let some childRule := field rule "items" then
-          checkValue root fuel childRule child
+          checkValue documents root fuel childRule child
     | .str text =>
       if let some minimum := field rule "minLength" then
         require (text.length ≥ (← minimum.getNat?)) "string is too short"
     | .num number =>
       if let some minimum := field rule "minimum" then
-        require (!(number < (← minimum.getNum?))) "number is below minimum"
+        require (!numberLt number (← minimum.getNum?)) "number is below minimum"
     | _ => pure ()
 
-/-- Keep compilation and per-value checking separate to inspect every schema branch once. --/
+/-- Keep compilation and per-value checking separate to inspect every schema branch once. The
+    documents are the other schemas that references name by file name. --/
 structure Validator where
   private root : Json
+  private documents : List (String × Json)
 
-def compile (schema : Json) : Except String Validator := do
-  checkSchema schema 256 schema
-  return ⟨schema⟩
+def compile (schema : Json) (documents : List (String × Json) := []) : Except String Validator := do
+  checkSchema documents schema 256 schema
+  return ⟨schema, documents⟩
 
 def Validator.validate (schema : Validator) (value : Json) : Except String Unit :=
-  checkValue schema.root 1024 schema.root value
+  checkValue schema.documents schema.root 1024 schema.root value
 
 end Suimon.Test.Schema

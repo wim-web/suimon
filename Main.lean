@@ -4,10 +4,10 @@ import Suimon.Trace
 open Lean Suimon
 
 private def usage : String :=
-  "suimon validate <program.json>\n" ++
-  "suimon check <trace.jsonl> --program <program.json> [--state]\n" ++
-  "suimon explore <program.json> [--seeds N] [--steps N]\n" ++
-  "suimon gen <program.json> [--seed N] [--steps N]\n"
+  "suimon validate <definition.json>\n" ++
+  "suimon check <trace.jsonl> [--state]\n" ++
+  "suimon explore <definition.json> [--seeds N] [--steps N]\n" ++
+  "suimon gen <definition.json> [--seed N] [--steps N]\n"
 
 /-- Options with a value, and `flags` without one, which map to `""`. --/
 private def options (args : List String) (allowed : List String) (flags : List String := []) :
@@ -29,8 +29,15 @@ private def natOption (opts : List (String × String)) (key : String) (default :
     | some n => pure n
     | none => throw s!"{key} expects a natural number"
 
-private def readProgram (path : String) : IO Program := do
-  match Json.parse (← IO.FS.readFile path) >>= Codec.program >>= fun p => p.validate.map fun _ => p with
+/-- Decodes and validates a definition, from a file or from the header of a record. --/
+private def loadDefinition (json : Json) : Except String Definition := do
+  let p ← Codec.definition json
+  p.validate
+  return p
+
+/-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated. --/
+private def readDefinition (path : String) : IO Definition := do
+  match Codec.parse (← IO.FS.readFile path) >>= loadDefinition with
   | .ok p => pure p
   | .error e => throw (IO.userError e)
 
@@ -43,7 +50,7 @@ private def run (action : IO UInt32) : IO UInt32 := do
   try action catch e => IO.eprintln e; return 1
 
 private def validateFile (path : String) : IO UInt32 := run do
-  let _ ← readProgram path
+  let _ ← readDefinition path
   IO.println "ok"
   return 0
 
@@ -56,12 +63,11 @@ private def readRecord (path : String) : IO (String × Bool) := do
   | some text => return (text, cut < bytes.size)
   | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
 
+/-- Replays a record against the definition of its header, which is read like a definition file. --/
 private def checkFile (trace : String) (opts : List (String × String)) : IO UInt32 := run do
-  let program ← match opts.lookup "--program" with
-    | some path => readProgram path
-    | none => throw (IO.userError "--program is required")
   let (text, torn) ← readRecord trace
-  match (Trace.check Trace.wireCodec program text).map fun c => { c with uncommitted := c.uncommitted || torn } with
+  match (Trace.check Trace.wireCodec (loadDefinition ·.toJson) text).map fun c =>
+      { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.
     if (opts.lookup "--state").isSome then IO.println (toJson checked.state).compress
@@ -72,12 +78,12 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
   | .error e => IO.eprintln e; return 1
 
 private def explore (path : String) (opts : List (String × String)) : IO UInt32 := run do
-  let program ← readProgram path
+  let definition ← readDefinition path
   let seeds ← IO.ofExcept (natOption opts "--seeds" 100)
   let steps ← IO.ofExcept (natOption opts "--steps" 10000)
   let mut counts : List (String × Nat) := []
   for seed in List.range seeds do
-    let (s, _) := Explore.walk program {} (seed + 1) steps
+    let (s, _) := Explore.walk definition {} (seed + 1) steps
     unless s.status.terminal do
       IO.eprintln s!"seed {seed + 1}: no accepted operation in status {statusName s.status}"
       return 1
@@ -86,28 +92,29 @@ private def explore (path : String) (opts : List (String × String)) : IO UInt32
   IO.println (Json.mkObj (counts.map fun (name, n) => (name, toJson n))).compress
   return 0
 
-/-- A random walk written as an execution record. Each op record carries the payloads of the values
-    its transition introduces, and a payload repeats its value identity. --/
+/-- A random walk written as an execution record: the header with the definition, then the records.
+    Each op record carries the payloads of the values its transition introduces, and a payload
+    repeats its value identity. --/
 private def gen (path : String) (opts : List (String × String)) : IO UInt32 := run do
-  let program ← readProgram path
+  let definition ← readDefinition path
   let seed ← IO.ofExcept (natOption opts "--seed" 1)
   let steps ← IO.ofExcept (natOption opts "--steps" 10000)
-  let (_, ops) := Explore.walk program {} seed steps
+  let (_, ops) := Explore.walk definition {} seed steps
   let mut state : State := {}
   let mut transactions := #[]
   for o in ops do
-    let next ← IO.ofExcept (step program state o)
+    let next ← IO.ofExcept (step definition state o)
     transactions := transactions.push (o, (Trace.introduced state next).map fun v => (v, v))
     state := next
-  let (_, records) ← IO.ofExcept (Trace.record program {} transactions.toList [] 1)
-  IO.print (Trace.text Trace.wireCodec records)
+  let (_, records) ← IO.ofExcept (Trace.record definition {} transactions.toList [] 1)
+  IO.print (Trace.recording Trace.wireCodec (Codec.definitionWire definition) records)
   return 0
 
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["--help"] | ["help"] => IO.print usage; return 0
   | ["validate", path] => validateFile path
-  | "check" :: trace :: rest => match options rest ["--program"] ["--state"] with
+  | "check" :: trace :: rest => match options rest [] ["--state"] with
     | .ok opts => checkFile trace opts
     | .error e => IO.eprintln e; return 2
   | "explore" :: path :: rest => match options rest ["--seeds", "--steps"] with

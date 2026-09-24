@@ -173,7 +173,7 @@ theorem settled?_isSome_of_mem {s : State} {x : Settled} (hx : x ∈ s.settled) 
   unfold State.settled?
   exact List.find?_isSome.mpr ⟨x, hx, by simp⟩
 
-theorem step_resultKeys {p : Program} {s t : State} {op : Op} (h : Reachable p s) (hk : ResultKeys s)
+theorem step_resultKeys {p : Definition} {s t : State} {op : Op} (h : Reachable p s) (hk : ResultKeys s)
     (hs : step p s op = .ok t) : ResultKeys t := by
   have wk := h.wellKeyed
   have K : Delivery.Kept s t :=
@@ -261,7 +261,7 @@ theorem step_resultKeys {p : Program} {s t : State} {op : Op} (h : Reachable p s
         exact absurd (by simpa using hr) hold
   all_goals exact False.elim hp
 
-theorem reachable_resultKeys {p : Program} {s : State} (h : Reachable p s) : ResultKeys s := by
+theorem reachable_resultKeys {p : Definition} {s : State} (h : Reachable p s) : ResultKeys s := by
   induction h with
   | empty => intro r hr; simp at hr
   | step op hr hs ih => exact step_resultKeys hr ih hs

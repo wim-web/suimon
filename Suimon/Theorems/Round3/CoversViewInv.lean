@@ -16,7 +16,7 @@ Three invariants that the view agreement needs and the earlier layers do not sta
 
 namespace CoversViewAux
 
-variable {p : Program}
+variable {p : Definition}
 
 /-! ### Identities -/
 
@@ -171,7 +171,7 @@ theorem mem_withTask_self {e : Execution} {ts ts' : TaskState} (hts : ts ∈ e.t
 /-- What a task result says about its task (§8.1, §8.3, §4.5): its execution exists and declares the
     task; a transformed output belongs to a task in the output; a result of a task without a function
     body is the index-0 result of its run, recorded when the task succeeded. -/
-def TaskResultShape (p : Program) (s : State) (tr : TaskResult) : Prop :=
+def TaskResultShape (p : Definition) (s : State) (tr : TaskResult) : Prop :=
   ∃ e ∈ s.executions, e.id = tr.execution ∧ ∃ spec, s.taskSpec p e tr.task = .ok spec ∧
     (tr.output ≠ .pending → spec.output.isSome = true) ∧
     ((∃ f, spec.body = .function f) ∨ (tr.index = 0 ∧ ∃ ts ∈ e.tasks, ts.name = tr.task ∧ ts.status = .succeeded))
@@ -344,7 +344,7 @@ theorem reachable_taskResultShape (valid : p.validate = .ok ()) {s : State} (h :
 /-- How a changed task may move: it keeps its status, waits, takes its input, begins, fails its declared
     input transform, or is moved by its call or its run; a run that closes normally records the index-0
     result in `results`. -/
-def TaskMove (p : Program) (s : State) (results : List TaskResult) (e₀ : Execution) (tk₀ tk : TaskState) : Prop :=
+def TaskMove (p : Definition) (s : State) (results : List TaskResult) (e₀ : Execution) (tk₀ tk : TaskState) : Prop :=
   tk.status = tk₀.status ∨ tk.status = .notStarted ∨ tk.status = .ready ∨ tk.status = .active ∨
   (tk.status = .failed ∧ ∃ spec tid, s.taskSpec p e₀ tk.name = .ok spec ∧ spec.input = some (.declared tid)) ∨
   (∃ c ∈ s.calls, c.owner = e₀.id ∧ c.task = some tk.name) ∨
@@ -353,7 +353,7 @@ def TaskMove (p : Program) (s : State) (results : List TaskResult) (e₀ : Execu
 
 /-- Where a task after a step comes from: a task of a new execution, which waits, or a task of a stored
     execution under the same name that moved as `TaskMove` allows. -/
-def TaskOrigin (p : Program) (s : State) (results : List TaskResult) (e : Execution) (tk : TaskState) : Prop :=
+def TaskOrigin (p : Definition) (s : State) (results : List TaskResult) (e : Execution) (tk : TaskState) : Prop :=
   (s.execution? e.id = none ∧ (tk.status = .pending ∨ tk.status = .ready ∨ tk.status = .notStarted)) ∨
   ∃ e₀ ∈ s.executions, e₀.id = e.id ∧ e₀.run = e.run ∧ e₀.placement = e.placement ∧
     ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ TaskMove p s results e₀ tk₀ tk
@@ -621,7 +621,7 @@ theorem notBegun_back {s t : State} {op : Op} (h : Reachable p s) (hs : step p s
 /-- Two facts about tasks (§8.1, §4.5): a succeeded task without a function body has the index-0 result
     of its run, and a task that failed without ever starting its body failed its declared input
     transform. -/
-structure TaskStatusInv (p : Program) (s : State) : Prop where
+structure TaskStatusInv (p : Definition) (s : State) : Prop where
   succeeded : ∀ e ∈ s.executions, ∀ ts ∈ e.tasks, ts.status = .succeeded → ∀ spec,
     s.taskSpec p e ts.name = .ok spec → (∀ f, spec.body ≠ .function f) →
     ∃ tr ∈ s.taskResults, tr.execution = e.id ∧ tr.task = ts.name ∧ tr.index = 0

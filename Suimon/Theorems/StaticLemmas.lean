@@ -171,14 +171,14 @@ theorem acyclic_rank {edges : List (String × String)} :
           have := hedge e he (hrest _ h1 (by simpa using hr1)) hin2
           omega
 
-theorem Workflow.kind?_of_not_mem {p : Program} {w : Workflow} {v : String}
+theorem Workflow.kind?_of_not_mem {p : Definition} {w : Workflow} {v : String}
     (h : v ∉ w.placements.map (·.name)) : ∀ fuel, w.kind? p fuel v = none
   | 0 => rfl
   | _ + 1 => by simp [Workflow.kind?, Workflow.placement?_eq_none h]
 
 /-- `kind?` stops depending on the fuel once the fuel exceeds the rank of the placement, for any
     rank that increases along connections. --/
-theorem Workflow.kind?_fuel_stable {p : Program} {w : Workflow} {rank : String → Nat}
+theorem Workflow.kind?_fuel_stable {p : Definition} {w : Workflow} {rank : String → Nat}
     (hrank : ∀ c ∈ w.connections, c.source ∈ w.placements.map (·.name) →
       c.target ∈ w.placements.map (·.name) → rank c.source < rank c.target) :
     ∀ m v f g, (v ∈ w.placements.map (·.name) → rank v < m) → m ≤ f → m ≤ g →
@@ -210,7 +210,7 @@ theorem Workflow.kind?_fuel_stable {p : Program} {w : Workflow} {rank : String �
 
 /-- In an acyclic workflow, `kind?` with at least as much fuel as there are placements gives the
     same answer as with exactly that much. --/
-theorem Workflow.kind?_stable_of_acyclic {p : Program} {w : Workflow} (h : w.acyclic = true) {v : String}
+theorem Workflow.kind?_stable_of_acyclic {p : Definition} {w : Workflow} (h : w.acyclic = true) {v : String}
     {fuel : Nat} (hf : w.placements.length ≤ fuel) :
     w.kind? p fuel v = w.kind? p w.placements.length v := by
   obtain ⟨rank, hlt, hedge⟩ := acyclic_rank h
@@ -221,7 +221,7 @@ theorem Workflow.kind?_stable_of_acyclic {p : Program} {w : Workflow} (h : w.acy
 
 /-- In an acyclic workflow with distinct placement names, the output kind of a placement is the
     §5.2 rule applied to its input kind. --/
-theorem Workflow.outputKind?_eq_bind {p : Program} {w : Workflow} (hu : (w.placements.map (·.name)).Nodup)
+theorem Workflow.outputKind?_eq_bind {p : Definition} {w : Workflow} (hu : (w.placements.map (·.name)).Nodup)
     (ha : w.acyclic = true) {pl : Placement} (hpl : pl ∈ w.placements) :
     w.outputKind? p pl.name = (w.inputKind? p pl.name).bind (p.outputKind pl.control) := by
   have hsources : (w.incoming pl.name).mapM (fun c => w.kind? p w.placements.length c.source) =
@@ -238,7 +238,7 @@ local macro "validate_simp" " at " h:ident : tactic =>
     ↓reduceIte, false_and, and_false, exists_false] at $h:ident)
 
 /-- What `validatePlacement` guarantees about one placement. --/
-structure PlacementChecked (p : Program) (w : Workflow) (pl : Placement) : Prop where
+structure PlacementChecked (p : Definition) (w : Workflow) (pl : Placement) : Prop where
   kind : (w.outputKind? p pl.name).isSome = true
   inputs : (∀ e, pl.control ≠ .merge e) →
     (w.incoming pl.name).length + (if w.isEntry pl.name then 1 else 0) ≤ 1
@@ -247,14 +247,14 @@ structure PlacementChecked (p : Program) (w : Workflow) (pl : Placement) : Prop 
   concurrency : ∀ c, pl.control = .concurrency c → 0 < c.limit ∧ (c.tasks.map (·.name)).Nodup ∧
     c.tasks.any (·.output.isSome) = true ∧ ∀ task ∈ c.tasks, ∃ at_, p.validateTask at_ c task = .ok ()
 
-theorem Program.validatePlacement_ok {p : Program} {w : Workflow} {pl : Placement}
+theorem Definition.validatePlacement_ok {p : Definition} {w : Workflow} {pl : Placement}
     (h : p.validatePlacement w pl = .ok ()) : PlacementChecked p w pl := by
   rcases pl with ⟨name, control, policy, timeout⟩
-  unfold Program.validatePlacement at h
+  unfold Definition.validatePlacement at h
   cases control with
   | call body =>
     validate_simp at h
-    obtain ⟨_, -, a, -, h⟩ := h
+    obtain ⟨a, -, h⟩ := h
     split at h <;> validate_simp at h
     · obtain ⟨hcount, hkind, -⟩ := h
       exact ⟨hkind, fun _ => by simp only [beq_iff_eq] at hcount; dsimp only; omega, by simp, by simp, by simp⟩
@@ -262,7 +262,7 @@ theorem Program.validatePlacement_ok {p : Program} {w : Workflow} {pl : Placemen
       exact ⟨hkind, fun _ => by simpa using hcount, by simp, by simp, by simp⟩
   | branch judge arms =>
     validate_simp at h
-    obtain ⟨-, -, -, a, -, h⟩ := h
+    obtain ⟨_, -, -, -, a, -, h⟩ := h
     split at h <;> validate_simp at h
     · obtain ⟨hcount, hkind, -⟩ := h
       exact ⟨hkind, fun _ => by simp only [beq_iff_eq] at hcount; dsimp only; omega, by simp, by simp, by simp⟩
@@ -298,14 +298,14 @@ theorem Program.validatePlacement_ok {p : Program} {w : Workflow} {pl : Placemen
     · obtain ⟨hcount, hkind, -⟩ := h
       exact ⟨hkind, fun _ => by simpa using hcount, by simp, by simp, fun _ hc => by cases hc; exact hconc⟩
 
-theorem Program.validateConnection_ok {p : Program} {w : Workflow} {c : Connection}
+theorem Definition.validateConnection_ok {p : Definition} {w : Workflow} {c : Connection}
     (h : p.validateConnection w c = .ok ()) :
     ∃ src dst, w.placement? c.source = some src ∧ w.placement? c.target = some dst ∧
       match c.transform with
       | .declared id => ∃ t, p.transform? id = some t ∧ p.resultType src.control = some t.input ∧
           p.inputType dst.control = some (some t.output)
       | .discard => (p.resultType src.control).isSome ∧ p.inputType dst.control = some none := by
-  unfold Program.validateConnection at h
+  unfold Definition.validateConnection at h
   validate_simp at h
   obtain ⟨src, hsrc, dst, hdst, h⟩ := h
   refine ⟨src, dst, hsrc, hdst, ?_⟩
@@ -325,12 +325,12 @@ theorem Program.validateConnection_ok {p : Program} {w : Workflow} {c : Connecti
       cases expected <;> validate_simp at h
       exact ⟨by simp [hprod], hexp⟩
 
-theorem Program.validateTask_output {p : Program} {at_ : String} {c : Concurrency} {task : TaskSpec}
+theorem Definition.validateTask_output {p : Definition} {at_ : String} {c : Concurrency} {task : TaskSpec}
     (h : p.validateTask at_ c task = .ok ()) {id : String} (hout : task.output = some id) :
     ∃ t, p.transform? id = some t ∧ t.output = c.element ∧ p.bodyElement p.depth task.body = some t.input := by
-  unfold Program.validateTask at h
+  unfold Definition.validateTask at h
   validate_simp at h
-  obtain ⟨-, u, -, input, -, h⟩ := h
+  obtain ⟨-, input, -, h⟩ := h
   simp only [hout] at h
   -- Every accepted input transform continues with the same output check.
   split at h <;> validate_simp at h
@@ -342,7 +342,7 @@ theorem Program.validateTask_output {p : Program} {at_ : String} {c : Concurrenc
     exact ⟨t, ht, beq_iff_eq.1 hout, by rw [helement, beq_iff_eq.1 hin]⟩
 
 /-- What `validateWorkflow` guarantees about one workflow. --/
-structure WorkflowChecked (p : Program) (w : Workflow) : Prop where
+structure WorkflowChecked (p : Definition) (w : Workflow) : Prop where
   nonempty : w.placements ≠ []
   names : (w.placements.map (·.name)).Nodup
   connections : ∀ c ∈ w.connections, p.validateConnection w c = .ok ()
@@ -351,9 +351,9 @@ structure WorkflowChecked (p : Program) (w : Workflow) : Prop where
   placements : ∀ pl ∈ w.placements, PlacementChecked p w pl
   endpoints : ∀ pl ∈ w.placements, w.isEndpoint pl.name = true → w.outputKind? p pl.name = some .single
 
-theorem Program.validateWorkflow_ok {p : Program} {w : Workflow} (h : p.validateWorkflow w = .ok ()) :
+theorem Definition.validateWorkflow_ok {p : Definition} {w : Workflow} (h : p.validateWorkflow w = .ok ()) :
     WorkflowChecked p w := by
-  unfold Program.validateWorkflow at h
+  unfold Definition.validateWorkflow at h
   validate_simp at h
   obtain ⟨-, hne, -, hu, u, hc, ha, h⟩ := h
   have hnonempty : w.placements ≠ [] := by simpa using hne
@@ -385,8 +385,8 @@ theorem Program.validateWorkflow_ok {p : Program} {w : Workflow} (h : p.validate
       and_true, exists_const] at this
     simpa using this
 
-/-- What `validate` guarantees about a program. --/
-structure ProgramChecked (p : Program) : Prop where
+/-- What `validate` guarantees about a definition. --/
+structure DefinitionChecked (p : Definition) : Prop where
   functions : (p.functions.map (·.id)).Nodup
   judges : (p.judges.map (·.id)).Nodup
   transforms : (p.transforms.map (·.id)).Nodup
@@ -396,8 +396,8 @@ structure ProgramChecked (p : Program) : Prop where
   callsAcyclic : p.callsAcyclic = true
   workflows : ∀ w ∈ p.workflows, WorkflowChecked p w
 
-theorem Program.validate_ok {p : Program} (h : p.validate = .ok ()) : ProgramChecked p := by
-  unfold Program.validate at h
+theorem Definition.validate_ok {p : Definition} (h : p.validate = .ok ()) : DefinitionChecked p := by
+  unfold Definition.validate at h
   validate_simp at h
   obtain ⟨hf, hj, ht, hd, hw, hm, hcalls, u, hloop⟩ := h
   exact ⟨nodup_of_unique hf, nodup_of_unique hj, nodup_of_unique ht, by simpa using hd,

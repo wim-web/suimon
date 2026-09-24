@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// The runtime: an Engine runs a program with the Go implementations of a Registry. Each execution
+// The runtime: an Engine runs a definition with the Go implementations of a Registry. Each execution
 // is driven by one goroutine that owns its state and changes it only by the rules of Step, in
 // place since nothing else holds it (machine); every accepted operation is recorded (the Journal,
 // when there is one) before its effects are published. User code runs in goroutines of its own
@@ -21,11 +21,15 @@ var (
 	// ErrLost is the error of a failure caused by the loss of a call's executor (§11.6), which
 	// Resume reports for the calls that were running at the crash.
 	ErrLost = errors.New("suimon: the executor of the call was lost")
-	// ErrNotStarted is returned by Resume for a journal without a committed start: there is
-	// nothing to resume, and the input is not known.
+	// ErrNotStarted is returned by Resume for a journal without a committed start, such as one cut
+	// inside its header: there is nothing to resume, and the input is not known.
 	ErrNotStarted = errors.New("suimon: the journal records no start")
+	// ErrDefinitionMismatch is returned by Resume for a journal of another definition: the definition
+	// its header records does not have the canonical form of the engine's (§12.1). The Go functions
+	// of the registry are not part of the definition and are not compared.
+	ErrDefinitionMismatch = errors.New("suimon: the journal records another definition")
 	// ErrStuck is returned by Wait when no operation is possible and no call is running before the
-	// execution ends. A valid program does not get there; a program run without validation may.
+	// execution ends. A valid definition does not get there; a definition run without validation may.
 	ErrStuck = errors.New("suimon: the execution cannot progress")
 	// ErrNoOutput is returned by Report.Output for an endpoint without a value.
 	ErrNoOutput = errors.New("suimon: no output")
@@ -39,40 +43,67 @@ type PanicError struct {
 
 func (e *PanicError) Error() string { return fmt.Sprintf("suimon: panic in user code: %v", e.Value) }
 
-// Engine runs one program with the implementations of a registry. It is safe for concurrent use:
-// each Start or Resume drives its own execution. The program must not change after NewEngine.
+// Engine runs one definition with the implementations of a registry. It is safe for concurrent use:
+// each Start or Resume drives its own execution. The definition must not change after NewEngine.
 //
-// The timeouts of the program are durations here (§11.5): a call fails when it runs longer than
+// The timeouts of the definition are durations here (§11.5): a call fails when it runs longer than
 // callMs from the start of its user code (a task's wait for a slot is not counted), and a Stream
 // call also when it waits longer than elementMs for its next element. The engine then cancels the
 // call's context and accepts nothing more from it; the call keeps its concurrency slot until its
 // user code returns.
+//
+// An execution keeps the payload of every value in memory until it ends, and Resume loads them all
+// from the journal, so pass large data by reference, such as a storage key, rather than as a value.
 type Engine struct {
-	program  *Program
-	registry *Registry
-	plans    map[string]*workflowPlan
+	definition *Definition
+	registry   *Registry
+	plans      map[string]*workflowPlan
+	// header is the first line of the engine's journals, with its newline.
+	header string
 }
 
 // NewEngine validates p (run, §14) and returns an engine for it. Every function, judge and
-// transform the program uses must be bound in r with the declared shape: a Single or a Stream
+// transform the definition uses must be bound in r with the declared shape: a Single or a Stream
 // function, with or without input. The Go types of the values are not checked against the type
-// names of the program; that they match is up to the caller (§4.4).
-func NewEngine(p *Program, r *Registry) (*Engine, error) {
+// names of the definition; that they match is up to the caller (§4.4).
+//
+// Journals start with the definition (§12.1), so it must survive recording: read back from the
+// header, it must have the same canonical form. Only a definition built in code can fail this, such
+// as one with an empty id, which ParseDefinition rejects.
+func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	return NewUncheckedEngine(p, r)
 }
 
-// NewUncheckedEngine is NewEngine without validating the program (runUnchecked, §14). The engine
+// NewUncheckedEngine is NewEngine without validating the definition (runUnchecked, §14). The engine
 // still records, applies the policies, timeouts and limits, and checks each operation with Step,
-// but for a program that validation would reject nothing guarantees that the execution ends: Wait
+// but for a definition that validation would reject nothing guarantees that the execution ends: Wait
 // may return ErrStuck.
-func NewUncheckedEngine(p *Program, r *Registry) (*Engine, error) {
+func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
+	header, err := recordedHeader(p)
+	if err != nil {
+		return nil, err
+	}
 	if err := r.check(p); err != nil {
 		return nil, err
 	}
-	return &Engine{program: p, registry: r, plans: newPlans(p)}, nil
+	return &Engine{definition: p, registry: r, plans: newPlans(p), header: header + "\n"}, nil
+}
+
+// recordedHeader is the header of the journals of p, after checking that p survives recording: the
+// definition the header holds must read back to the same canonical form.
+func recordedHeader(p *Definition) (string, error) {
+	canonical := definitionWire(p).render()
+	q, err := ParseDefinition([]byte(canonical))
+	if err == nil && definitionWire(q).render() != canonical {
+		err = errors.New("it reads back as another definition")
+	}
+	if err != nil {
+		return "", fmt.Errorf("suimon: the definition cannot be recorded: %w", err)
+	}
+	return EncodeHeader(p), nil
 }
 
 // A StartOption configures Start and Run.
@@ -81,8 +112,8 @@ type StartOption func(*startOptions)
 type startOptions struct{ journal Journal }
 
 // WithJournal writes the execution record to j (§12.1), which must be empty, like a journal from
-// CreateJournal. Without a journal the record is kept only in memory, and the execution cannot be
-// resumed after a crash.
+// CreateJournal: the header with the definition, then the records. Without a journal the record is
+// kept only in memory, and the execution cannot be resumed after a crash.
 func WithJournal(j Journal) StartOption { return func(o *startOptions) { o.journal = j } }
 
 // Start starts an execution of the main workflow with input, the value of the workflow's Input
@@ -97,9 +128,11 @@ func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*Wo
 	for _, opt := range opts {
 		opt(&o)
 	}
-	d := e.newDriver(ctx, newOwnedRecorder(e.program, &State{}, nil, 0), o.journal)
+	d := e.newDriver(ctx, newOwnedRecorder(e.definition, &State{}, nil, 0), o.journal)
+	// The header is appended with the records of the start, before the first sync.
+	d.buffer = append(d.buffer, e.header...)
 	op := OpStart{}
-	if main, ok := e.program.workflow(e.program.Main); ok && main.Input != nil {
+	if main, ok := e.definition.workflow(e.definition.Main); ok && main.Input != nil {
 		data, err := encodeValue(input)
 		if err != nil {
 			return nil, err
@@ -131,9 +164,10 @@ func (e *Engine) Run(ctx context.Context, input any, opts ...StartOption) (*Repo
 	return x.Wait()
 }
 
-// Resume continues the execution recorded in j after a crash (§12.1). It replays the committed
-// transitions with Check, cuts off an uncommitted tail, and restores the state and the payloads
-// of its values.
+// Resume continues the execution recorded in j after a crash (§12.1). It reads the definition from
+// the header of the journal, which must have the canonical form of the engine's definition, or
+// Resume returns ErrDefinitionMismatch. It then replays the committed transitions with Check, cuts
+// off an uncommitted tail, and restores the state and the payloads of its values.
 //
 // Calls that were running at the crash are reported lost (§11.6) before anything else, and are
 // not called again: this engine runs user code in its own process, so the executor that held each
@@ -143,19 +177,22 @@ func (e *Engine) Run(ctx context.Context, input any, opts ...StartOption) (*Repo
 // one of them stops the workflow: the calls after it, like calls that were already being cancelled
 // at the crash, end as cancelled (Step). The execution then continues from the recovered state.
 //
-// The journal must record an execution of this engine's program, and no other execution may write
-// it meanwhile; a journal whose execution has concluded gives an execution that is already done.
-// ctx is used as in Start.
+// No other execution may write the journal meanwhile: a FileJournal enforces this with a lock on its
+// file, which may not work on a network file system. A journal whose execution has concluded gives
+// an execution that is already done. ctx is used as in Start.
 func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExecution, error) {
 	data, err := j.Contents()
 	if err != nil {
 		return nil, err
 	}
-	c, err := Check(e.program, string(data))
-	if err != nil {
+	c, err := Check(string(data), sameDefinition(e.definition))
+	switch {
+	case errors.Is(err, ErrDefinitionMismatch):
+		return nil, ErrDefinitionMismatch
+	case err != nil:
 		return nil, fmt.Errorf("suimon: the journal does not replay: %w", err)
-	}
-	if c.Committed == 0 {
+	case c.Committed == 0:
+		// Nothing is committed, or the journal was cut inside its header.
 		return nil, ErrNotStarted
 	}
 	if c.Length < len(data) {
@@ -170,7 +207,7 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 		}
 	}
 	// The driver takes the state of c over and changes it in place.
-	d := e.newDriver(ctx, newOwnedRecorder(e.program, c.State, c.Values, c.Committed), j)
+	d := e.newDriver(ctx, newOwnedRecorder(e.definition, c.State, c.Values, c.Committed), j)
 	for _, v := range c.Values {
 		d.payloads[v.Value] = v.Payload
 	}
@@ -258,7 +295,7 @@ func (r *Report) Output(name string, v any) error {
 func (d *driver) report() *Report {
 	s := d.state
 	r := &Report{Status: s.Status, Outputs: map[string]json.RawMessage{}, Endpoints: map[string]Outcome{}, State: s}
-	if w, ok := d.program.workflow(d.program.Main); ok {
+	if w, ok := d.definition.workflow(d.definition.Main); ok {
 		for _, pl := range w.Placements {
 			if !w.isEndpoint(pl.Name) {
 				continue

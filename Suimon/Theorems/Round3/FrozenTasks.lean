@@ -294,7 +294,7 @@ theorem failCall_good {s t : State} {c : Call} {status : CallStatus} {cause : Ca
   exact Good.pre (Good.then_fail (settleOwner_good lim hso hc hrun rfl rfl rfl)) rfl rfl
 
 /-- A task run is stored under the path of its execution and task, so a task has one run. -/
-theorem taskRun_path {p : Program} {s : State} (inv : Delivery.Inv p s) {R : Run} (hR : R ∈ s.runs)
+theorem taskRun_path {p : Definition} {s : State} (inv : Delivery.Inv p s) {R : Run} (hR : R ∈ s.runs)
     {name : String} (ht : R.task = some name) {e : Execution} (he : e ∈ s.executions) (ho : R.owner = some e.id) :
     R.path = e.run ++ [Key.task e.id name] := by
   rcases inv.own.runs R hR with ⟨-, h, -⟩ | ⟨h, -⟩ | ⟨name', ht', e₁, he₁, ho₁, hp, -⟩
@@ -306,7 +306,7 @@ theorem taskRun_path {p : Program} {s : State} (inv : Delivery.Inv p s) {R : Run
 
 open State in
 /-- Every step keeps ended tasks and complete executions, and both invariants. -/
-theorem step_good {p : Program} {s t : State} {op : Op} (inv : Delivery.Inv p s) (lim : Limit.Inv s)
+theorem step_good {p : Definition} {s t : State} {op : Op} (inv : Delivery.Inv p s) (lim : Limit.Inv s)
     (dt : DoneTasks s) (rt : RunTasks s) (hs : step p s op = .ok t) : Good s t := by
   cases op with
   | start input =>
@@ -456,7 +456,7 @@ theorem step_good {p : Program} {s t : State} {op : Op} (inv : Delivery.Inv p s)
     · exact Good.of_eq rfl rfl
 
 /-- Both invariants hold in every reachable state. -/
-theorem reachable_tasks {p : Program} {s : State} (h : Reachable p s) : DoneTasks s ∧ RunTasks s := by
+theorem reachable_tasks {p : Definition} {s : State} (h : Reachable p s) : DoneTasks s ∧ RunTasks s := by
   induction h with
   | empty => exact ⟨by simp [DoneTasks], by simp [RunTasks]⟩
   | step op hr hs ih =>
@@ -480,7 +480,7 @@ theorem mem_setTaskResult_of_ne {s : State} {r₁ r : TaskResult} {o : TaskOutpu
 open State in
 /-- How a step changes the task results: not at all, by one result of a running task call or a
     closing task run, or by the output transform of one pending result of a task in the output. -/
-theorem step_taskResults {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_taskResults {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     t.taskResults = s.taskResults ∨
     (∃ x, t.taskResults = s.taskResults ++ [x] ∧ Delivery.NewTaskResult s x) ∨
     (∃ r o e spec, r ∈ s.taskResults ∧ r.output = .pending ∧ s.execution? r.execution = some e ∧

@@ -9,7 +9,7 @@ open State
 /-! ## [8] Round3/ProgressCalm.lean — task C2 -/
 
 section ProgressCalm
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- In a calm state the deepest open run moves: a ready task of one of its executions begins (no slot
     is held there: every call ended and every run below is complete), an execution closes, the first
@@ -48,7 +48,7 @@ theorem calm_progress (valid : p.validate = .ok ()) (h : Reachable p s) (running
     cases hc : e.complete with
     | true => rfl
     | false => exact absurd ⟨e, he, herun, hc⟩ hex
-  obtain ⟨pl, hpl, hunset, hsrc⟩ := CalmAux.min_unsettled valid (Program.workflow?_eq_some hw).1 hall
+  obtain ⟨pl, hpl, hunset, hsrc⟩ := CalmAux.min_unsettled valid (Definition.workflow?_eq_some hw).1 hall
   have hended : ∀ i ∈ s.invocationsOf r.path pl.name, s.invocationEnded i = true := fun i hi =>
     CalmAux.inv_ended h calm hr hexec (Delivery.mem_invocationsOf.mp hi).1 (Delivery.mem_invocationsOf.mp hi).2.1
   obtain ⟨op, t, hop, hs, hne⟩ :=

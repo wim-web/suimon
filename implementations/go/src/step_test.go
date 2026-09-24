@@ -18,7 +18,7 @@ func engineOp(op Op) bool {
 }
 
 // acceptedChange is Lean's (step p s op).toOption.filter (· != s).
-func acceptedChange(p *Program, s *State, op Op) (*State, bool) {
+func acceptedChange(p *Definition, s *State, op Op) (*State, bool) {
 	next, err := Step(p, s, op)
 	if err != nil || next.Equal(s) {
 		return nil, false
@@ -27,7 +27,7 @@ func acceptedChange(p *Program, s *State, op Op) (*State, bool) {
 }
 
 // drive runs engine operations first; then each running call reports what decide says.
-func drive(p *Program, decide func(*State, *Call) Op) *State {
+func drive(p *Definition, decide func(*State, *Call) Op) *State {
 	s := &State{}
 	cfg := DefaultConfig()
 	cfg.Failures = false
@@ -115,7 +115,7 @@ type deliveryKey struct {
 }
 
 // checkTransition checks the invariants of every accepted transition of a random walk.
-func checkTransition(t *testing.T, p *Program, label string, before, after *State, op Op) {
+func checkTransition(t *testing.T, p *Definition, label string, before, after *State, op Op) {
 	t.Helper()
 	if !unique(ids(after.Results, func(r Result) string { return r.ID })) {
 		t.Fatalf("%s: duplicate result after %s", label, EncodeOp(op))
@@ -181,7 +181,7 @@ func checkTransition(t *testing.T, p *Program, label string, before, after *Stat
 	}
 }
 
-func randomWalks(t *testing.T, label string, p *Program, cfg Config, seeds int) {
+func randomWalks(t *testing.T, label string, p *Definition, cfg Config, seeds int) {
 	for seed := range seeds {
 		s := &State{}
 		rng := uint64(seed + 1)
@@ -214,7 +214,7 @@ func randomWalks(t *testing.T, label string, p *Program, cfg Config, seeds int) 
 
 // Every interleaving reaches a final state, with or without failures.
 func TestRandomWalks(t *testing.T) {
-	for _, name := range append(programNames, extraPrograms...) {
+	for _, name := range append(definitionNames, extraDefinitions...) {
 		p := load(t, name)
 		randomWalks(t, name, p, DefaultConfig(), 200)
 		cfg := DefaultConfig()
@@ -326,7 +326,7 @@ func TestStepRejections(t *testing.T) {
 	}
 	cases := []struct {
 		label string
-		p     *Program
+		p     *Definition
 		s     *State
 		op    Op
 		code  string
@@ -399,7 +399,7 @@ func TestStepRejections(t *testing.T) {
 	}
 }
 
-func mustStep(t *testing.T, p *Program, s *State, op Op) *State {
+func mustStep(t *testing.T, p *Definition, s *State, op Op) *State {
 	t.Helper()
 	next, err := Step(p, s, op)
 	if err != nil {

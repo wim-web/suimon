@@ -186,7 +186,7 @@ theorem mem_setTask_self {s : State} {e : Execution} {ts : TaskState} (he : e �
   exact List.mem_map.mpr ⟨e, he, by simp⟩
 
 theorem invocable_of_invoke {pl : Placement} {s t : State} {id : String} {path : Path} {name : String}
-    {trigger : Option ResultId} {input : Option Value} {p : Program}
+    {trigger : Option ResultId} {input : Option Value} {p : Definition}
     (h : (∃ f decl, pl.control = .call (.function f) ∧ p.function? f = some decl ∧ s.call? id = none ∧
           t = { s with
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
@@ -215,7 +215,7 @@ theorem invocable_of_invoke {pl : Placement} {s t : State} {id : String} {path :
 
 open State in
 /-- Every invocation after a step is one from before, or the one `invoke` created. --/
-theorem step_invocations_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_invocations_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ i ∈ t.invocations, InvOld s i ∨ NewInvocation p s i := by
   intro x hx
   have same : t.invocations = s.invocations → InvOld s x ∨ NewInvocation p s x := fun h =>
@@ -308,7 +308,7 @@ theorem step_invocations_back {p : Program} {s t : State} {op : Op} (hs : step p
 
 open State in
 /-- Every call after a step is one from before, or the one `invoke` or `beginTask` created. --/
-theorem step_calls_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_calls_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ c ∈ t.calls, CallOld s c ∨ NewCall p s t c := by
   intro x hx
   have same : t.calls = s.calls → CallOld s x ∨ NewCall p s t x := fun h => Or.inl (callOld_self (h ▸ hx))
@@ -430,7 +430,7 @@ theorem step_calls_back {p : Program} {s t : State} {op : Op} (hs : step p s op 
 
 open State in
 /-- Every run after a step is one from before, or the one `start`, `invoke` or `beginTask` created. --/
-theorem step_runs_back {p : Program} {s t : State} {op : Op} (hfresh : s.runs = [] ∨ s.started = true)
+theorem step_runs_back {p : Definition} {s t : State} {op : Op} (hfresh : s.runs = [] ∨ s.started = true)
     (hs : step p s op = .ok t) : ∀ r ∈ t.runs, RunOld s r ∨ NewRun p s t r := by
   intro x hx
   have same : t.runs = s.runs → RunOld s x ∨ NewRun p s t x := fun h => Or.inl (runOld_self (h ▸ hx))
@@ -535,7 +535,7 @@ theorem step_runs_back {p : Program} {s t : State} {op : Op} (hfresh : s.runs = 
 
 open State in
 /-- Every execution after a step is one from before, or the one `invoke` created. --/
-theorem step_executions_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_executions_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ e ∈ t.executions, ExecOld s e ∨ NewExecution p s t e := by
   intro x hx
   have same : t.executions = s.executions → ExecOld s x ∨ NewExecution p s t x := fun h =>
@@ -656,7 +656,7 @@ theorem accept_taskResults {s t : State} {c : Call} {index : Nat} {value : Value
 open State in
 /-- Every task result after a step is one from before, or one a running task call or a closing task
     run produced. --/
-theorem step_taskResults_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_taskResults_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ r ∈ t.taskResults, TaskResultOld s r ∨ NewTaskResult s r := by
   intro x hx
   have same : t.taskResults = s.taskResults → TaskResultOld s x ∨ NewTaskResult s x := fun h =>
@@ -754,7 +754,7 @@ theorem step_taskResults_back {p : Program} {s t : State} {op : Op} (hs : step p
 /-! ### Deliveries and settlements -/
 
 /-- Only a delivery or a failed transform records a delivery, and only `settle` a settlement. --/
-theorem step_deliveries_settled_eq {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_deliveries_settled_eq {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     (t.deliveries = s.deliveries ∨ ∃ path j src, (∃ v, op = .deliver path j src v) ∨ op = .transformFailed path j src) ∧
     (t.settled = s.settled ∨ ∃ path name, op = .settle path name) := by
   have g := step_grows hs
@@ -838,7 +838,7 @@ theorem step_deliveries_settled_eq {p : Program} {s t : State} {op : Op} (hs : s
 
 open State in
 /-- Every delivery after a step is one from before, or one checked against the state before it. --/
-theorem step_deliveries_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_deliveries_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ d ∈ t.deliveries, d ∈ s.deliveries ∨ NewDelivery p s d := by
   intro x hx
   rcases (step_deliveries_settled_eq hs).1 with h | ⟨path, j, src, ⟨v, rfl⟩ | rfl⟩
@@ -858,7 +858,7 @@ theorem step_deliveries_back {p : Program} {s t : State} {op : Op} (hs : step p 
 
 open State in
 /-- Every settlement after a step is one from before, or the one `settle` recorded. --/
-theorem step_settled_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_settled_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ x ∈ t.settled, x ∈ s.settled ∨ NewSettled p s t x := by
   intro x hx
   rcases (step_deliveries_settled_eq hs).2 with h | ⟨path, name, rfl⟩
@@ -887,7 +887,7 @@ theorem step_settled_back {p : Program} {s t : State} {op : Op} (hs : step p s o
 
 open State in
 /-- Every result after a step is one from before, or one the step accepted, with where it came from. --/
-theorem step_results_back {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_results_back {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     ∀ r ∈ t.results, r ∈ s.results ∨ NewResult p s t r := by
   intro x hx
   have same : t.results = s.results → x ∈ s.results ∨ NewResult p s t x := fun h => Or.inl (h ▸ hx)

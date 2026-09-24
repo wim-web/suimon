@@ -4,7 +4,7 @@ import Suimon.Theorems.StepEffects
 namespace Suimon
 
 /-- States reachable from the empty state by accepted operations. --/
-inductive Reachable (p : Program) : State → Prop
+inductive Reachable (p : Definition) : State → Prop
   | empty : Reachable p {}
   | step {s t : State} (op : Op) : Reachable p s → step p s op = .ok t → Reachable p t
 
@@ -153,7 +153,7 @@ theorem result_eq_of_id (h : s.WellKeyed) {r r' : Result} (hr : r ∈ s.results)
 end State.WellKeyed
 
 open State in
-theorem step_wellKeyed {p : Program} {s t : State} {op : Op} (h : s.WellKeyed) (hs : step p s op = .ok t) :
+theorem step_wellKeyed {p : Definition} {s t : State} {op : Op} (h : s.WellKeyed) (hs : step p s op = .ok t) :
     t.WellKeyed := by
   cases op with
   | start input =>
@@ -253,19 +253,19 @@ theorem step_wellKeyed {p : Program} {s t : State} {op : Op} (h : s.WellKeyed) (
     · exact (h.setRun _).of_records rfl rfl rfl rfl rfl rfl rfl rfl
     · exact h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
 
-theorem Reachable.wellKeyed {p : Program} {s : State} (h : Reachable p s) : s.WellKeyed := by
+theorem Reachable.wellKeyed {p : Definition} {s : State} (h : Reachable p s) : s.WellKeyed := by
   induction h with
   | empty => exact State.WellKeyed.empty
   | step op _ hs ih => exact step_wellKeyed ih hs
 
 /-- Before the start, a reachable state is the empty state. --/
-theorem Reachable.eq_empty_or_started {p : Program} {s : State} (h : Reachable p s) : s = {} ∨ s.started = true := by
+theorem Reachable.eq_empty_or_started {p : Definition} {s : State} (h : Reachable p s) : s = {} ∨ s.started = true := by
   cases h with
   | empty => exact Or.inl rfl
   | step op _ hs => exact Or.inr (step_started hs)
 
 /-- Accepted results, deliveries, settlements and failure records are never withdrawn (§10.2, §11.4). --/
-theorem step_monotone {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_monotone {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     (∀ r ∈ s.results, r ∈ t.results) ∧ (∀ d ∈ s.deliveries, d ∈ t.deliveries) ∧
     (∀ x ∈ s.settled, x ∈ t.settled) ∧ s.failures <+: t.failures := by
   have g := step_grows hs
@@ -274,7 +274,7 @@ theorem step_monotone {p : Program} {s t : State} {op : Op} (hs : step p s op = 
 open State in
 /-- A result a step adds names what produced it: the call that reported it, the execution or the
     sub-workflow invocation that closed, or the placement that aggregated; other steps add none. --/
-theorem step_producer {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) {r : Result}
+theorem step_producer {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) {r : Result}
     (hr : r ∈ t.results) (hnew : r ∉ s.results) :
     match (generalizing := false) op with
     | .returned id _ | .judged id _ | .yielded id _ => r.producer = id
@@ -386,7 +386,7 @@ theorem step_producer {p : Program} {s t : State} {op : Op} (hs : step p s op = 
     obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact keep (by simp)
 
 /-- A final state accepts no operation (§13.3). --/
-theorem step_source_status {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_source_status {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     s.status = .running ∨ s.status = .stopping := by
   by_cases h : s.status = .running
   · exact Or.inl h
@@ -398,7 +398,7 @@ def State.Quiet (s : State) : Prop :=
 
 /-- Every step keeps a state quiet: a stop cancels all running and fetching calls in the same
     transition, and afterwards no call is started or fetched (§11.3). --/
-theorem step_quiet {p : Program} {s t : State} {op : Op} (quiet : s.Quiet) (hs : step p s op = .ok t) : t.Quiet := by
+theorem step_quiet {p : Definition} {s t : State} {op : Op} (quiet : s.Quiet) (hs : step p s op = .ok t) : t.Quiet := by
   intro stopping
   by_cases running : s.status = .running
   · exact step_stopping_quiet_of_running hs running stopping
@@ -416,14 +416,14 @@ theorem step_quiet {p : Program} {s t : State} {op : Op} (quiet : s.Quiet) (hs :
   · exact quiet
   · exact quiet
 
-theorem Reachable.quiet {p : Program} {s : State} (h : Reachable p s) : s.Quiet := by
+theorem Reachable.quiet {p : Definition} {s : State} (h : Reachable p s) : s.Quiet := by
   induction h with
   | empty => intro h; cases h
   | step op _ hs ih => exact step_quiet ih hs
 
 /-- After the stop, nothing new is invoked, called, fetched, accepted, delivered or settled, and no
     failure is added; only cancelled calls end and the final status is decided (§11.3). --/
-theorem step_after_stop {p : Program} {s t : State} {op : Op} (quiet : s.Quiet) (hs : step p s op = .ok t)
+theorem step_after_stop {p : Definition} {s t : State} {op : Op} (quiet : s.Quiet) (hs : step p s op = .ok t)
     (stopped : s.status ≠ .running) :
     t.results = s.results ∧ t.deliveries = s.deliveries ∧ t.taskResults = s.taskResults ∧
     t.settled = s.settled ∧ t.failures = s.failures ∧
@@ -449,7 +449,7 @@ theorem step_after_stop {p : Program} {s t : State} {op : Op} (quiet : s.Quiet) 
   · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, quiet⟩
 
 /-- The status moves only forward: a stop is never undone, and a final status is kept. --/
-theorem step_status {p : Program} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+theorem step_status {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
     (s.status = .stopping → t.status ≠ .running) ∧ (s.started → t.started) := by
   refine ⟨fun stopping => ?_, fun _ => step_started hs⟩
   obtain ⟨-, -, hcases⟩ := step_of_status_ne_running hs (by simp [stopping])

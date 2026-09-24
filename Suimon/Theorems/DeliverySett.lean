@@ -8,7 +8,7 @@ open State
 
 /-! ### Shapes -/
 
-theorem shape?_eq {p : Program} {w : Workflow} {name : String} {sh : Workflow.Shape} (h : w.shape? p name = some sh) :
+theorem shape?_eq {p : Definition} {w : Workflow} {name : String} {sh : Workflow.Shape} (h : w.shape? p name = some sh) :
     ∃ pl, w.placement? name = some pl ∧
       (((∃ e, pl.control = .merge e) ∧ sh = .merge (w.inputs name)) ∨
        ((∀ e, pl.control ≠ .merge e) ∧
@@ -48,14 +48,14 @@ theorem shape?_eq {p : Program} {w : Workflow} {name : String} {sh : Workflow.Sh
         · cases h
       · cases h
 
-theorem shape?_single {p : Program} {w : Workflow} {name : String} {j : Nat} {c : Connection}
+theorem shape?_single {p : Definition} {w : Workflow} {name : String} {j : Nat} {c : Connection}
     (h : w.shape? p name = some (.single j c)) :
     w.inputs name = [(j, c)] ∧ w.connections[j]? = some c ∧ c.target = name ∧ w.outputKind? p c.source = some .single := by
   obtain ⟨pl, -, (⟨-, h⟩ | ⟨-, ⟨-, h⟩ | ⟨-, -, h⟩ | ⟨-, j', c', hone, ⟨hk, h⟩ | ⟨-, h⟩⟩⟩)⟩ := shape?_eq h <;> cases h
   exact ⟨hone, mem_inputs.mp (hone ▸ List.mem_singleton_self _) |>.1, mem_inputs.mp (hone ▸ List.mem_singleton_self _) |>.2,
     hk⟩
 
-theorem shape?_stream {p : Program} {w : Workflow} {name : String} {j : Nat} {c : Connection}
+theorem shape?_stream {p : Definition} {w : Workflow} {name : String} {j : Nat} {c : Connection}
     (h : w.shape? p name = some (.stream j c)) :
     w.inputs name = [(j, c)] ∧ w.connections[j]? = some c ∧ c.target = name ∧ w.outputKind? p c.source = some .stream := by
   obtain ⟨pl, -, (⟨-, h⟩ | ⟨-, ⟨-, h⟩ | ⟨-, -, h⟩ | ⟨-, j', c', hone, ⟨-, h⟩ | ⟨hk, h⟩⟩⟩)⟩ := shape?_eq h <;> cases h
@@ -64,7 +64,7 @@ theorem shape?_stream {p : Program} {w : Workflow} {name : String} {j : Nat} {c 
 
 /-- A Single output that the control computes from its input kind: Stream functions, Stream
     concurrency outputs and Stream inputs all give Stream outputs (§5.2). --/
-theorem single_kind {p : Program} {w : Workflow} {name : String} {sh : Workflow.Shape} {pl : Placement}
+theorem single_kind {p : Definition} {w : Workflow} {name : String} {sh : Workflow.Shape} {pl : Placement}
     (hsh : w.shape? p name = some sh) (hk : w.outputKind? p name = some .single) (hpl : w.placement? name = some pl)
     (hinv : Invocable pl.control) :
     (∀ j c, sh ≠ .stream j c) ∧
@@ -76,18 +76,18 @@ theorem single_kind {p : Program} {w : Workflow} {name : String} {sh : Workflow.
   · rintro j c rfl
     simp only [shapeInput, Option.some.injEq] at hinp
     subst hinp
-    cases hc : pl.control <;> rw [hc] at hout hinv <;> simp [Program.outputKind, Invocable] at hout hinv
+    cases hc : pl.control <;> rw [hc] at hout hinv <;> simp [Definition.outputKind, Invocable] at hout hinv
   · intro f d hf hd hkd
     rw [hf] at hout
     cases sh <;> simp only [shapeInput, Option.some.injEq, reduceCtorEq] at hinp <;> subst hinp <;>
-      simp [Program.outputKind, Program.bodyKind, hd, hkd] at hout
+      simp [Definition.outputKind, Definition.bodyKind, hd, hkd] at hout
   · intro c hc hco
     rw [hc] at hout
     cases sh <;> simp only [shapeInput, Option.some.injEq, reduceCtorEq] at hinp <;> subst hinp <;>
-      simp [Program.outputKind, hco] at hout
+      simp [Definition.outputKind, hco] at hout
 
 section
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 theorem mem_invocationsOf_of {s : State} {i : Invocation} {path : Path} {name : String} (hi : i ∈ s.invocations)
     (hr : i.run = path) (hp : i.placement = name) : i ∈ s.invocationsOf path name :=

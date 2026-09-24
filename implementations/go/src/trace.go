@@ -4,14 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
-// The execution record of Suimon/Trace.lean (schema/trace.schema.json): one line per record. Each
-// accepted transition is an op record followed by a commit record; only committed transitions are
-// part of the record (§12.1).
+// The execution record of Suimon/Trace.lean (schema/trace.schema.json): one line per record. The
+// first line is the header, which holds the definition of the execution. Each accepted transition is
+// then an op record followed by a commit record; only committed transitions are part of the record
+// (§12.1).
 
 // Payload is the serialized payload of a value, keyed by the value's identity.
 type Payload struct {
@@ -162,7 +162,8 @@ func RecordsText(records []Record) string {
 	return b.String()
 }
 
-// Decoding looks fields up by name; the first field of a name counts.
+// Decoding looks fields up by name. The parser rejects a repeated key, so a name has at most one
+// field.
 
 func strictFields(w wire, allowed []string, at string) error {
 	for _, f := range w.fields {
@@ -211,14 +212,6 @@ func getNat(w wire, key, at string) (int, error) {
 		return maxInt, nil
 	}
 	return int(v.n), nil
-}
-
-// natText is the decimal text of a natural number as it was written.
-func natText(w wire) string {
-	if w.overflow {
-		return w.s
-	}
-	return strconv.FormatUint(w.n, 10)
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -469,9 +462,67 @@ func DecodeRecord(line string) (Record, error) {
 	return recordOfWire(w)
 }
 
+// The header holds the definition in its canonical form (definitionWire). It has no seq, so no other
+// line reads as a header, and it reads as no other line.
+
+func headerWire(definition wire) wire { return wireObj(field("definition", definition)) }
+
+func headerOfWire(w wire) (wire, error) {
+	if w.kind != wireObjKind {
+		return wire{}, errors.New("header: expected an object")
+	}
+	if err := strictFields(w, []string{"definition"}, "header"); err != nil {
+		return wire{}, err
+	}
+	definition, ok := w.lookup("definition")
+	if !ok {
+		return wire{}, errors.New("header: missing field definition")
+	}
+	return definition, nil
+}
+
+// EncodeHeader is the header of an execution record of p, its first line, without the newline: the
+// definition in its canonical form, so that equal definitions are recorded alike (§12.1).
+func EncodeHeader(p *Definition) string { return headerWire(definitionWire(p)).render() }
+
+// readHeader reads the header line and has load read its definition.
+func readHeader(line string, load func(definition []byte) (*Definition, error)) (*Definition, error) {
+	if !utf8.ValidString(line) {
+		return nil, errors.New("invalid UTF-8")
+	}
+	w, err := parseWire(line)
+	if err != nil {
+		return nil, err
+	}
+	definition, err := headerOfWire(w)
+	if err != nil {
+		return nil, err
+	}
+	return load([]byte(definition.render()))
+}
+
+// sameDefinition is a load function for Check that accepts only a record of p: the definition of the
+// header must read back to the canonical form of p, and the record replays against p itself.
+func sameDefinition(p *Definition) func(definition []byte) (*Definition, error) {
+	canonical := definitionWire(p).render()
+	return func(definition []byte) (*Definition, error) {
+		q, err := ParseDefinition(definition)
+		if err != nil {
+			return nil, err
+		}
+		if definitionWire(q).render() != canonical {
+			return nil, ErrDefinitionMismatch
+		}
+		return p, nil
+	}
+}
+
 // Checked is what the committed transitions of a record establish.
 type Checked struct {
-	State *State
+	// Definition is the definition load gave for the header, which the record replays against; it is
+	// nil when the record has no complete line.
+	Definition *Definition
+	State      *State
 	// Committed is the number of committed transitions.
 	Committed int
 	// Uncommitted reports an operation or a partial line after the last commit, which recovery
@@ -479,8 +530,8 @@ type Checked struct {
 	Uncommitted bool
 	// Values are the payloads of the committed transitions.
 	Values []Payload
-	// Length is the length in bytes of the committed lines, which recovery keeps: the text after
-	// it is the uncommitted tail. It is not part of the Lean model.
+	// Length is the length in bytes of the header and the committed lines, which recovery keeps: the
+	// text after it is the uncommitted tail. It is not part of the Lean model.
 	Length int
 }
 
@@ -582,16 +633,30 @@ func replayRecord(r *replay, line string) error {
 	return nil
 }
 
-// Check replays the committed transitions of a record. A crash may leave an op without its commit,
-// and a partial last line, which may end inside a UTF-8 sequence; both are reported as uncommitted
-// and ignored. Anything else that is malformed, out of order or rejected by Step is an error.
-func Check(p *Program, text string) (Checked, error) {
+// Check replays the committed transitions of a record. The first line is the header: load reads the
+// definition it holds, given as JSON text, and returns the definition to replay the other lines
+// against, or an error, which Check reports for line 1. Line numbers count the header. A crash may
+// leave an op without its commit, and a partial last line, which may be the header and may end inside
+// a UTF-8 sequence; both are reported as uncommitted and ignored. Anything else that is malformed,
+// out of order or rejected by Step is an error.
+//
+// A reader of a record loads the definition with ParseDefinition and Validate, as the CLI does;
+// Resume accepts only the definition of its engine.
+func Check(text string, load func(definition []byte) (*Definition, error)) (Checked, error) {
 	lines := strings.Split(text, "\n")
 	complete, tail := lines[:len(lines)-1], lines[len(lines)-1]
+	if len(complete) == 0 {
+		return Checked{State: &State{}, Uncommitted: tail != ""}, nil
+	}
+	p, err := readHeader(complete[0], load)
+	if err != nil {
+		return Checked{}, fmt.Errorf("line 1: %w", err)
+	}
 	r := &replay{machine: newMachine(p, &State{}), known: map[string]bool{}, next: 1}
-	offset, length := 0, 0
-	for index, line := range complete {
-		if err := replayLine(r, index, line); err != nil {
+	offset := len(complete[0]) + 1
+	length := offset
+	for index, line := range complete[1:] {
+		if err := replayLine(r, index+1, line); err != nil {
 			return Checked{}, err
 		}
 		offset += len(line) + 1
@@ -599,27 +664,27 @@ func Check(p *Program, text string) (Checked, error) {
 			length = offset
 		}
 	}
-	return Checked{State: r.machine.s, Committed: r.committed, Uncommitted: r.pending != nil || tail != "",
+	return Checked{Definition: p, State: r.machine.s, Committed: r.committed, Uncommitted: r.pending != nil || tail != "",
 		Values: r.values, Length: length}, nil
 }
 
-// Recover is the state a crashed run resumes from: the state after the committed transitions.
-func Recover(p *Program, text string) (*State, error) {
-	c, err := Check(p, text)
+// Recover is the state a crashed run resumes from: the state after the committed transitions. load
+// is as for Check.
+func Recover(text string, load func(definition []byte) (*Definition, error)) (*State, error) {
+	c, err := Check(text, load)
 	if err != nil {
 		return nil, err
 	}
 	return c.State, nil
 }
 
-// Transaction is the records of one accepted transition, starting at seq, under the rule Check
-// applies: each value the transition introduces has its payload in values, the payloads of the op
-// record, or in known, the payloads of the transitions recorded before. Payloads must be UTF-8.
-func Transaction(p *Program, s *State, op Op, values, known []Payload, seq int) (*State, []Record, error) {
-	for _, v := range values {
-		if !utf8.ValidString(v.Value) || !utf8.ValidString(v.Payload) {
-			return nil, nil, fmt.Errorf("payload of %q is not valid UTF-8", v.Value)
-		}
+// Transaction is the records of one accepted transition, starting at seq, under the rules Check
+// applies: the op record holds at most one payload per value, and each value the transition
+// introduces has its payload in values, the payloads of the op record, or in known, the payloads of
+// the transitions recorded before. Payloads must be UTF-8.
+func Transaction(p *Definition, s *State, op Op, values, known []Payload, seq int) (*State, []Record, error) {
+	if err := checkPayloads(values); err != nil {
+		return nil, nil, err
 	}
 	next, err := Step(p, s, op)
 	if err != nil {
@@ -631,6 +696,37 @@ func Transaction(p *Program, s *State, op Op, values, known []Payload, seq int) 
 	return next, []Record{{Seq: seq, Op: op, Values: values}, {Seq: seq + 1, Commit: true}}, nil
 }
 
+// checkPayloads checks the payloads given for an op record: UTF-8, and one per value, since a line
+// may not repeat a key.
+func checkPayloads(values []Payload) error {
+	for _, v := range values {
+		if !utf8.ValidString(v.Value) || !utf8.ValidString(v.Payload) {
+			return fmt.Errorf("payload of %q is not valid UTF-8", v.Value)
+		}
+	}
+	if repeated := duplicates(values); len(repeated) > 0 {
+		return fmt.Errorf("duplicate payloads for %s", leanList(repeated))
+	}
+	return nil
+}
+
+// duplicates are the values that have more than one payload, each once, in the order they first
+// occur (Lean duplicates).
+func duplicates(values []Payload) []string {
+	count := make(map[string]int, len(values))
+	for _, v := range values {
+		count[v.Value]++
+	}
+	var repeated []string
+	for _, v := range values {
+		if count[v.Value] > 1 {
+			repeated = append(repeated, v.Value)
+			count[v.Value] = 0
+		}
+	}
+	return repeated
+}
+
 // Transition is an op with the payloads of the values it introduces.
 type Transition struct {
 	Op     Op
@@ -639,7 +735,7 @@ type Transition struct {
 
 // RecordTransitions records consecutive transactions from sequence number seq, after transitions
 // whose payloads are known.
-func RecordTransitions(p *Program, s *State, transitions []Transition, known []Payload, seq int) (*State, []Record, error) {
+func RecordTransitions(p *Definition, s *State, transitions []Transition, known []Payload, seq int) (*State, []Record, error) {
 	var records []Record
 	for _, t := range transitions {
 		next, rs, err := Transaction(p, s, t.Op, t.Values, known, seq)
@@ -655,8 +751,8 @@ func RecordTransitions(p *Program, s *State, transitions []Transition, known []P
 // Recorder writes the records of the transitions of one execution as they are accepted. Like
 // Step, it never changes a state it has returned.
 type Recorder struct {
-	program *Program
-	state   *State
+	definition *Definition
+	state      *State
 	// seen holds the values the state mentions, and known the values whose payloads earlier
 	// records carry.
 	seen  map[string]struct{}
@@ -665,15 +761,16 @@ type Recorder struct {
 }
 
 // NewRecorder starts recording an execution of p from the state before the start.
-func NewRecorder(p *Program) *Recorder {
-	return &Recorder{program: p, state: &State{}, seen: map[string]struct{}{}, known: map[string]bool{}, seq: 1}
+func NewRecorder(p *Definition) *Recorder {
+	return &Recorder{definition: p, state: &State{}, seen: map[string]struct{}{}, known: map[string]bool{}, seq: 1}
 }
 
 // NewRecorderFrom continues recording after the committed transitions of c, the result of Check
 // on a record of p: the next records follow them, and their payloads count as known. The text
-// after c.Length, if any, must be discarded before appending the new records.
-func NewRecorderFrom(p *Program, c Checked) *Recorder {
-	r := &Recorder{program: p, state: c.State, seen: map[string]struct{}{}, known: map[string]bool{},
+// after c.Length, if any, must be discarded before appending the new records, which follow the
+// header; a record without a complete line needs the header first (EncodeHeader).
+func NewRecorderFrom(p *Definition, c Checked) *Recorder {
+	r := &Recorder{definition: p, state: c.State, seen: map[string]struct{}{}, known: map[string]bool{},
 		seq: 2*c.Committed + 1}
 	for _, v := range c.State.Values() {
 		r.seen[v] = struct{}{}
@@ -687,7 +784,7 @@ func NewRecorderFrom(p *Program, c Checked) *Recorder {
 // step is Step, with the values op introduces.
 func (r *Recorder) step(op Op) (*State, []string, error) {
 	t := *r.state
-	st := &stepper{view: view{s: &t}, p: r.program}
+	st := &stepper{view: view{s: &t}, p: r.definition}
 	if err := st.apply(op); err != nil {
 		return nil, nil, err
 	}
@@ -704,12 +801,11 @@ func (r *Recorder) Needs(op Op) ([]string, error) {
 	return unknown(introduced, nil, r.known), nil
 }
 
-// Record applies op and returns its records; a rejected op records nothing.
+// Record applies op and returns its records; a rejected op records nothing. values holds at most
+// one payload per value.
 func (r *Recorder) Record(op Op, values []Payload) ([]Record, error) {
-	for _, v := range values {
-		if !utf8.ValidString(v.Value) || !utf8.ValidString(v.Payload) {
-			return nil, fmt.Errorf("payload of %q is not valid UTF-8", v.Value)
-		}
+	if err := checkPayloads(values); err != nil {
+		return nil, err
 	}
 	next, introduced, err := r.step(op)
 	if err != nil {
@@ -780,7 +876,7 @@ type ownedRecorder struct {
 
 // newOwnedRecorder continues recording after committed transitions that led to s, with the
 // payloads of values; it takes s over.
-func newOwnedRecorder(p *Program, s *State, values []Payload, committed int) *ownedRecorder {
+func newOwnedRecorder(p *Definition, s *State, values []Payload, committed int) *ownedRecorder {
 	r := &ownedRecorder{machine: newMachine(p, s), known: map[string]bool{}, seq: 2*committed + 1}
 	for _, v := range values {
 		r.known[v.Value] = true

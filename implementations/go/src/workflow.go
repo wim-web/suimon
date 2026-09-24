@@ -51,7 +51,7 @@ func (c Collect) String() string {
 }
 
 // DiscardName is the name of the library transform for a target without input: it accepts any
-// value, never fails, and passes nothing. A program cannot declare a transform with this name.
+// value, never fails, and passes nothing. A definition cannot declare a transform with this name.
 const DiscardName = "discard"
 
 // TransformRef is a declared transform, or discard.
@@ -146,8 +146,8 @@ type Workflow struct {
 	Connections []Connection
 }
 
-// Program is a set of workflows with the type contracts of what they reference.
-type Program struct {
+// Definition is a set of workflows with the type contracts of what they reference.
+type Definition struct {
 	Functions  []FunctionDecl
 	Judges     []JudgeDecl
 	Transforms []TransformDecl
@@ -157,7 +157,7 @@ type Program struct {
 
 // Lookups return the first declaration with the given id, like Lean's List.find?.
 
-func (p *Program) function(id string) (*FunctionDecl, bool) {
+func (p *Definition) function(id string) (*FunctionDecl, bool) {
 	for i := range p.Functions {
 		if p.Functions[i].ID == id {
 			return &p.Functions[i], true
@@ -166,7 +166,7 @@ func (p *Program) function(id string) (*FunctionDecl, bool) {
 	return nil, false
 }
 
-func (p *Program) judge(id string) (*JudgeDecl, bool) {
+func (p *Definition) judge(id string) (*JudgeDecl, bool) {
 	for i := range p.Judges {
 		if p.Judges[i].ID == id {
 			return &p.Judges[i], true
@@ -175,7 +175,7 @@ func (p *Program) judge(id string) (*JudgeDecl, bool) {
 	return nil, false
 }
 
-func (p *Program) transform(id string) (*TransformDecl, bool) {
+func (p *Definition) transform(id string) (*TransformDecl, bool) {
 	for i := range p.Transforms {
 		if p.Transforms[i].ID == id {
 			return &p.Transforms[i], true
@@ -184,7 +184,7 @@ func (p *Program) transform(id string) (*TransformDecl, bool) {
 	return nil, false
 }
 
-func (p *Program) workflow(id string) (*Workflow, bool) {
+func (p *Definition) workflow(id string) (*Workflow, bool) {
 	for i := range p.Workflows {
 		if p.Workflows[i].ID == id {
 			return &p.Workflows[i], true

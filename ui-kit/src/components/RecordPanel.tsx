@@ -1,18 +1,18 @@
 import { useMemo, useState } from 'react';
 import { Check, ListTree, X } from 'lucide-react';
-import type { Program, RuntimeState, Transition } from '../types';
+import type { Definition, RuntimeState, Transition } from '../types';
 import { filterTransitions, recordRelation, relationLabel } from '../lib/records';
 import type { RecordFilter, RecordRelation } from '../lib/records';
 import { pathKey, runLabel, runTree } from '../lib/status';
 
 export interface RecordPanelProps {
   transitions: readonly Transition[];
-  program: Program;
+  definition: Definition;
   /** The text after the last newline of the record (RecordLog.tail); shown as never committed. */
   tail?: string;
   /** Resolves call, task and execution ops to their run and placement. */
   state?: RuntimeState;
-  /** Relations by seq; computed from the program and state when omitted. */
+  /** Relations by seq; computed from the definition and state when omitted. */
   relations?: ReadonlyMap<number, RecordRelation>;
   selectedSeq?: number | null;
   /** A controlled filter; without it the panel keeps its own. */
@@ -22,16 +22,16 @@ export interface RecordPanelProps {
   onClose?: () => void;
 }
 
-export function relationsOf(transitions: readonly Transition[], program: Program, state?: RuntimeState): Map<number, RecordRelation> {
-  return new Map(transitions.map(t => [t.seq, recordRelation(t.op, program, state)]));
+export function relationsOf(transitions: readonly Transition[], definition: Definition, state?: RuntimeState): Map<number, RecordRelation> {
+  return new Map(transitions.map(t => [t.seq, recordRelation(t.op, definition, state)]));
 }
 
 /** Execution records in order, each op marked committed or uncommitted, filterable by run and placement. */
-export function RecordPanel({ transitions, program, tail = '', state, relations: supplied, selectedSeq, filter: controlled, onFilterChange, onSelectRecord, onClose }: RecordPanelProps) {
+export function RecordPanel({ transitions, definition, tail = '', state, relations: supplied, selectedSeq, filter: controlled, onFilterChange, onSelectRecord, onClose }: RecordPanelProps) {
   const [local, setLocal] = useState<RecordFilter>({});
   const filter = controlled ?? local;
   const change = (next: RecordFilter) => { setLocal(next); onFilterChange?.(next); };
-  const relations = useMemo(() => supplied ?? relationsOf(transitions, program, state), [supplied, transitions, program, state]);
+  const relations = useMemo(() => supplied ?? relationsOf(transitions, definition, state), [supplied, transitions, definition, state]);
   const runs = useMemo(() => state ? runTree(state) : [], [state]);
   const labels = useMemo(() => new Map(runs.map(node => [pathKey(node.run.path), runLabel(node)])), [runs]);
   const visible = useMemo(() => filterTransitions(transitions, relations, filter), [transitions, relations, filter]);

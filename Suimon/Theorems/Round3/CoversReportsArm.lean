@@ -11,7 +11,7 @@ the call of a branch leaves the invocation failed without an arm; the covering r
 arm on that invocation either. -/
 
 section Arm
-variable {p : Program}
+variable {p : Definition}
 
 /-- An invocation with a selected arm succeeded. Only `judged` selects an arm, together with the status
     `succeeded`; every other change of an invocation applies to an active one, which has no arm

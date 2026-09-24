@@ -1,4 +1,4 @@
-// Command example is a playground for the suimon Go runtime: a few programs (programs/*.json)
+// Command example is a playground for the suimon Go runtime: a few definitions (definitions/*.json)
 // run with Go functions whose I/O is simulated with sleeps. Without -ui it runs one scenario and
 // prints the spans of user code and the report; with -ui it serves the browser UI and its API.
 package main

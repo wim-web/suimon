@@ -7,10 +7,10 @@ namespace Suimon.Settle
 
 open State
 
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 /-- All runs keep their workflows, in both directions. --/
-def SameWorkflows (p : Program) (s t : State) : Prop := ∀ path, t.workflow? p path = s.workflow? p path
+def SameWorkflows (p : Definition) (s t : State) : Prop := ∀ path, t.workflow? p path = s.workflow? p path
 
 theorem SameWorkflows.of_runs (h : t.runs = s.runs) : SameWorkflows p s t := fun path => by
   simp [State.workflow?, State.run?, h]

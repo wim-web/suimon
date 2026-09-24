@@ -12,7 +12,7 @@ import (
 )
 
 // The deterministic parts of each scenario: status, failures, outputs, settled outcomes, and the
-// orderings of user code that follow from the program (not from how fast the machine is).
+// orderings of user code that follow from the definition (not from how fast the machine is).
 
 const testUnit = 10 * time.Millisecond
 

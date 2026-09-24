@@ -12,7 +12,7 @@ What liveness needs about calls, in every reachable state: a fetching call is a 
 of every call exists, and a judge that can name an arm belongs to a branch invocation. -/
 
 namespace Liveness
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 /-- Every fetching call of `t` is a call of `s` or a Stream call. -/
 def FetchKept (s t : State) : Prop :=
@@ -197,7 +197,7 @@ theorem judge_call (h : Reachable p s) {c : Call} (hc : c ∈ s.calls) {j a : St
 end Liveness
 
 section Termination
-variable {p : Program} {env : Env} {s : State}
+variable {p : Definition} {env : Env} {s : State}
 
 /-- The outside world answers (§15.3): a waiting call gets the report its script prescribes, and the
     step accepts it. A fetching call gets its next element or its ending, a running Single function or
@@ -330,7 +330,7 @@ theorem waiting_answers (valid : p.validate = .ok ()) (fits : env.Fits p) {tr : 
 /-- The caller's input starts the workflow. Proven. -/
 theorem start_accepted (valid : p.validate = .ok ()) (hin : env.InputFits p) :
     ∃ t, step p {} (.start env.input) = .ok t ∧ t ≠ {} := by
-  obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (Program.validate_ok valid).main
+  obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (Definition.validate_ok valid).main
   have hmatch : w.input.isSome = env.input.isSome := by
     have := hin
     simp only [Env.InputFits, hw, Option.bind_some] at this

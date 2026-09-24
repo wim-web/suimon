@@ -26,24 +26,26 @@ func repoRoot(t testing.TB) string {
 	}
 }
 
-// programNames are the programs of the Lean tests (Test/programs); extraPrograms (testdata) cover
-// sub-workflow calls, Merge of skipped inputs, Stream concurrency output and tasks without input.
+// definitionNames are the definitions of the Lean tests (Test/definitions); extraDefinitions
+// (testdata) cover sub-workflow calls, Merge of skipped inputs, Stream concurrency output and tasks
+// without input.
 var (
-	programNames  = []string{"users", "branch", "merge"}
-	extraPrograms = []string{"calls", "fanout"}
+	definitionNames  = []string{"users", "branch", "merge"}
+	extraDefinitions = []string{"calls", "fanout"}
 )
 
-// load decodes Test/programs/<name>.json, or testdata/<name>.json; every call returns a fresh program.
-func load(t testing.TB, name string) *Program {
+// load decodes Test/definitions/<name>.json, or testdata/<name>.json; every call returns a fresh
+// definition.
+func load(t testing.TB, name string) *Definition {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Test", "programs", name+".json"))
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Test", "definitions", name+".json"))
 	if os.IsNotExist(err) {
 		data, err = os.ReadFile(filepath.Join("testdata", name+".json"))
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := ParseProgram(data)
+	p, err := ParseDefinition(data)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -52,7 +54,7 @@ func load(t testing.TB, name string) *Program {
 
 func hasFragment(text, fragment string) bool { return strings.Contains(text, fragment) }
 
-func mapWorkflow(p *Program, id string, f func(*Workflow)) *Program {
+func mapWorkflow(p *Definition, id string, f func(*Workflow)) *Definition {
 	for i := range p.Workflows {
 		if p.Workflows[i].ID == id {
 			f(&p.Workflows[i])
@@ -137,7 +139,7 @@ func (s *State) invocationsOf(path Path, name string) []Invocation {
 	return out
 }
 
-func (s *State) concurrencyOf(p *Program, e *Execution) (*Concurrency, error) {
+func (s *State) concurrencyOf(p *Definition, e *Execution) (*Concurrency, error) {
 	return s.view().concurrencyOf(p, e)
 }
 

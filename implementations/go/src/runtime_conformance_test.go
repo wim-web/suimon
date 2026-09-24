@@ -57,21 +57,16 @@ func writeTemp(t *testing.T, dir, name string, data []byte) string {
 	return path
 }
 
-// leanAgrees has Lean check a journal of p: Lean's summary is the Go checker's, and, when the
-// journal replays, Lean's state is state, the JSON of the Go state.
-func leanAgrees(t *testing.T, cli, dir string, p *Program, journal string, state *State) {
+// leanAgrees has Lean check a journal of p, against the definition of its header: Lean's summary is
+// the Go checker's, and, when the journal replays, Lean's state is state, the JSON of the Go state.
+func leanAgrees(t *testing.T, cli, dir string, p *Definition, journal string, state *State) {
 	t.Helper()
-	program, err := p.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	programPath := writeTemp(t, dir, "program.json", program)
 	journalPath := writeTemp(t, dir, "journal.jsonl", []byte(journal))
-	c, err := Check(p, journal)
+	c, err := Check(journal, sameDefinition(p))
 	if err != nil {
 		t.Fatalf("Go check: %v", err)
 	}
-	code, stdout, stderr := leanRun(t, cli, "check", journalPath, "--program", programPath)
+	code, stdout, stderr := leanRun(t, cli, "check", journalPath)
 	want := fmt.Sprintf(`{"committed":%d,"status":"%s","uncommitted":%t}`+"\n", c.Committed, c.State.Status, c.Uncommitted)
 	if code != 0 || stdout != want {
 		t.Fatalf("Lean check: exit %d, %q%s, want %q\n%s", code, stdout, stderr, want, journal)
@@ -79,7 +74,7 @@ func leanAgrees(t *testing.T, cli, dir string, p *Program, journal string, state
 	if state == nil {
 		return
 	}
-	code, stdout, stderr = leanRun(t, cli, "check", journalPath, "--program", programPath, "--state")
+	code, stdout, stderr = leanRun(t, cli, "check", journalPath, "--state")
 	goState, err := state.MarshalJSON()
 	if err != nil {
 		t.Fatal(err)

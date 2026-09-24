@@ -3,7 +3,7 @@ import Suimon.Theorems.StaticLemmas
 namespace Suimon
 
 /-- Each connection's transform fits its source result and its target input (§4.2, §14). --/
-def Program.TypedConnections (p : Program) : Prop :=
+def Definition.TypedConnections (p : Definition) : Prop :=
   ∀ w ∈ p.workflows, ∀ c ∈ w.connections, ∃ src dst,
     w.placement? c.source = some src ∧ w.placement? c.target = some dst ∧
     match c.transform with
@@ -11,60 +11,60 @@ def Program.TypedConnections (p : Program) : Prop :=
         p.inputType dst.control = some (some t.output)
     | .discard => (p.resultType src.control).isSome ∧ p.inputType dst.control = some none
 
-theorem typedConnections_of_validate {p : Program} (h : p.validate = .ok ()) : p.TypedConnections :=
-  fun w hw c hc => Program.validateConnection_ok (((Program.validate_ok h).workflows w hw).connections c hc)
+theorem typedConnections_of_validate {p : Definition} (h : p.validate = .ok ()) : p.TypedConnections :=
+  fun w hw c hc => Definition.validateConnection_ok (((Definition.validate_ok h).workflows w hw).connections c hc)
 
 /-- Every task in the output maps its results to the output element type, and at least one task is
     in the output (§8.1, §8.3). --/
-theorem concurrency_output_typed {p : Program} (h : p.validate = .ok ()) :
+theorem concurrency_output_typed {p : Definition} (h : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ c, pl.control = .concurrency c →
       c.tasks.any (·.output.isSome) ∧ ∀ task ∈ c.tasks, ∀ id, task.output = some id →
         ∃ t, p.transform? id = some t ∧ t.output = c.element ∧ p.bodyElement p.depth task.body = some t.input := by
   intro w hw pl hpl c hc
-  obtain ⟨-, -, hany, htasks⟩ := (((Program.validate_ok h).workflows w hw).placements pl hpl).concurrency c hc
+  obtain ⟨-, -, hany, htasks⟩ := (((Definition.validate_ok h).workflows w hw).placements pl hpl).concurrency c hc
   refine ⟨hany, fun task ht id hid => ?_⟩
   obtain ⟨at_, hv⟩ := htasks task ht
-  exact Program.validateTask_output hv hid
+  exact Definition.validateTask_output hv hid
 
 /-- Every placement has a derived kind; endpoints are Single; Merge takes only Single inputs;
     waitStream takes a Stream (§5.2, §9, §13.2). --/
-theorem kinds_of_validate {p : Program} (h : p.validate = .ok ()) :
+theorem kinds_of_validate {p : Definition} (h : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∀ pl ∈ w.placements,
       (w.outputKind? p pl.name).isSome ∧
       (w.isEndpoint pl.name = true → w.outputKind? p pl.name = some .single) ∧
       (∀ e, pl.control = .merge e → ∀ c ∈ w.incoming pl.name, w.outputKind? p c.source = some .single) ∧
       (∀ e, pl.control = .waitStream e → w.inputKind? p pl.name = some (some .stream)) := by
   intro w hw pl hpl
-  have hwc := (Program.validate_ok h).workflows w hw
+  have hwc := (Definition.validate_ok h).workflows w hw
   have hplc := hwc.placements pl hpl
   exact ⟨hplc.kind, hwc.endpoints pl hpl, hplc.merge, hplc.waitStream⟩
 
 /-- The derived kind of a placement is the §5.2 rule applied to the derived kind of its input. --/
-theorem kind_rule {p : Program} (h : p.validate = .ok ()) :
+theorem kind_rule {p : Definition} (h : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ input, w.inputKind? p pl.name = some input →
       w.outputKind? p pl.name = p.outputKind pl.control input := by
   intro w hw pl hpl input hin
-  have hwc := (Program.validate_ok h).workflows w hw
+  have hwc := (Definition.validate_ok h).workflows w hw
   rw [Workflow.outputKind?_eq_bind hwc.names hwc.acyclic hpl, hin]
   rfl
 
 /-- A normal node takes at most one input, and the entry counts as one (§3.2). --/
-theorem inputs_of_validate {p : Program} (h : p.validate = .ok ()) :
+theorem inputs_of_validate {p : Definition} (h : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, (∀ e, pl.control ≠ .merge e) →
       (w.incoming pl.name).length + (if w.isEntry pl.name then 1 else 0) ≤ 1 :=
-  fun w hw pl hpl => (((Program.validate_ok h).workflows w hw).placements pl hpl).inputs
+  fun w hw pl hpl => (((Definition.validate_ok h).workflows w hw).placements pl hpl).inputs
 
 /-- Task names are distinct within a concurrency, and its limit is positive (§8.2). --/
-theorem concurrency_settings {p : Program} (h : p.validate = .ok ()) :
+theorem concurrency_settings {p : Definition} (h : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ c, pl.control = .concurrency c →
       (c.tasks.map (·.name)).Nodup ∧ 0 < c.limit := by
   intro w hw pl hpl c hc
-  obtain ⟨hlimit, hnodup, -⟩ := (((Program.validate_ok h).workflows w hw).placements pl hpl).concurrency c hc
+  obtain ⟨hlimit, hnodup, -⟩ := (((Definition.validate_ok h).workflows w hw).placements pl hpl).concurrency c hc
   exact ⟨hnodup, hlimit⟩
 
 /-- The external input goes to the root run as one value, and only if the main workflow takes one;
     nothing else happens at the start (§3.1). --/
-theorem start_boundary {p : Program} {s : State} {input : Option Value}
+theorem start_boundary {p : Definition} {s : State} {input : Option Value}
     (h : step p {} (.start input) = .ok s) :
     s = { started := true, runs := [{ path := [], workflow := p.main, input }] } ∧
     ((p.workflow? p.main).bind (·.input)).isSome = input.isSome := by

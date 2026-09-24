@@ -10,7 +10,7 @@ import (
 
 // The JSON values an execution record is made of (Lean Wire) and their text form (Lean WireText):
 // compact JSON with one rendering, and a parser that accepts standard JSON formatting. Objects
-// keep their fields in order, and numbers are natural numbers.
+// keep their fields in order and repeat no key, and numbers are natural numbers.
 
 type wireKind int
 
@@ -63,7 +63,8 @@ func (w wire) lookup(key string) (wire, bool) {
 
 // render is the compact JSON text of w: no whitespace, fields in order, and strings escaped with
 // \" and \\ and with \u00xx (lowercase hexadecimal) for the characters below U+0020; every other
-// character is written as it is. Invalid UTF-8 is written as U+FFFD.
+// character is written as it is. Invalid UTF-8 is written as U+FFFD. A natural number read beyond
+// 2^64-1 is written with the digits it was read with.
 func (w wire) render() string {
 	var b strings.Builder
 	w.renderTo(&b)
@@ -77,7 +78,7 @@ func (w wire) renderTo(b *strings.Builder) {
 	case wireBoolKind:
 		b.WriteString(strconv.FormatBool(w.b))
 	case wireNatKind:
-		b.WriteString(strconv.FormatUint(w.n, 10))
+		b.WriteString(natText(w))
 	case wireStrKind:
 		renderString(b, w.s)
 	case wireArrKind:
@@ -101,6 +102,14 @@ func (w wire) renderTo(b *strings.Builder) {
 		}
 		b.WriteByte('}')
 	}
+}
+
+// natText is the decimal text of a natural number as it was written.
+func natText(w wire) string {
+	if w.overflow {
+		return w.s
+	}
+	return strconv.FormatUint(w.n, 10)
 }
 
 const hexDigits = "0123456789abcdef"
@@ -200,7 +209,8 @@ type wireParser struct{ cs []rune }
 func (p *wireParser) fail(msg string, at int) error { return &wireError{msg: msg, offset: at} }
 
 // parseWire parses JSON text into a wire value: whitespace between tokens and the standard escapes
-// are accepted, numbers must be natural numbers, and nothing may follow the value.
+// are accepted, numbers must be natural numbers, no object may repeat a key, and nothing may follow
+// the value.
 func parseWire(s string) (wire, error) {
 	p := &wireParser{cs: []rune(s)}
 	w, rest, err := p.value(len(p.cs)+1, 0)
@@ -309,7 +319,10 @@ func (p *wireParser) items(fuel, i int, acc []wire) (wire, int, error) {
 	}
 }
 
+// fields reads object fields from the first key on, through the closing brace. A key the object
+// already has, compared after its escapes are decoded, is rejected right after its closing quote.
 func (p *wireParser) fields(fuel, i int, acc []wireField) (wire, int, error) {
+	keys := keySet{}
 	for {
 		if fuel == 0 {
 			return wire{}, 0, p.fail("input too deeply nested", i)
@@ -324,6 +337,9 @@ func (p *wireParser) fields(fuel, i int, acc []wireField) (wire, int, error) {
 		key, rest, err := p.stringBody(k + 1)
 		if err != nil {
 			return wire{}, 0, err
+		}
+		if !keys.add(key) {
+			return wire{}, 0, p.fail("duplicate key "+quoteString(key), rest)
 		}
 		m := p.skipWs(rest)
 		if m == len(p.cs) {
@@ -350,6 +366,35 @@ func (p *wireParser) fields(fuel, i int, acc []wireField) (wire, int, error) {
 			return wire{}, 0, p.fail("expected ',' or '}'", q)
 		}
 	}
+}
+
+// keySet holds the keys of an object read so far: a list while the object is small, and also a
+// map once it is not, so that reading an object takes linear time.
+type keySet struct {
+	list  []string
+	index map[string]struct{}
+}
+
+// add adds key and reports whether it is new.
+func (s *keySet) add(key string) bool {
+	if s.index != nil {
+		if _, found := s.index[key]; found {
+			return false
+		}
+		s.index[key] = struct{}{}
+		return true
+	}
+	if slices.Contains(s.list, key) {
+		return false
+	}
+	s.list = append(s.list, key)
+	if len(s.list) > 16 {
+		s.index = make(map[string]struct{}, 2*len(s.list))
+		for _, k := range s.list {
+			s.index[k] = struct{}{}
+		}
+	}
+	return true
 }
 
 func (p *wireParser) literal(word string, value wire, i int) (wire, int, error) {
@@ -450,23 +495,35 @@ func (p *wireParser) stringBody(i int) (string, int, error) {
 }
 
 // quoteChar is Lean's repr of a character, used in parse errors.
-func quoteChar(c rune) string {
-	var q string
+func quoteChar(c rune) string { return "'" + quoteCore(c, false) + "'" }
+
+// quoteString is Lean's repr of a string (String.quote), used for keys in parse errors.
+func quoteString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, c := range s {
+		b.WriteString(quoteCore(c, true))
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// quoteCore is Lean's Char.quoteCore: a character as a Lean literal writes it; ' is escaped only
+// outside a string.
+func quoteCore(c rune, inString bool) string {
 	switch {
 	case c == '\n':
-		q = `\n`
+		return `\n`
 	case c == '\t':
-		q = `\t`
+		return `\t`
 	case c == '\\':
-		q = `\\`
+		return `\\`
 	case c == '"':
-		q = `\"`
-	case c == '\'':
-		q = `\'`
+		return `\"`
+	case !inString && c == '\'':
+		return `\'`
 	case c <= 31 || c == 0x7f:
-		q = `\x` + string(hexDigits[c/16]) + string(hexDigits[c%16])
-	default:
-		q = string(c)
+		return `\x` + string(hexDigits[c/16]) + string(hexDigits[c%16])
 	}
-	return "'" + q + "'"
+	return string(c)
 }

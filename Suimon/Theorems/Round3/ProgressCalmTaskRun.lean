@@ -8,12 +8,12 @@ namespace Suimon.Round3.CalmAux
 open State Settle
 
 /-- A run of a task runs the workflow its task's body names. -/
-def TaskRunWf (p : Program) (s : State) : Prop :=
+def TaskRunWf (p : Definition) (s : State) : Prop :=
   ∀ r ∈ s.runs, ∀ name, r.task = some name → ∃ e ∈ s.executions, r.owner = some e.id ∧
     ∃ spec out, s.taskSpec p e name = .ok spec ∧ spec.body = .workflow r.workflow out
 
 namespace TaskRunWf
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem empty : TaskRunWf p {} := fun _ hr => nomatch hr
 
@@ -199,7 +199,7 @@ theorem step (h : TaskRunWf p s) (wk : s.WellKeyed) {op : Op} (hs : Suimon.step 
 
 end TaskRunWf
 
-theorem Reachable.taskRunWf {p : Program} {s : State} (h : Reachable p s) : TaskRunWf p s := by
+theorem Reachable.taskRunWf {p : Definition} {s : State} (h : Reachable p s) : TaskRunWf p s := by
   induction h with
   | empty => exact TaskRunWf.empty
   | step op hr hs ih => exact ih.step hr.wellKeyed hs

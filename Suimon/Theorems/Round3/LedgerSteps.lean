@@ -10,13 +10,13 @@ namespace Suimon.Round3.LedgerCore
 open State
 
 /-- The ledger of `t` is the ledger of `s` plus the entries `fs`, up to order. -/
-def Grew (p : Program) (s t : State) (fs : List Failure) : Prop := (ledgerL p t).Perm (ledgerL p s ++ fs)
+def Grew (p : Definition) (s t : State) (fs : List Failure) : Prop := (ledgerL p t).Perm (ledgerL p s ++ fs)
 
 /-- A step records the failures `fs`, and its ledger grows by exactly those. -/
-def Books (p : Program) (s t : State) : Prop := ∃ fs, t.failures = s.failures ++ fs ∧ Grew p s t fs
+def Books (p : Definition) (s t : State) : Prop := ∃ fs, t.failures = s.failures ++ fs ∧ Grew p s t fs
 
 section Parts
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 theorem Grew.trans {fs gs : List Failure} (h₁ : Grew p s t fs) (h₂ : Grew p t u gs) : Grew p s u (fs ++ gs) := by
   unfold Grew at *
@@ -144,7 +144,7 @@ end Parts
 /-! ### Consequences of the invariants -/
 
 section Facts
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 theorem LInv.ownerView_some (hL : LInv p s) {c : Call} (hc : c ∈ s.calls) : ∃ v, ownerView s c = some v := by
   cases ht : c.task with
@@ -266,7 +266,7 @@ end Facts
 /-! ### Updates of one task -/
 
 section TaskUpdates
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 /-- Replacing the task `ts` of `e` by `ts'` keeps the task-input part when the replaced task keeps its
     entry and no other task's body changes. -/
@@ -352,7 +352,7 @@ def OwnerStep (s0 u : State) (c : Call) : Prop :=
     e.tasks.find? (·.name == name) = some ts ∧ u = s0.setTask e { ts with status := st })
 
 section Owners
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 theorem ownerStep_settleOwner {s0 u : State} {c : Call} {inv : InvocationStatus} {task : TaskStatus}
     (h : s0.settleOwner c inv task = .ok u) : OwnerStep s0 u c := by
@@ -475,7 +475,7 @@ end Owners
 /-! ### Steps -/
 
 section Ops
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem viewEntry_cancelled (task : Option String) (v : Option (Path × String × Bool)) :
     viewEntry .cancelled task v = viewEntry .cancelling task v := by
@@ -1069,8 +1069,8 @@ theorem LInv.step_books (hL : LInv p s) {op : Op} (hs : step p s op = .ok t) : B
 
 end Ops
 
-/-- Every failure has exactly one source record, in every reachable state of a valid program. -/
-theorem Reachable.failures_ledgerL {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
+/-- Every failure has exactly one source record, in every reachable state of a valid definition. -/
+theorem Reachable.failures_ledgerL {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
     s.failures.Perm (ledgerL p s) := by
   induction h with
   | empty => exact List.Perm.of_eq rfl

@@ -14,10 +14,10 @@ open State
 
 namespace CoversCloseAux
 
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- Where a stored result comes from, read from its identity. -/
-def ResultOrigin (p : Program) (s : State) (r : Result) : Prop :=
+def ResultOrigin (p : Definition) (s : State) (r : Result) : Prop :=
   (∃ c ∈ s.calls, c.task = none ∧ ∃ k, r.id = Key.callResult c.id k) ∨
   (r.id = Key.aggregate r.run r.placement ∧
     (∃ w pl, s.workflow? p r.run = some w ∧ w.placement? r.placement = some pl ∧

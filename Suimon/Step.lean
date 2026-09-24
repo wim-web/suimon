@@ -73,15 +73,15 @@ def fail (s : State) (f : Failure) (policy : Policy) : State :=
   | .stop => s.stop
   | .«continue» => s
 
-def placementOf (p : Program) (s : State) (path : Path) (name : String) : Result' Placement := do
+def placementOf (p : Definition) (s : State) (path : Path) (name : String) : Result' Placement := do
   let w ← need (s.workflow? p path) "UNKNOWN_RUN"
   need (w.placement? name) "UNKNOWN_PLACEMENT"
 
-def concurrencyOf (p : Program) (s : State) (e : Execution) : Result' Concurrency := do
+def concurrencyOf (p : Definition) (s : State) (e : Execution) : Result' Concurrency := do
   let .concurrency c := (← s.placementOf p e.run e.placement).control | throw "NOT_CONCURRENCY"
   pure c
 
-def taskSpec (p : Program) (s : State) (e : Execution) (name : String) : Result' TaskSpec := do
+def taskSpec (p : Definition) (s : State) (e : Execution) (name : String) : Result' TaskSpec := do
   need ((← s.concurrencyOf p e).tasks.find? (·.name == name)) "UNKNOWN_TASK"
 
 def task (e : Execution) (name : String) : Result' TaskState :=
@@ -219,7 +219,7 @@ def settleOutcome (s : State) (path : Path) (pl : Placement) (shape : Workflow.S
   | _, _ => none
 
 /-- The endpoint whose result a sub-workflow call returns. --/
-def designatedOutput (p : Program) (s : State) (r : Run) : Result' String := do
+def designatedOutput (p : Definition) (s : State) (r : Run) : Result' String := do
   let owner ← need r.owner "ROOT_RUN"
   let body ← match r.task with
     | none =>
@@ -243,14 +243,14 @@ def getCall (s : State) (id : String) : Result' Call := need (s.call? id) "UNKNO
 
 def getExecution (s : State) (id : String) : Result' Execution := need (s.execution? id) "UNKNOWN_EXECUTION"
 
-def start (p : Program) (s : State) (input : Option Value) : Result' State := do
+def start (p : Definition) (s : State) (input : Option Value) : Result' State := do
   require (!s.started && s.status == .running) "ALREADY_STARTED"
   let w ← need (p.workflow? p.main) "UNKNOWN_MAIN"
   require (w.input.isSome == input.isSome) "INPUT_MISMATCH"
   pure { s with started := true, runs := [{ path := [], workflow := p.main, input }] }
 
 /-- The input one invocation takes, if its trigger is available (§3.1, §5.3). --/
-def invocationInput (p : Program) (s : State) (r : Run) (w : Workflow) (name : String)
+def invocationInput (p : Definition) (s : State) (r : Run) (w : Workflow) (name : String)
     (trigger : Option ResultId) : Result' (Option Value) := do
   match (← need (w.shape? p name) "INVALID_SHAPE"), trigger with
   | .none, none => pure none
@@ -264,7 +264,7 @@ def invocationInput (p : Program) (s : State) (r : Run) (w : Workflow) (name : S
     | _ => throw "INPUT_NOT_READY"
   | _, _ => throw "INVALID_TRIGGER"
 
-def invoke (p : Program) (s : State) (path : Path) (name : String) (trigger : Option ResultId) : Result' State := do
+def invoke (p : Definition) (s : State) (path : Path) (name : String) (trigger : Option ResultId) : Result' State := do
   running s
   let r ← need (s.run? path) "UNKNOWN_RUN"
   require (!r.complete) "RUN_COMPLETE"
@@ -309,7 +309,7 @@ def returned (s : State) (id : String) (value : Value) : Result' State := do
   let s ← s.accept c 0 value
   (s.setCall { c with status := .returned }).settleOwner c .succeeded .succeeded
 
-def judged (p : Program) (s : State) (id : String) (arm : String) : Result' State := do
+def judged (p : Definition) (s : State) (id : String) (arm : String) : Result' State := do
   running s
   let c ← getCall s id
   require (c.status == .running && c.target matches .judge _ && c.task.isNone) "NOT_JUDGING"
@@ -360,7 +360,7 @@ def terminated (s : State) (id : String) : Result' State := do
   (s.setCall { c with status := .cancelled }).cancelOwner c
 
 /-- The connection and result of one delivery, checked for eligibility. --/
-def deliveryTarget (p : Program) (s : State) (path : Path) (index : Nat) (source : ResultId) :
+def deliveryTarget (p : Definition) (s : State) (path : Path) (index : Nat) (source : ResultId) :
     Result' (Workflow × Connection) := do
   let w ← need (s.workflow? p path) "UNKNOWN_RUN"
   let c ← need w.connections[index]? "UNKNOWN_CONNECTION"
@@ -369,7 +369,7 @@ def deliveryTarget (p : Program) (s : State) (path : Path) (index : Nat) (source
   require (s.delivery? path index source).isNone "DUPLICATE_DELIVERY"
   pure (w, c)
 
-def deliver (p : Program) (s : State) (path : Path) (index : Nat) (source : ResultId) (value : Option Value) :
+def deliver (p : Definition) (s : State) (path : Path) (index : Nat) (source : ResultId) (value : Option Value) :
     Result' State := do
   running s
   let (_, c) ← deliveryTarget p s path index source
@@ -379,7 +379,7 @@ def deliver (p : Program) (s : State) (path : Path) (index : Nat) (source : Resu
     | _, _ => throw "TRANSFORM_MISMATCH"
   pure { s with deliveries := s.deliveries ++ [{ run := path, connection := index, source, outcome : Delivery }] }
 
-def transformFailed (p : Program) (s : State) (path : Path) (index : Nat) (source : ResultId) : Result' State := do
+def transformFailed (p : Definition) (s : State) (path : Path) (index : Nat) (source : ResultId) : Result' State := do
   running s
   let (w, c) ← deliveryTarget p s path index source
   require (c.transform matches .declared _) "DISCARD_CANNOT_FAIL"
@@ -387,7 +387,7 @@ def transformFailed (p : Program) (s : State) (path : Path) (index : Nat) (sourc
   let s := { s with deliveries := s.deliveries ++ [{ run := path, connection := index, source, outcome := .failed : Delivery }] }
   pure (s.fail { run := path, placement := c.target, cause := .transform } target.policy)
 
-def taskInput (p : Program) (s : State) (eid name : String) (value : Option Value) : Result' State := do
+def taskInput (p : Definition) (s : State) (eid name : String) (value : Option Value) : Result' State := do
   running s
   let e ← getExecution s eid
   let t ← State.task e name
@@ -396,7 +396,7 @@ def taskInput (p : Program) (s : State) (eid name : String) (value : Option Valu
   | some (.declared _), some _ | some .discard, none => pure (s.setTask e { t with status := .ready, input := value })
   | _, _ => throw "TRANSFORM_MISMATCH"
 
-def taskInputFailed (p : Program) (s : State) (eid name : String) : Result' State := do
+def taskInputFailed (p : Definition) (s : State) (eid name : String) : Result' State := do
   running s
   let e ← getExecution s eid
   let t ← State.task e name
@@ -406,7 +406,7 @@ def taskInputFailed (p : Program) (s : State) (eid name : String) : Result' Stat
   let s := s.setTask e { t with status := .failed }
   pure (s.fail { run := e.run, placement := e.placement, task := some name, cause := .transform } spec.policy)
 
-def beginTask (p : Program) (s : State) (eid name : String) : Result' State := do
+def beginTask (p : Definition) (s : State) (eid name : String) : Result' State := do
   running s
   let e ← getExecution s eid
   require (!e.complete) "EXECUTION_COMPLETE"
@@ -433,7 +433,7 @@ def beginTask (p : Program) (s : State) (eid name : String) : Result' State := d
 def taskResult (s : State) (eid name : String) (index : Nat) : Result' TaskResult :=
   need (s.taskResults.find? fun x => x.execution == eid && x.task == name && x.index == index) "UNKNOWN_RESULT"
 
-def taskOutput (p : Program) (s : State) (eid name : String) (index : Nat) (value : Value) : Result' State := do
+def taskOutput (p : Definition) (s : State) (eid name : String) (index : Nat) (value : Value) : Result' State := do
   running s
   let e ← getExecution s eid
   let c ← s.concurrencyOf p e
@@ -449,7 +449,7 @@ def taskOutput (p : Program) (s : State) (eid name : String) (index : Nat) (valu
     pure { s with results := s.results ++ [result] }
   | .list => pure s
 
-def taskOutputFailed (p : Program) (s : State) (eid name : String) (index : Nat) : Result' State := do
+def taskOutputFailed (p : Definition) (s : State) (eid name : String) (index : Nat) : Result' State := do
   running s
   let e ← getExecution s eid
   let spec ← s.taskSpec p e name
@@ -459,7 +459,7 @@ def taskOutputFailed (p : Program) (s : State) (eid name : String) (index : Nat)
   let s := s.setTaskResult { r with output := .failed }
   pure (s.fail { run := e.run, placement := e.placement, task := some name, cause := .transform } spec.policy)
 
-def settle (p : Program) (s : State) (path : Path) (name : String) : Result' State := do
+def settle (p : Definition) (s : State) (path : Path) (name : String) : Result' State := do
   running s
   let r ← need (s.run? path) "UNKNOWN_RUN"
   require (!r.complete) "RUN_COMPLETE"
@@ -476,7 +476,7 @@ def settle (p : Program) (s : State) (path : Path) (name : String) : Result' Sta
     pure { s with results := s.results ++ [r] }
   | none => pure s
 
-def closeExecution (p : Program) (s : State) (eid : String) : Result' State := do
+def closeExecution (p : Definition) (s : State) (eid : String) : Result' State := do
   running s
   let e ← getExecution s eid
   require (!e.complete) "EXECUTION_COMPLETE"
@@ -498,7 +498,7 @@ def closeExecution (p : Program) (s : State) (eid : String) : Result' State := d
       pure { s.setInvocation { i with status := .succeeded } with results := s.results ++ [result] }
     | .stream => pure (s.setInvocation { i with status := .succeeded })
 
-def closeRun (p : Program) (s : State) (path : Path) : Result' State := do
+def closeRun (p : Definition) (s : State) (path : Path) : Result' State := do
   running s
   let r ← need (s.run? path) "UNKNOWN_RUN"
   require (!r.complete && !path.isEmpty) "NOT_CLOSABLE"
@@ -543,7 +543,7 @@ def cancel (s : State) : Result' State := do
   | _ => throw "TERMINAL"
 
 /-- The final status (§11.3, §13.3). --/
-def conclude (p : Program) (s : State) : Result' State := do
+def conclude (p : Definition) (s : State) : Result' State := do
   require s.started "NOT_STARTED"
   match s.status with
   | .running =>
@@ -564,7 +564,7 @@ def conclude (p : Program) (s : State) : Result' State := do
 end Step
 
 /-- Operational rules. Each rule checks its own preconditions; a rejected operation changes nothing. --/
-def step (p : Program) (s : State) : Op → Result' State
+def step (p : Definition) (s : State) : Op → Result' State
   | .start input => Step.start p s input
   | .invoke path name trigger => Step.invoke p s path name trigger
   | .fetch id => Step.fetch s id

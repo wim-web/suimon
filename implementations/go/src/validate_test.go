@@ -7,14 +7,14 @@ import (
 
 // Ported from Test/Validate.lean.
 
-func accepted(t *testing.T, label string, p *Program) {
+func accepted(t *testing.T, label string, p *Definition) {
 	t.Helper()
 	if err := p.Validate(); err != nil {
-		t.Errorf("%s: expected a valid program, got: %v", label, err)
+		t.Errorf("%s: expected a valid definition, got: %v", label, err)
 	}
 }
 
-func rejected(t *testing.T, label, fragment string, p *Program) {
+func rejected(t *testing.T, label, fragment string, p *Definition) {
 	t.Helper()
 	err := p.Validate()
 	if err == nil {
@@ -26,7 +26,7 @@ func rejected(t *testing.T, label, fragment string, p *Program) {
 
 func decodeRejected(t *testing.T, label, fragment, text string) {
 	t.Helper()
-	_, err := ParseProgram([]byte(text))
+	_, err := ParseDefinition([]byte(text))
 	if err == nil {
 		t.Errorf("%s: decoded, expected an error with %q", label, fragment)
 	} else if !hasFragment(err.Error(), fragment) {
@@ -40,7 +40,7 @@ type placementKind struct {
 }
 
 // kinds lists the derived kind of each placement, "none" where it cannot be derived.
-func kinds(p *Program, id string) []placementKind {
+func kinds(p *Definition, id string) []placementKind {
 	w, ok := p.workflow(id)
 	if !ok {
 		return nil
@@ -56,8 +56,8 @@ func kinds(p *Program, id string) []placementKind {
 	return out
 }
 
-func cycleProgram() *Program {
-	return &Program{
+func cycleDefinition() *Definition {
+	return &Definition{
 		Main:       "loop",
 		Functions:  []FunctionDecl{{ID: "step", Input: ptr(Named("A")), Output: Contract{KindSingle, Named("A")}}},
 		Transforms: []TransformDecl{{ID: "a", Input: Named("A"), Output: Named("A")}},
@@ -76,8 +76,8 @@ func cycleProgram() *Program {
 }
 
 // standalone is a concurrency without input, whose only task takes no input either.
-func standalone(input *TransformRef) *Program {
-	return &Program{
+func standalone(input *TransformRef) *Definition {
+	return &Definition{
 		Main:       "w",
 		Functions:  []FunctionDecl{{ID: "loadConfig", Output: Contract{KindSingle, Named("Config")}}},
 		Transforms: []TransformDecl{{ID: "config", Input: Named("Config"), Output: Named("Config")}},
@@ -98,20 +98,20 @@ func standalone(input *TransformRef) *Program {
 	}
 }
 
-func TestValidatePrograms(t *testing.T) {
-	for _, name := range append(programNames, extraPrograms...) {
+func TestValidateDefinitions(t *testing.T) {
+	for _, name := range append(definitionNames, extraDefinitions...) {
 		p := load(t, name)
 		accepted(t, name, p)
 		data, err := p.MarshalJSON()
 		if err != nil {
 			t.Fatal(err)
 		}
-		q, err := ParseProgram(data)
+		q, err := ParseDefinition(data)
 		if err != nil {
 			t.Fatalf("%s: JSON round trip failed: %v", name, err)
 		}
 		if !reflect.DeepEqual(p, q) {
-			t.Errorf("%s: JSON round trip changed the program", name)
+			t.Errorf("%s: JSON round trip changed the definition", name)
 		}
 	}
 }
@@ -207,7 +207,7 @@ func TestValidateDiscard(t *testing.T) {
 		mapWorkflow(load(t, "merge"), "dashboard", func(w *Workflow) {
 			w.Connections = append(w.Connections, Connection{Source: "stock", Target: "notify", Transform: Discard})
 		}))
-	configTask := func(input *TransformRef) *Program {
+	configTask := func(input *TransformRef) *Definition {
 		p := mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(func(c *Concurrency) {
 			c.Tasks = append(c.Tasks, TaskSpec{Name: "config", Body: FunctionBody("loadConfig"), Input: input,
 				Policy: PolicyContinue})
@@ -225,7 +225,7 @@ func TestValidateDiscard(t *testing.T) {
 }
 
 func TestValidateGraph(t *testing.T) {
-	rejected(t, "cycle", "connections contain a cycle", cycleProgram())
+	rejected(t, "cycle", "connections contain a cycle", cycleDefinition())
 	rejected(t, "recursive call", "workflows call each other in a cycle", mapWorkflow(load(t, "users"), "profileFlow",
 		mapPlacement("format", func(pl *Placement) { pl.Control = CallControl{WorkflowBody("profileFlow", "format")} })))
 	rejected(t, "waitStream on Single", "waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
@@ -255,6 +255,12 @@ func TestValidateBranchArms(t *testing.T) {
 	rejected(t, "arm outside a branch", "only a connection from a branch has an arm",
 		mapWorkflow(load(t, "merge"), "dashboard",
 			mapConnection("sales", "archive", func(c *Connection) { c.Arm = ptr("x") })))
+	// A branch without connections, which is not the entry, reaches the check of its placement.
+	rejected(t, "unknown judge", "shipping.orphan: unknown judge nope",
+		mapWorkflow(load(t, "branch"), "shipping", func(w *Workflow) {
+			w.Placements = append(w.Placements, Placement{Name: "orphan", Control: BranchControl{Judge: "nope", Arms: []string{"a"}},
+				Policy: PolicyStop})
+		}))
 }
 
 func TestValidateSettings(t *testing.T) {
@@ -302,7 +308,7 @@ func TestDecodeRejections(t *testing.T) {
 func TestValidateMessages(t *testing.T) {
 	cases := []struct {
 		label, want string
-		p           *Program
+		p           *Definition
 	}{
 		{"two inputs", "dashboard.archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
 			func(w *Workflow) { dropConnection(w, "sales", "archive") })},
@@ -341,10 +347,10 @@ func TestDecodeMessages(t *testing.T) {
 		{`"é\u00zz"`, "offset 8: invalid hex character"},
 		{"\"a\u0001\"", "offset 3: unexpected character in string"},
 		{`1e99999999999999999999`, "offset 22: exp too large"},
-		{`[]`, "program: expected an object"},
-		{`{"main":"w","workflows":[],"b":1,"a":2}`, "program: unknown field a"},
-		{`{"main":""}`, "program.main: empty string"},
-		{`{"main":"w","workflows":{}}`, "program.workflows: expected an array"},
+		{`[]`, "definition: expected an object"},
+		{`{"main":"w","workflows":[],"b":1,"a":2}`, "definition: unknown field a"},
+		{`{"main":""}`, "definition.main: empty string"},
+		{`{"main":"w","workflows":{}}`, "definition.workflows: expected an array"},
 		{`{"main":"w","functions":[{"id":"f","output":{"single":"A","stream":"B"}}]}`,
 			"functions.f.output: an output contract is either single or stream"},
 		{`{"main":"w","functions":[{"id":"f","output":{"single":{"list":{"lst":"A"}}}}]}`,
@@ -356,7 +362,7 @@ func TestDecodeMessages(t *testing.T) {
 			"workflows.w.placements.a.node: missing field type"},
 		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"loop"}}]}]}`,
 			"workflows.w.placements.a.node: unknown node type loop"},
-		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","node":{"type":"concurrency","limit":2.0}}]}]}`,
+		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","node":{"type":"concurrency","limit":2.5}}]}]}`,
 			"workflows.w.placements.a.node.limit: expected a natural number"},
 		{`{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","policy":"stop","node":{"type":"concurrency","tasks":[]}}]}]}`,
 			"workflows.w.placements.a.node: missing field limit"},
@@ -368,7 +374,7 @@ func TestDecodeMessages(t *testing.T) {
 			"workflows.w.connections.arm: expected a string"},
 	}
 	for _, c := range cases {
-		_, err := ParseProgram([]byte(c.text))
+		_, err := ParseDefinition([]byte(c.text))
 		if err == nil || err.Error() != c.want {
 			t.Errorf("%s: got %v, want %q", c.text, err, c.want)
 		}
@@ -376,8 +382,11 @@ func TestDecodeMessages(t *testing.T) {
 }
 
 func TestDecodeNumbers(t *testing.T) {
-	// Lean's JsonNumber: a natural number needs exponent 0 after the shifts.
-	cases := map[string]uint64{"2": 2, "2e0": 2, "-0": 0, "0.2e1": 2, "1E+1": 10, "1e20": ^uint64(0), "0e999": 0}
+	// A natural number is read by its value, whatever the notation; values above 2^64-1 are clamped
+	// after the trailing zeros are stripped.
+	cases := map[string]uint64{"2": 2, "2e0": 2, "-0": 0, "0.2e1": 2, "1E+1": 10, "1e20": ^uint64(0), "0e999": 0,
+		"2.0": 2, "20e-1": 2, "1.50e1": 15, "100e-2": 1, "0.0": 0, "-0.0": 0, "0e-99999999999999999999": 0,
+		"1.00000000000000000000e1": 10, "20000000000000000000000e-20": 200, "18446744073709551616.0": ^uint64(0)}
 	for text, want := range cases {
 		v, err := parseLeanJSON(text)
 		if err != nil {
@@ -387,7 +396,7 @@ func TestDecodeNumbers(t *testing.T) {
 			t.Errorf("%s: got %d %v, want %d", text, n, ok, want)
 		}
 	}
-	for _, text := range []string{"2.0", "20e-1", "1.50e1", "-1", "0.5"} {
+	for _, text := range []string{"2.5", "-1", "-10e-1", "1e-1", "0.5", "1e-1000000000", "1e-99999999999999999999"} {
 		v, err := parseLeanJSON(text)
 		if err != nil {
 			t.Fatalf("%s: %v", text, err)
@@ -395,6 +404,15 @@ func TestDecodeNumbers(t *testing.T) {
 		if _, ok := v.num.nat(); ok {
 			t.Errorf("%s: accepted as a natural number", text)
 		}
+	}
+	// 0.0 is 0, which validation rejects.
+	p, err := ParseDefinition([]byte(`{"main":"w","workflows":[{"id":"w","placements":[{"name":"c","policy":"stop",` +
+		`"node":{"type":"concurrency","limit":0.0,"tasks":[],"output":"list","element":"T"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err == nil || err.Error() != "w.c: limit must be positive" {
+		t.Errorf("limit 0.0: %v", err)
 	}
 }
 
@@ -412,9 +430,27 @@ func TestLeanJSONStrings(t *testing.T) {
 			t.Errorf("%s: got %q %v, want %q", text, v.str, err, want)
 		}
 	}
-	// Objects keep the last field of a key, in key order.
-	v, err := parseLeanJSON(`{"b":1,"a":2,"b":"x"}`)
-	if err != nil || len(v.fields) != 2 || v.fields[0].key != "a" || v.fields[1].value.str != "x" {
+	// Objects keep their fields in key order.
+	v, err := parseLeanJSON(`{"b":1,"a":"x"}`)
+	if err != nil || len(v.fields) != 2 || v.fields[0].key != "a" || v.fields[0].value.str != "x" || v.fields[1].key != "b" {
 		t.Errorf("tree map: %+v %v", v.fields, err)
+	}
+	// An object may not repeat a key, compared after its escapes are decoded; the error is right after
+	// the repeated key, at a byte offset, with the key quoted as Lean's String.quote does.
+	for text, want := range map[string]string{
+		`{"b":1,"a":2,"b":"x"}`:                     `offset 16: duplicate key "b"`,
+		`{"é":1,"\u00e9":2}`:                        `offset 16: duplicate key "é"`,
+		`{"a":[{"b":{"c":1,"c":2}}]}`:               `offset 21: duplicate key "c"`,
+		`{"\u0001":1,"\u0001":2}`:                   `offset 20: duplicate key "\x01"`,
+		`{"'":1,"'":2}`:                             `offset 10: duplicate key "'"`,
+		`{"a":1,"a":2,}`:                            `offset 10: duplicate key "a"`,
+		`{"a":{"a":1},"b":[{"a":1},{"a":2}],"a":3}`: `offset 38: duplicate key "a"`,
+	} {
+		if _, err := parseLeanJSON(text); err == nil || err.Error() != want {
+			t.Errorf("%s: got %v, want %q", text, err, want)
+		}
+	}
+	if _, err := parseLeanJSON(`{"a":{"a":1},"b":[{"a":1},{"a":2}]}`); err != nil {
+		t.Errorf("the same key in other objects: %v", err)
 	}
 }

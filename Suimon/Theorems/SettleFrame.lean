@@ -144,11 +144,11 @@ theorem exists_of_map_eq {α κ : Type} {l l' : List α} {k : α → κ} (h : l'
 /-! ### Workflows of runs -/
 
 /-- Every run keeps its workflow. --/
-def KeepsWorkflows (p : Program) (s t : State) : Prop :=
+def KeepsWorkflows (p : Definition) (s t : State) : Prop :=
   ∀ path w, s.workflow? p path = some w → t.workflow? p path = some w
 
 namespace KeepsWorkflows
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 theorem refl : KeepsWorkflows p s s := fun _ _ h => h
 
@@ -207,16 +207,16 @@ theorem taskSpec (h : KeepsWorkflows p s t) {e e' : Execution} (hrun : e'.run = 
 
 end KeepsWorkflows
 
-theorem placementAt_eq {p : Program} {s : State} {path : Path} {name : String} {w : Workflow}
+theorem placementAt_eq {p : Definition} {s : State} {path : Path} {name : String} {w : Workflow}
     (hw : s.workflow? p path = some w) : placementAt p s path name = w.placement? name := by
   simp [placementAt, hw]
 
-theorem concurrencyOf_det {p : Program} {s : State} {e : Execution} {cc cc' : Concurrency}
+theorem concurrencyOf_det {p : Definition} {s : State} {e : Execution} {cc cc' : Concurrency}
     (h : s.concurrencyOf p e = .ok cc) (h' : s.concurrencyOf p e = .ok cc') : cc = cc' := by
   rw [h] at h'
   exact Except.ok.inj h'
 
-theorem taskSpec_det {p : Program} {s : State} {e : Execution} {name : String} {spec spec' : TaskSpec}
+theorem taskSpec_det {p : Definition} {s : State} {e : Execution} {name : String} {spec spec' : TaskSpec}
     (h : s.taskSpec p e name = .ok spec) (h' : s.taskSpec p e name = .ok spec') : spec = spec' := by
   rw [h] at h'
   exact Except.ok.inj h'
@@ -225,7 +225,7 @@ theorem taskSpec_det {p : Program} {s : State} {e : Execution} {name : String} {
 /-! ### Steps that only update records -/
 
 /-- A step that only updates stored records keeps their keys and the workflows of the runs. --/
-structure SameKeys (p : Program) (s t : State) : Prop where
+structure SameKeys (p : Definition) (s t : State) : Prop where
   workflows : KeepsWorkflows p s t
   calls : t.calls.map callKey = s.calls.map callKey
   invocations : t.invocations.map invKey = s.invocations.map invKey
@@ -233,7 +233,7 @@ structure SameKeys (p : Program) (s t : State) : Prop where
   runs : t.runs.map runKey = s.runs.map runKey
 
 namespace SameKeys
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 theorem refl : SameKeys p s s := ⟨KeepsWorkflows.refl, rfl, rfl, rfl, rfl⟩
 
@@ -303,12 +303,12 @@ theorem failCall (wk : s.WellKeyed) {c : Call} (hc : c ∈ s.calls) {status : Ca
 
 end SameKeys
 
-theorem workflow?_of_run {p : Program} {s : State} {path : Path} {r : Run} {w : Workflow}
+theorem workflow?_of_run {p : Definition} {s : State} {path : Path} {r : Run} {w : Workflow}
     (hr : s.run? path = some r) (hw : p.workflow? r.workflow = some w) : s.workflow? p path = some w := by
   simp [State.workflow?, hr, hw]
 
 namespace SameKeys
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem call_ids (h : SameKeys p s t) : t.calls.map (·.id) = s.calls.map (·.id) := by
   have := congrArg (List.map (·.1)) h.calls
@@ -329,7 +329,7 @@ theorem run_paths (h : SameKeys p s t) : t.runs.map (·.path) = s.runs.map (·.p
 end SameKeys
 
 namespace SameKeys
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 theorem calls_nodup (h : SameKeys p s t) (hn : (s.calls.map (·.id)).Nodup) : (t.calls.map (·.id)).Nodup := by
   rw [h.call_ids]; exact hn

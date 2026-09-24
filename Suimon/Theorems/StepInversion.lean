@@ -5,7 +5,7 @@ import Suimon.Theorems.StepLemmas
 
 namespace Suimon
 
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 /-! ### Dispatch -/
 

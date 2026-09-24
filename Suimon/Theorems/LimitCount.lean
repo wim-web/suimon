@@ -3,7 +3,7 @@ import Suimon.Theorems.Static
 
 /-! Counting the tasks that hold a slot of a concurrency execution (§8.2). A step keeps the run and
     placement of every execution, hence its concurrency and limit, and it never adds a slot holder,
-    except `beginTask`, which adds exactly its own task (task names are distinct in a valid program)
+    except `beginTask`, which adds exactly its own task (task names are distinct in a valid definition)
     and only below the limit. -/
 
 namespace Suimon
@@ -97,7 +97,7 @@ theorem runsKept_append {s t : State} {x : Run} (hr : t.runs = s.runs ++ [x]) : 
   simp only [State.run?, hr, List.find?_append] at h0 ⊢
   rw [h0, Option.some_or]
 
-theorem RunsKept.workflow? {p : Program} {s t : State} (h : RunsKept s t) {path : Path}
+theorem RunsKept.workflow? {p : Definition} {s t : State} (h : RunsKept s t) {path : Path}
     (hs : (s.run? path).isSome) : t.workflow? p path = s.workflow? p path := by
   obtain ⟨r, hr⟩ := Option.isSome_iff_exists.mp hs
   obtain ⟨r', hr', hw⟩ := h path r hr
@@ -107,7 +107,7 @@ theorem RunsKept.workflow? {p : Program} {s t : State} (h : RunsKept s t) {path 
   rw [hw]
 
 /-- The concurrency of an execution depends only on its run's workflow and its placement. --/
-theorem concurrencyOf_congr {p : Program} {s t : State} {e e' : Execution}
+theorem concurrencyOf_congr {p : Definition} {s t : State} {e e' : Execution}
     (hw : t.workflow? p e.run = s.workflow? p e.run) (hrun : e'.run = e.run) (hpl : e'.placement = e.placement) :
     t.concurrencyOf p e' = s.concurrencyOf p e := by
   simp only [State.concurrencyOf, State.placementOf, hrun, hpl, hw]
@@ -353,7 +353,7 @@ end Kept
 
 /-! ### Every step other than `beginTask` -/
 
-theorem step_kept {p : Program} {s t : State} {op : Op} (valid : p.validate = .ok ()) (h : Inv s)
+theorem step_kept {p : Definition} {s t : State} {op : Op} (valid : p.validate = .ok ()) (h : Inv s)
     (h0 : s = {} ∨ s.started = true) (hs : step p s op = .ok t) (hop : ∀ eid name, op ≠ .beginTask eid name) :
     Kept s t := by
   cases op with
@@ -376,7 +376,7 @@ theorem step_kept {p : Program} {s t : State} {op : Op} (valid : p.validate = .o
         dsimp only
         split <;> simp
       · rw [List.map_map]
-        exact (concurrency_settings valid w (Program.workflow?_eq_some hw).1 pl
+        exact (concurrency_settings valid w (Definition.workflow?_eq_some hw).1 pl
           (Workflow.placement?_eq_some hpl).1 c hc).1
   | fetch id =>
     obtain ⟨-, -, c, hc, -, -, rfl⟩ := Step.fetch_inv hs
@@ -470,10 +470,10 @@ theorem step_kept {p : Program} {s t : State} {op : Op} (valid : p.validate = .o
 /-! ### The limit -/
 
 /-- Every execution holds at most as many slots as its concurrency allows. --/
-def WithinLimit (p : Program) (s : State) : Prop :=
+def WithinLimit (p : Definition) (s : State) : Prop :=
   ∀ e ∈ s.executions, ∀ c, s.concurrencyOf p e = .ok c → count s e ≤ c.limit
 
-theorem WithinLimit.of_kept {p : Program} {s t : State} (h : Inv s) (hk : Kept s t) (hl : WithinLimit p s) :
+theorem WithinLimit.of_kept {p : Definition} {s t : State} (h : Inv s) (hk : Kept s t) (hl : WithinLimit p s) :
     WithinLimit p t := by
   intro e' he' c hc
   rcases hk.fewer e' he' with h0 | ⟨e, he, hrun, hpl, hle⟩
@@ -484,7 +484,7 @@ theorem WithinLimit.of_kept {p : Program} {s t : State} (h : Inv s) (hk : Kept s
 
 /-- `beginTask` makes its task active below the limit; with distinct task names it is the only new
     slot holder. --/
-theorem beginTask_limit {p : Program} {s t : State} {eid name : String} (h : Inv s) (hn : Names s)
+theorem beginTask_limit {p : Definition} {s t : State} {eid name : String} (h : Inv s) (hn : Names s)
     (hl : WithinLimit p s) (hs : Step.beginTask p s eid name = .ok t) : Names t ∧ WithinLimit p t := by
   obtain ⟨-, -, e, c, ts, spec, he, -, hc, hts, -, hslot, -, hcases⟩ := Step.beginTask_inv hs
   have he' := (execution?_eq_some he).1
@@ -532,7 +532,7 @@ theorem beginTask_limit {p : Program} {s t : State} {eid name : String} (h : Inv
       count_le (g := id) (List.map_id _).symm rfl fun _ _ hh => holds_of_calls hcalls hh
     exact Nat.le_trans this (hl e2 he2 c2 hc2)
 
-theorem reachable_limit {p : Program} {s : State} (valid : p.validate = .ok ()) (hr : Reachable p s) :
+theorem reachable_limit {p : Definition} {s : State} (valid : p.validate = .ok ()) (hr : Reachable p s) :
     Names s ∧ WithinLimit p s := by
   induction hr with
   | empty => exact ⟨fun _ he => by simp at he, fun _ he => by simp at he⟩

@@ -1,13 +1,13 @@
 # suimon UI kit
 
-suimon のプログラムと、その実行状態・実行記録を表示する React + TypeScript のコンポーネント集です。
+suimon の workflow構成と、その実行状態・実行記録を表示する React + TypeScript のコンポーネント集です。
 
-バックエンドの言語や通信方式が変わっても再利用できるよう、通信・実行・エラー処理は組み込み先に任せ、プログラム・実行状態・実行記録の行を受け取って表示します。画面構成も用途に合わせて変えられるよう、各部品を独立して利用できる形にしています。
+バックエンドの言語や通信方式が変わっても再利用できるよう、通信・実行・エラー処理は組み込み先に任せ、workflow構成・実行状態・実行記録の行を受け取って表示します。画面構成も用途に合わせて変えられるよう、各部品を独立して利用できる形にしています。
 
 値や実行範囲の識別子は、符号化の変更に影響されないよう解釈しません。そのため、呼び出しや concurrency の実行を指す記録がどの配置のものかは、実行状態を渡したときにだけ求めます。
 
 実行記録は `suimon check` と同じく、最後の改行より後ろを確定させません。クラッシュで途切れた行を確定済みと誤って表示しないためです。
 
-入力の形式は [program](../schema/program.schema.json)・[実行記録](../schema/trace.schema.json)・[実行状態](../Suimon/State.lean)（Lean が導出する JSON 形式）、利用例は [テスト](tests/) を参照してください。
+入力の形式は [workflow構成](../schema/definition.schema.json)・[実行記録](../schema/trace.schema.json)・[実行状態](../Suimon/State.lean)（Lean が導出する JSON 形式）、利用例は [テスト](tests/) を参照してください。
 
 [公開 API](src/index.ts) / [テーマの定義](src/tokens.css) / [開発コマンド](package.json)

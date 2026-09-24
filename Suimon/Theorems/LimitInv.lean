@@ -1,7 +1,7 @@
 import Suimon.Theorems.Basic
 
 /-! Invariants of the tasks of concurrency executions (§8.1, §8.2, §8.4), proven for every
-    reachable state of every program: a task call or a task run belongs to a task of an existing
+    reachable state of every definition: a task call or a task run belongs to a task of an existing
     execution that left pending/ready, a running or fetching call belongs to an active task, a task
     never has both a call and a run, and a task result belongs to a task of its execution. They are
     the base of the concurrency-limit proof in `Suimon.Theorems.LimitCount`. -/
@@ -622,7 +622,7 @@ end Inv
 
 /-! ### Every step keeps the invariant -/
 
-theorem step_inv {p : Program} {s t : State} {op : Op} (h : Inv s) (h0 : s = {} ∨ s.started = true)
+theorem step_inv {p : Definition} {s t : State} {op : Op} (h : Inv s) (h0 : s = {} ∨ s.started = true)
     (hs : step p s op = .ok t) : Inv t := by
   cases op with
   | start input =>
@@ -788,7 +788,7 @@ theorem step_inv {p : Program} {s t : State} {op : Op} (h : Inv s) (h0 : s = {} 
     · exact (h.setRun (r' := { r with complete := true }) (run?_eq_some hr).1 rfl rfl).of_eq rfl rfl rfl rfl
     · exact h.of_eq rfl rfl rfl rfl
 
-theorem reachable_inv {p : Program} {s : State} (h : Reachable p s) : Inv s := by
+theorem reachable_inv {p : Definition} {s : State} (h : Reachable p s) : Inv s := by
   induction h with
   | empty => exact Inv.empty
   | step op hr hs ih => exact step_inv ih hr.eq_empty_or_started hs

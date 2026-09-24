@@ -6,10 +6,10 @@ open State
 /-! ## [19] Round3/Saturated.lean — task F1 -/
 
 section SaturatedSection
-variable {p : Program} {T : State}
+variable {p : Definition} {T : State}
 
 /-- What a complete run has done: everything it could (§13.3). -/
-structure Saturated (p : Program) (T : State) : Prop where
+structure Saturated (p : Definition) (T : State) : Prop where
   runs : ∀ r ∈ T.runs, r.complete = true
   calls : ∀ c ∈ T.calls, c.status.ended = true
   executions : ∀ e ∈ T.executions, e.complete = true ∧ ∀ t ∈ e.tasks, t.status.ended = true
@@ -254,7 +254,7 @@ theorem saturated (valid : p.validate = .ok ()) (h : Reachable p T) (done : Done
     exact (Option.some.inj hw').symm
   rw [hw''] at hpl' hclosed
   -- Placement names are unique, so the settled placement is `pl`.
-  have hnames := ((Program.validate_ok valid).workflows w (Program.workflow?_eq_some hw).1).names
+  have hnames := ((Definition.validate_ok valid).workflows w (Definition.workflow?_eq_some hw).1).names
   have hpl'' : pl' = pl := by
     rw [hxp, Workflow.placement?_of_mem hnames hpl] at hpl'
     exact (Option.some.inj hpl').symm

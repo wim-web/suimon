@@ -1,7 +1,131 @@
 import Suimon.Workflow
+import Suimon.Wire
 
-namespace Suimon.Codec
+/-! A definition is read from Lean's `Json`, which the definition file and the header of an execution
+    record give. It is written as a `Wire` value, whose fields keep the order of the definition file
+    (`Codec.definitionWire`); its `Json` is that value's. -/
+
+namespace Suimon
 open Lean
+
+/-! ## Definition text
+
+A definition file is read as Lean's `Json.parse` reads JSON text, except that an object may not
+repeat a key, where `Json.parse` keeps the last field. The parser is `Lean.Json.Parser`'s, with one
+check added to `objectCore`, and uses its lexers: text without a repeated key gives the same `Json`,
+and any error the same message at the same offset. Keys are compared after their escapes are decoded,
+and a repeated key fails right after its closing quote, as `duplicate key "k"` with the key quoted
+by `String.quote`. -/
+
+namespace Codec.Parser
+open Std.Internal.Parsec Std.Internal.Parsec.String
+open Lean.Json.Parser (str num lookahead)
+
+mutual
+
+partial def arrayCore (acc : Array Json) : Parser (Array Json) := do
+  let hd ← anyCore
+  let acc' := acc.push hd
+  let c ← any
+  if c == ']' then
+    ws
+    return acc'
+  else if c == ',' then
+    ws
+    arrayCore acc'
+  else
+    fail "unexpected character in array"
+
+partial def objectCore (kvs : Std.TreeMap.Raw String Json) : Parser (Std.TreeMap.Raw String Json) := do
+  lookahead (fun c => c == '"') "\""; skip;
+  let k ← str
+  if kvs.contains k then fail s!"duplicate key {k.quote}"
+  ws
+  lookahead (fun c => c == ':') ":"; skip; ws
+  let v ← anyCore
+  let c ← any
+  if c == '}' then
+    ws
+    return kvs.insert k v
+  else if c == ',' then
+    ws
+    objectCore (kvs.insert k v)
+  else
+    fail "unexpected character in object"
+
+partial def anyCore : Parser Json := do
+  let c ← peek!
+  if c == '[' then
+    skip; ws
+    let c ← peek!
+    if c == ']' then
+      skip; ws
+      return Json.arr (Array.mkEmpty 0)
+    else
+      let a ← arrayCore (Array.mkEmpty 4)
+      return Json.arr a
+  else if c == '{' then
+    skip; ws
+    let c ← peek!
+    if c == '}' then
+      skip; ws
+      return Json.obj ∅
+    else
+      let kvs ← objectCore ∅
+      return Json.obj kvs
+  else if c == '\"' then
+    skip
+    let s ← str
+    ws
+    return Json.str s
+  else if c == 'f' then
+    skipString "false"; ws
+    return Json.bool false
+  else if c == 't' then
+    skipString "true"; ws
+    return Json.bool true
+  else if c == 'n' then
+    skipString "null"; ws
+    return Json.null
+  else if c == '-' || ('0' <= c && c <= '9') then
+    let n ← num
+    ws
+    return Json.num n
+  else
+    fail "unexpected input"
+
+end
+
+end Codec.Parser
+
+open Std.Internal.Parsec Std.Internal.Parsec.String in
+/-- Parses definition text like `Json.parse`, except that a key repeated in an object is an error. --/
+def Codec.parse (text : String) : Except String Json :=
+  Parser.run (do ws; let json ← Codec.Parser.anyCore; eof; return json) text
+
+mutual
+
+/-- The `Json` of a `Wire` value. An object keeps the last field of each key; a value read from a
+    record repeats no key (`Wire.parse`), so none is lost. --/
+def Wire.toJson : Wire → Json
+  | .null => .null
+  | .bool b => .bool b
+  | .nat n => .num (.fromNat n)
+  | .str s => .str s
+  | .arr items => .arr (Wire.itemsToJson items).toArray
+  | .obj fields => Json.mkObj (Wire.fieldsToJson fields)
+
+def Wire.itemsToJson : List Wire → List Json
+  | [] => []
+  | w :: ws => w.toJson :: Wire.itemsToJson ws
+
+def Wire.fieldsToJson : List (String × Wire) → List (String × Json)
+  | [] => []
+  | (k, v) :: fs => (k, v.toJson) :: Wire.fieldsToJson fs
+
+end
+
+namespace Codec
 
 /-- Unknown keys are rejected, so a misspelled optional field is not silently ignored. --/
 def strict (json : Json) (allowed : List String) (at_ : String) : Except String Unit := do
@@ -29,8 +153,22 @@ def textField (json : Json) (key : String) (at_ : String) : Except String String
 def textField? (json : Json) (key : String) (at_ : String) : Except String (Option String) :=
   (field? json key).mapM (text · s!"{at_}.{key}")
 
+/-- The value of a number that is a natural number in any notation. The parser does not normalize
+    numbers, so `2.0` and `20e-1` both have mantissa 20 and exponent 1. Stripping trailing zeros,
+    rather than computing a power of ten, takes at most one step per digit of the mantissa whatever
+    the exponent. --/
+def nat? : Json → Option Nat
+  | .num ⟨.ofNat m, e⟩ => if m = 0 then some 0 else strip m e
+  | _ => none
+where
+  strip (m : Nat) : Nat → Option Nat
+    | 0 => some m
+    | e + 1 => if m % 10 = 0 then strip (m / 10) e else none
+
 def natField? (json : Json) (key : String) (at_ : String) : Except String (Option Nat) :=
-  (field? json key).mapM fun value => value.getNat?.mapError fun _ => s!"{at_}.{key}: expected a natural number"
+  (field? json key).mapM fun value => match nat? value with
+    | some n => pure n
+    | none => throw s!"{at_}.{key}: expected a natural number"
 
 def list (json : Json) (key : String) (at_ : String) : Except String (List Json) :=
   match field? json key with
@@ -38,8 +176,9 @@ def list (json : Json) (key : String) (at_ : String) : Except String (List Json)
   | some (.arr items) => pure items.toList
   | some _ => throw s!"{at_}.{key}: expected an array"
 
-def obj (fields : List (String × Option Json)) : Json :=
-  Json.mkObj (fields.filterMap fun (key, value) => value.map (key, ·))
+/-- The fields that are present, in order: an absent optional field is left out. --/
+def obj (fields : List (String × Option Wire)) : Wire :=
+  .obj (fields.filterMap fun (key, value) => value.map (key, ·))
 
 partial def valueType (json : Json) (at_ : String) : Except String ValueType :=
   match json with
@@ -49,9 +188,9 @@ partial def valueType (json : Json) (at_ : String) : Except String ValueType :=
     return .list (← valueType (← field json "list" at_) at_)
   | _ => throw s!"{at_}: a type is a name or \{\"list\": type}"
 
-def valueTypeJson : ValueType → Json
+def valueTypeWire : ValueType → Wire
   | .named name => .str name
-  | .list element => Json.mkObj [("list", valueTypeJson element)]
+  | .list element => .obj [("list", valueTypeWire element)]
 
 def contract (json : Json) (at_ : String) : Except String Contract := do
   strict json ["single", "stream"] at_
@@ -60,9 +199,9 @@ def contract (json : Json) (at_ : String) : Except String Contract := do
   | none, some element => return .stream (← valueType element s!"{at_}.stream")
   | _, _ => throw s!"{at_}: an output contract is either single or stream"
 
-def contractJson : Contract → Json
-  | .single value => Json.mkObj [("single", valueTypeJson value)]
-  | .stream element => Json.mkObj [("stream", valueTypeJson element)]
+def contractWire : Contract → Wire
+  | .single value => .obj [("single", valueTypeWire value)]
+  | .stream element => .obj [("stream", valueTypeWire element)]
 
 def policy (json : Json) (at_ : String) : Except String Policy :=
   match json with
@@ -70,9 +209,9 @@ def policy (json : Json) (at_ : String) : Except String Policy :=
   | .str "continue" => pure .«continue»
   | _ => throw s!"{at_}: policy is stop or continue"
 
-def policyJson : Policy → Json
-  | .stop => "stop"
-  | .«continue» => "continue"
+def policyWire : Policy → Wire
+  | .stop => .str "stop"
+  | .«continue» => .str "continue"
 
 def timeout (json : Json) (at_ : String) : Except String Timeout := do
   match field? json "timeout" with
@@ -82,9 +221,9 @@ def timeout (json : Json) (at_ : String) : Except String Timeout := do
     strict value ["callMs", "elementMs"] at_
     return { callMs := ← natField? value "callMs" at_, elementMs := ← natField? value "elementMs" at_ }
 
-def timeoutJson (t : Timeout) : Option Json :=
+def timeoutWire (t : Timeout) : Option Wire :=
   if t.isEmpty then none
-  else some (obj [("callMs", t.callMs.map toJson), ("elementMs", t.elementMs.map toJson)])
+  else some (obj [("callMs", t.callMs.map .nat), ("elementMs", t.elementMs.map .nat)])
 
 def body (json : Json) (at_ : String) : Except String Body := do
   match ← textField json "type" at_ with
@@ -96,14 +235,14 @@ def body (json : Json) (at_ : String) : Except String Body := do
     return .workflow (← textField json "workflow" at_) (← textField json "output" at_)
   | other => throw s!"{at_}: unknown body type {other}"
 
-def bodyJson : Body → Json
-  | .function id => Json.mkObj [("type", "function"), ("function", id)]
-  | .workflow id output => Json.mkObj [("type", "subworkflow"), ("workflow", id), ("output", output)]
+def bodyWire : Body → Wire
+  | .function id => .obj [("type", .str "function"), ("function", .str id)]
+  | .workflow id output => .obj [("type", .str "subworkflow"), ("workflow", .str id), ("output", .str output)]
 
 def transformRef (id : String) : TransformRef :=
   if id == TransformRef.discardName then .discard else .declared id
 
-def transformRefJson : TransformRef → Json
+def transformRefWire : TransformRef → Wire
   | .declared id => .str id
   | .discard => .str TransformRef.discardName
 
@@ -119,10 +258,10 @@ def task (json : Json) (at_ : String) : Except String TaskSpec := do
     policy := ← policy (← field json "policy" at_) s!"{at_}.policy"
     timeout := ← timeout json at_ }
 
-def taskJson (t : TaskSpec) : Json :=
-  obj [("name", some (toJson t.name)), ("body", some (bodyJson t.body)),
-    ("inputTransform", t.input.map transformRefJson), ("outputTransform", t.output.map toJson),
-    ("policy", some (policyJson t.policy)), ("timeout", timeoutJson t.timeout)]
+def taskWire (t : TaskSpec) : Wire :=
+  obj [("name", some (.str t.name)), ("body", some (bodyWire t.body)),
+    ("inputTransform", t.input.map transformRefWire), ("outputTransform", t.output.map .str),
+    ("policy", some (policyWire t.policy)), ("timeout", timeoutWire t.timeout)]
 
 def collect (json : Json) (at_ : String) : Except String Collect :=
   match json with
@@ -130,9 +269,9 @@ def collect (json : Json) (at_ : String) : Except String Collect :=
   | .str "stream" => pure .stream
   | _ => throw s!"{at_}: output is list or stream"
 
-def collectJson : Collect → Json
-  | .list => "list"
-  | .stream => "stream"
+def collectWire : Collect → Wire
+  | .list => .str "list"
+  | .stream => .str "stream"
 
 def control (json : Json) (at_ : String) : Except String Control := do
   match ← textField json "type" at_ with
@@ -160,14 +299,14 @@ def control (json : Json) (at_ : String) : Except String Control := do
       element := ← valueType (← field json "element" at_) s!"{at_}.element" }
   | other => throw s!"{at_}: unknown node type {other}"
 
-def controlJson : Control → Json
-  | .call b => bodyJson b
-  | .branch judge arms => Json.mkObj [("type", "branch"), ("judge", judge), ("arms", toJson arms)]
-  | .waitStream element => Json.mkObj [("type", "waitStream"), ("element", valueTypeJson element)]
-  | .merge element => Json.mkObj [("type", "merge"), ("element", valueTypeJson element)]
-  | .concurrency c => obj [("type", some "concurrency"), ("input", c.input.map valueTypeJson),
-      ("limit", some (toJson c.limit)), ("tasks", some (Json.arr (c.tasks.map taskJson).toArray)),
-      ("output", some (collectJson c.output)), ("element", some (valueTypeJson c.element))]
+def controlWire : Control → Wire
+  | .call b => bodyWire b
+  | .branch judge arms => .obj [("type", .str "branch"), ("judge", .str judge), ("arms", .arr (arms.map .str))]
+  | .waitStream element => .obj [("type", .str "waitStream"), ("element", valueTypeWire element)]
+  | .merge element => .obj [("type", .str "merge"), ("element", valueTypeWire element)]
+  | .concurrency c => obj [("type", some (.str "concurrency")), ("input", c.input.map valueTypeWire),
+      ("limit", some (.nat c.limit)), ("tasks", some (.arr (c.tasks.map taskWire))),
+      ("output", some (collectWire c.output)), ("element", some (valueTypeWire c.element))]
 
 def placement (json : Json) (at_ : String) : Except String Placement := do
   strict json ["name", "node", "policy", "timeout"] at_
@@ -179,9 +318,9 @@ def placement (json : Json) (at_ : String) : Except String Placement := do
     policy := ← policy (← field json "policy" at_) s!"{at_}.policy"
     timeout := ← timeout json at_ }
 
-def placementJson (p : Placement) : Json :=
-  obj [("name", some (toJson p.name)), ("node", some (controlJson p.control)),
-    ("policy", some (policyJson p.policy)), ("timeout", timeoutJson p.timeout)]
+def placementWire (p : Placement) : Wire :=
+  obj [("name", some (.str p.name)), ("node", some (controlWire p.control)),
+    ("policy", some (policyWire p.policy)), ("timeout", timeoutWire p.timeout)]
 
 def connection (json : Json) (at_ : String) : Except String Connection := do
   strict json ["source", "arm", "target", "transform"] at_
@@ -191,9 +330,9 @@ def connection (json : Json) (at_ : String) : Except String Connection := do
     target := ← textField json "target" at_
     transform := transformRef (← textField json "transform" at_) }
 
-def connectionJson (c : Connection) : Json :=
-  obj [("source", some (toJson c.source)), ("arm", c.arm.map toJson),
-    ("target", some (toJson c.target)), ("transform", some (transformRefJson c.transform))]
+def connectionWire (c : Connection) : Wire :=
+  obj [("source", some (.str c.source)), ("arm", c.arm.map .str),
+    ("target", some (.str c.target)), ("transform", some (transformRefWire c.transform))]
 
 def workflow (json : Json) (at_ : String) : Except String Workflow := do
   strict json ["id", "input", "placements", "connections"] at_
@@ -208,11 +347,11 @@ def workflow (json : Json) (at_ : String) : Except String Workflow := do
     placements := ← (← list json "placements" at_).mapM (placement · s!"{at_}.placements")
     connections := ← (← list json "connections" at_).mapM (connection · s!"{at_}.connections") }
 
-def workflowJson (w : Workflow) : Json :=
-  obj [("id", some (toJson w.id)),
-    ("input", w.input.map fun e => Json.mkObj [("type", valueTypeJson e.valueType), ("placement", e.placement)]),
-    ("placements", some (Json.arr (w.placements.map placementJson).toArray)),
-    ("connections", some (Json.arr (w.connections.map connectionJson).toArray))]
+def workflowWire (w : Workflow) : Wire :=
+  obj [("id", some (.str w.id)),
+    ("input", w.input.map fun e => .obj [("type", valueTypeWire e.valueType), ("placement", .str e.placement)]),
+    ("placements", some (.arr (w.placements.map placementWire))),
+    ("connections", some (.arr (w.connections.map connectionWire)))]
 
 def functionDecl (json : Json) (at_ : String) : Except String FunctionDecl := do
   strict json ["id", "input", "output"] at_
@@ -236,28 +375,32 @@ def transformDecl (json : Json) (at_ : String) : Except String TransformDecl := 
     input := ← valueType (← field json "input" at_) s!"{at_}.{id}.input"
     output := ← valueType (← field json "output" at_) s!"{at_}.{id}.output" }
 
-def program (json : Json) : Except String Program := do
-  strict json ["main", "functions", "judges", "transforms", "workflows"] "program"
+def definition (json : Json) : Except String Definition := do
+  strict json ["main", "functions", "judges", "transforms", "workflows"] "definition"
   return {
-    main := ← textField json "main" "program"
-    functions := ← (← list json "functions" "program").mapM (functionDecl · "functions")
-    judges := ← (← list json "judges" "program").mapM (judgeDecl · "judges")
-    transforms := ← (← list json "transforms" "program").mapM (transformDecl · "transforms")
-    workflows := ← (← list json "workflows" "program").mapM (workflow · "workflows") }
+    main := ← textField json "main" "definition"
+    functions := ← (← list json "functions" "definition").mapM (functionDecl · "functions")
+    judges := ← (← list json "judges" "definition").mapM (judgeDecl · "judges")
+    transforms := ← (← list json "transforms" "definition").mapM (transformDecl · "transforms")
+    workflows := ← (← list json "workflows" "definition").mapM (workflow · "workflows") }
 
-def programJson (p : Program) : Json :=
-  Json.mkObj [("main", p.main),
-    ("functions", Json.arr (p.functions.map fun f => obj [("id", some (toJson f.id)),
-      ("input", f.input.map valueTypeJson), ("output", some (contractJson f.output))]).toArray),
-    ("judges", Json.arr (p.judges.map fun j =>
-      Json.mkObj [("id", j.id), ("input", valueTypeJson j.input)]).toArray),
-    ("transforms", Json.arr (p.transforms.map fun t => Json.mkObj [("id", t.id),
-      ("input", valueTypeJson t.input), ("output", valueTypeJson t.output)]).toArray),
-    ("workflows", Json.arr (p.workflows.map workflowJson).toArray)]
+/-- The canonical form of a definition: the definition file with its fields in a fixed order and the
+    absent optional fields left out, as Go's `definitionWire` writes it. The header of an execution
+    record carries it, so that equal definitions are recorded alike (§12.1). --/
+def definitionWire (p : Definition) : Wire :=
+  .obj [("main", .str p.main),
+    ("functions", .arr (p.functions.map fun f => obj [("id", some (.str f.id)),
+      ("input", f.input.map valueTypeWire), ("output", some (contractWire f.output))])),
+    ("judges", .arr (p.judges.map fun j => .obj [("id", .str j.id), ("input", valueTypeWire j.input)])),
+    ("transforms", .arr (p.transforms.map fun t => .obj [("id", .str t.id),
+      ("input", valueTypeWire t.input), ("output", valueTypeWire t.output)])),
+    ("workflows", .arr (p.workflows.map workflowWire))]
+
+def definitionJson (p : Definition) : Json := (definitionWire p).toJson
 
 end Codec
 
-instance : Lean.ToJson Program := ⟨Codec.programJson⟩
-instance : Lean.FromJson Program := ⟨Codec.program⟩
+instance : Lean.ToJson Definition := ⟨Codec.definitionJson⟩
+instance : Lean.FromJson Definition := ⟨Codec.definition⟩
 
 end Suimon

@@ -7,21 +7,21 @@ import (
 	"unicode/utf8"
 )
 
-// The program JSON codec of Suimon/Json.lean (schema/program.schema.json). Decoding is strict:
+// The definition JSON codec of Suimon/Json.lean (schema/definition.schema.json). Decoding is strict:
 // unknown fields are rejected, an optional field is omitted only by leaving its key out, and the
 // transform name discard refers to the library transform. Errors carry the messages of the Lean
 // decoder, including the JSON syntax errors of Lean's parser.
 
-// ParseProgram decodes a program from JSON text. It does not validate the program.
-func ParseProgram(data []byte) (*Program, error) {
+// ParseDefinition decodes a definition from JSON text. It does not validate the definition.
+func ParseDefinition(data []byte) (*Definition, error) {
 	if !utf8.Valid(data) {
-		return nil, errors.New("program: invalid UTF-8")
+		return nil, errors.New("definition: invalid UTF-8")
 	}
 	json, err := parseLeanJSON(string(data))
 	if err != nil {
 		return nil, err
 	}
-	return decodeProgram(json)
+	return decodeDefinition(json)
 }
 
 func strict(json ljValue, allowed []string, at string) error {
@@ -530,13 +530,13 @@ func decodeTransform(json ljValue, at string) (TransformDecl, error) {
 	return TransformDecl{ID: id, Input: in, Output: out}, err
 }
 
-func decodeProgram(json ljValue) (*Program, error) {
-	if err := strict(json, []string{"main", "functions", "judges", "transforms", "workflows"}, "program"); err != nil {
+func decodeDefinition(json ljValue) (*Definition, error) {
+	if err := strict(json, []string{"main", "functions", "judges", "transforms", "workflows"}, "definition"); err != nil {
 		return nil, err
 	}
-	p := &Program{}
+	p := &Definition{}
 	var err error
-	if p.Main, err = textField(json, "main", "program"); err != nil {
+	if p.Main, err = textField(json, "main", "definition"); err != nil {
 		return nil, err
 	}
 	if err := decodeList(json, "functions", decodeFunction, &p.Functions); err != nil {
@@ -554,10 +554,10 @@ func decodeProgram(json ljValue) (*Program, error) {
 	return p, nil
 }
 
-// decodeList decodes the items of the array field key of the program; each item is located by the
+// decodeList decodes the items of the array field key of the definition; each item is located by the
 // field name alone, like the Lean decoder does.
 func decodeList[T any](json ljValue, key string, decode func(ljValue, string) (T, error), out *[]T) error {
-	items, err := list(json, key, "program")
+	items, err := list(json, key, "definition")
 	if err != nil {
 		return err
 	}
@@ -571,9 +571,10 @@ func decodeList[T any](json ljValue, key string, decode func(ljValue, string) (T
 	return nil
 }
 
-// MarshalJSON renders the program in the form ParseProgram reads (Lean Codec.programJson).
-func (p *Program) MarshalJSON() ([]byte, error) {
-	return []byte(programWire(p).render()), nil
+// MarshalJSON renders the definition in its canonical form, which ParseDefinition reads (Lean
+// Codec.definitionWire).
+func (p *Definition) MarshalJSON() ([]byte, error) {
+	return []byte(definitionWire(p).render()), nil
 }
 
 func valueTypeWire(t ValueType) wire {
@@ -686,7 +687,10 @@ func workflowWire(w *Workflow) wire {
 	return wireObj(append(fields, field("placements", wireArr(placements...)), field("connections", wireArr(connections...)))...)
 }
 
-func programWire(p *Program) wire {
+// definitionWire is the canonical form of a definition (Lean Codec.definitionWire): the definition
+// file with its fields in a fixed order and the absent optional fields left out. The header of an
+// execution record holds it, so that equal definitions are recorded alike (§12.1).
+func definitionWire(p *Definition) wire {
 	functions := make([]wire, len(p.Functions))
 	for i, f := range p.Functions {
 		fields := []wireField{field("id", wireStr(f.ID))}

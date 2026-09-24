@@ -9,16 +9,27 @@ open Lean Suimon Suimon.Test.Validate
 def withPayloads (before after : State) : List (Value × String) :=
   (Suimon.Trace.introduced before after).map fun v => (v, v)
 
+/-- Reads the definition of a header as `suimon check` does: decoded, then validated. --/
+def loadHeader (w : Wire) : Except String Definition := do
+  let p ← Codec.definition w.toJson
+  p.validate
+  return p
+
+/-- The header line of a record of `p`, with its newline. --/
+def header (p : Definition) : String :=
+  Suimon.Trace.wireCodec.encodeHeader (Codec.definitionWire p) ++ "\n"
+
 structure Recorded where
   /-- The operations of the walk with the payloads of their op records. --/
   steps : List (Op × List (Value × String))
   records : List Suimon.Trace.Record
+  /-- The header, then the records. --/
   text : String
   /-- The state before the first transition and after each committed one. --/
   states : List State
 
 /-- The records of a random walk, with the states after each committed transition. --/
-def recorded (p : Program) (seed : Nat) : IO Recorded := do
+def recorded (p : Definition) (seed : Nat) : IO Recorded := do
   let (_, ops) := Explore.walk p {} seed 10000
   let mut s : State := {}
   let mut states := [s]
@@ -30,19 +41,27 @@ def recorded (p : Program) (seed : Nat) : IO Recorded := do
     s := next
   let (final, records) ← IO.ofExcept (Suimon.Trace.record p {} steps.toList [] 1)
   ensure (final == s) "the recorder reached another state than the walk"
-  return { steps := steps.toList, records, text := Suimon.Trace.text Suimon.Trace.wireCodec records, states }
+  let text := Suimon.Trace.recording Suimon.Trace.wireCodec (Codec.definitionWire p) records
+  return { steps := steps.toList, records, text, states }
 
-def checked (label : String) (p : Program) (text : String) : IO Suimon.Trace.Checked :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec p text with
+def checkedText (label : String) (text : String) : IO Suimon.Trace.Checked :=
+  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
   | .ok c => pure c
   | .error e => throw (IO.userError s!"{label}: {e}")
 
-def rejectedTrace (label fragment : String) (p : Program) (text : String) : IO Unit :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec p text with
+def rejectedText (label fragment : String) (text : String) : IO Unit :=
+  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{fragment}'")
   | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got {e}"
 
-def rejectedSteps (label fragment : String) (p : Program) (steps : List (Op × List (Value × String))) :
+/-- Checks a record of `p` whose lines after the header are `text`. --/
+def checked (label : String) (p : Definition) (text : String) : IO Suimon.Trace.Checked :=
+  checkedText label (header p ++ text)
+
+def rejectedTrace (label fragment : String) (p : Definition) (text : String) : IO Unit :=
+  rejectedText label fragment (header p ++ text)
+
+def rejectedSteps (label fragment : String) (p : Definition) (steps : List (Op × List (Value × String))) :
     IO Unit :=
   match Suimon.Trace.record p {} steps [] 1 with
   | .ok _ => throw (IO.userError s!"{label}: recorded, expected '{fragment}'")
@@ -68,13 +87,20 @@ def keys : Wire → List String
 def run : IO Unit := do
   for name in ["users", "branch", "merge"] do
     let p ← load name
+    let headerLine := Suimon.Trace.wireCodec.encodeHeader (Codec.definitionWire p)
+    -- The header reads back to the definition, on one line.
+    let loaded := match Suimon.Trace.wireCodec.decodeHeader headerLine >>= loadHeader with
+      | .ok q => q == p
+      | .error _ => false
+    ensure (!headerLine.contains '\n' && loaded) s!"{name}: header codec"
     for seed in List.range 20 do
       let label := s!"{name} seed {seed + 1}"
       let r ← recorded p (seed + 1)
-      -- Replaying a whole record reproduces the state of the run that wrote it.
-      let whole ← checked label p r.text
+      -- Replaying a whole record reproduces the state of the run that wrote it, with its definition.
+      let whole ← checkedText label r.text
       ensure (whole.state == r.states.getLast! && whole.committed + 1 == r.states.length && !whole.uncommitted)
         s!"{label}: replay differs from the run"
+      ensure (whole.definition == some p) s!"{label}: another definition"
       ensure (whole.state.values.all fun v => whole.values.any (·.1 == v)) s!"{label}: a value without payload"
       -- Encoding and decoding do not change a record, and an encoded record is one line.
       for record in r.records do
@@ -84,11 +110,11 @@ def run : IO Unit := do
         ensure (decodesTo (Suimon.Trace.wireCodec.decode line) record) s!"{label}: text codec changed {line}"
         ensure (!line.contains '\n') s!"{label}: a newline in {line}"
       -- A commit needs the payload of each value its transition introduces, lists the engine builds
-      -- included; an earlier committed record may hold it, a later one may not.
+      -- included; an earlier committed record may hold it, a later one may not. The header is line 1.
       if let some ((o, values), i) := r.steps.zipIdx.find? (·.1.2.any (isList ·.1)) then
         let lists := values.filter (isList ·.1)
         let stripped := r.steps.set i (o, values.filter (!isList ·.1))
-        rejectedTrace s!"{label} list payload" s!"line {2 * i + 2}: missing payloads" p (written stripped)
+        rejectedTrace s!"{label} list payload" s!"line {2 * i + 3}: missing payloads" p (written stripped)
         rejectedSteps s!"{label} recorder list payload" "missing payloads" p stripped
         let early := stripped.modify 0 fun (first, payloads) => (first, payloads ++ lists)
         let c ← checked s!"{label} early payload" p (written early)
@@ -97,60 +123,106 @@ def run : IO Unit := do
         | .ok (final, _) => ensure (final == r.states.getLast!) s!"{label}: recorder with an early payload"
         | .error e => throw (IO.userError s!"{label}: recorder with an early payload: {e}")
         let later := stripped.modify (i + 1) fun (next, payloads) => (next, payloads ++ lists)
-        rejectedTrace s!"{label} later payload" s!"line {2 * i + 2}: missing payloads" p (written later)
-      -- A crash may cut the record anywhere; recovery keeps exactly the committed transitions.
-      let lines := r.records.map Suimon.Trace.wireCodec.encode
+        rejectedTrace s!"{label} later payload" s!"line {2 * i + 3}: missing payloads" p (written later)
+      -- A crash may cut the record anywhere, the header included; recovery keeps exactly the
+      -- committed transitions, and knows the definition once the header is complete.
+      let lines := headerLine :: r.records.map Suimon.Trace.wireCodec.encode
       for cut in List.range (lines.length + 1) do
-        let prefixText := Suimon.Trace.text Suimon.Trace.wireCodec (r.records.take cut)
+        let prefixText := String.join ((lines.take cut).map (· ++ "\n"))
         let half := match lines[cut]? with
           | some line => (line.take (line.length / 2)).toString
           | none => ""
+        let committed := (cut - 1) / 2
         for torn in [prefixText, prefixText ++ half] do
-          let c ← checked s!"{label} cut {cut}" p torn
-          ensure (c.committed == cut / 2 && c.state == r.states[cut / 2]!) s!"{label} cut {cut}: wrong recovered state"
-          ensure (c.uncommitted == (cut % 2 == 1 || torn.length > prefixText.length))
+          let c ← checkedText s!"{label} cut {cut}" torn
+          ensure (c.committed == committed && c.state == r.states[committed]!)
+            s!"{label} cut {cut}: wrong recovered state"
+          ensure (c.definition == if cut == 0 then none else some p) s!"{label} cut {cut}: definition"
+          ensure (c.uncommitted == ((cut > 0 && (cut - 1) % 2 == 1) || torn.length > prefixText.length))
             s!"{label} cut {cut}: uncommitted flag"
-          ensure ((Suimon.Trace.recover Suimon.Trace.wireCodec p torn).toOption == some r.states[cut / 2]!)
+          ensure ((Suimon.Trace.recover Suimon.Trace.wireCodec loadHeader torn).toOption == some r.states[committed]!)
             s!"{label} cut {cut}: recover"
       -- Corruption before the last commit is an error, not a torn tail.
-      if lines.length ≥ 4 then
-        let corrupt := String.join ((lines.set 1 "{\"seq\":2").map (· ++ "\n"))
-        rejectedTrace s!"{label} corrupt" "line 2" p corrupt
-        let reordered := String.join (((lines.take 2).reverse ++ lines.drop 2).map (· ++ "\n"))
-        rejectedTrace s!"{label} reordered" "expected sequence 1" p reordered
+      if lines.length ≥ 5 then
+        let corrupt := String.join ((lines.set 2 "{\"seq\":2").map (· ++ "\n"))
+        rejectedText s!"{label} corrupt" "line 3" corrupt
+        let swapped := (lines.take 1) ++ (lines.drop 1 |>.take 2).reverse ++ lines.drop 3
+        let reordered := String.join (swapped.map (· ++ "\n"))
+        rejectedText s!"{label} reordered" "line 2: expected sequence 1" reordered
   -- Fields have a fixed order, and empty values are left out.
   ensure (Suimon.Trace.wireCodec.encode (.op 1 (.start (some "v")) [("v", "payload")]) ==
     "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"v\"},\"values\":{\"v\":\"payload\"}}") "op record text"
   ensure (Suimon.Trace.wireCodec.encode (.commit 2) == "{\"seq\":2,\"commit\":true}") "commit record text"
+  ensure (Suimon.Trace.wireCodec.encodeHeader (.obj []) == "{\"definition\":{}}") "header text"
   ensure (keys (Suimon.Trace.recordWire (.op 1 (.start (some "v")) [("v", "payload")])) == ["seq", "op", "values"])
     "op record fields"
   ensure (keys (Suimon.Trace.recordWire (.op 1 (.start none) [])) == ["seq", "op"]) "empty values"
   ensure (keys (Suimon.Trace.recordWire (.commit 2)) == ["seq", "commit"]) "commit record fields"
   ensure (keys (Suimon.Trace.opWire (.invoke [] "a" none)) == ["type", "run", "placement"]) "absent trigger"
   let p ← load "merge"
+  ensure (keys (Codec.definitionWire p) == ["main", "functions", "judges", "transforms", "workflows"])
+    "definition fields"
   let start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
   rejectedTrace "commit twice" "a commit without an op" p (start ++ "{\"seq\":3,\"commit\":true}\n")
   let again := (start.replace "\"seq\":1" "\"seq\":3").replace "\"seq\":2" "\"seq\":4"
-  rejectedTrace "rejected op" "rejected" p (start ++ again)
+  rejectedTrace "rejected op" "line 5: rejected" p (start ++ again)
   rejectedTrace "op twice" "an op before the previous commit" p
     "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"op\":{\"type\":\"cancel\"}}\n"
   rejectedTrace "unknown op field" "unknown field trigger" p "{\"seq\":1,\"op\":{\"type\":\"start\",\"trigger\":\"x\"}}\n"
   rejectedTrace "unknown record field" "unknown field extra" p "{\"seq\":1,\"op\":{\"type\":\"start\"},\"extra\":1}\n"
   rejectedTrace "op and commit" "either an op or a commit" p "{\"seq\":1,\"op\":{\"type\":\"start\"},\"commit\":true}\n"
   rejectedTrace "unknown op" "unknown op type" p "{\"seq\":1,\"op\":{\"type\":\"retry\"}}\n"
-  rejectedTrace "empty line" "line 1" p "\n"
+  rejectedTrace "empty line" "line 2" p "\n"
   let torn ← checked "torn start" p "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com"
   ensure (torn.committed == 0 && torn.uncommitted && torn.state == {}) "torn start"
+  -- The header comes first and only there, and its definition must load.
+  let headerOnly ← checkedText "header only" (header p)
+  ensure (headerOnly.definition == some p && headerOnly.committed == 0 && !headerOnly.uncommitted &&
+    headerOnly.state == {}) "header only"
+  let tornHeader ← checkedText "torn header" ((header p).take 30).toString
+  ensure (tornHeader.definition == none && tornHeader.committed == 0 && tornHeader.uncommitted &&
+    tornHeader.state == {}) "torn header"
+  let empty ← checkedText "empty" ""
+  ensure (empty.definition == none && empty.committed == 0 && !empty.uncommitted) "empty"
+  rejectedText "no header" "line 1: header: unknown field seq" start
+  rejectedText "empty first line" "line 1: unexpected end of input" "\n"
+  rejectedText "header not an object" "line 1: header: expected an object" "[]\n"
+  rejectedText "header without definition" "line 1: header: missing field definition" "{}\n"
+  rejectedText "unknown header field" "line 1: header: unknown field seq" "{\"definition\":{},\"seq\":0}\n"
+  rejectedText "undecodable definition" "line 1: definition: missing field main" "{\"definition\":{}}\n"
+  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n" with
+  | .ok _ => throw (IO.userError "invalid definition: accepted")
+  | .error e => ensure (e == "line 1: unknown main workflow w") s!"invalid definition: {e}"
+  rejectedTrace "header twice" "line 2: record: missing field seq" p (header p)
+  rejectedTrace "header after records" "line 4: record: missing field seq" p (start ++ header p)
   let users ← load "users"
   let startInput := "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}"
   let commit := "{\"seq\":2,\"commit\":true}\n"
   -- Payloads are checked when the transition commits, so an op without its commit needs none.
-  rejectedTrace "missing payload" "line 2: missing payloads for [t]" users (startInput ++ "}\n" ++ commit)
+  rejectedTrace "missing payload" "line 3: missing payloads for [t]" users (startInput ++ "}\n" ++ commit)
   let uncommitted ← checked "uncommitted without payload" users (startInput ++ "}\n")
   ensure (uncommitted.committed == 0 && uncommitted.uncommitted) "uncommitted without payload"
   rejectedTrace "payload not a string" "expected a string" users (startInput ++ ",\"values\":{\"t\":1}}\n")
   let withPayload ← checked "payload" users (startInput ++ ",\"values\":{\"t\":\"x\"}}\n" ++ commit)
   ensure (withPayload.committed == 1 && !withPayload.uncommitted && withPayload.values == [("t", "x")]) "payload"
+  -- No object of a line may repeat a key, at any depth, the header's definition included; the error is
+  -- right after the repeated key. The recorder writes no repeated payload key.
+  rejectedTrace "repeated record key" "line 2: duplicate key \"seq\" at offset 14" p
+    "{\"seq\":1,\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
+  rejectedTrace "repeated op key" "line 2: duplicate key \"type\" at offset 36" p
+    "{\"seq\":1,\"op\":{\"type\":\"start\",\"type\":\"cancel\"}}\n{\"seq\":2,\"commit\":true}\n"
+  rejectedTrace "repeated payload key" "line 2: duplicate key \"t\" at offset 64" users
+    (startInput ++ ",\"values\":{\"t\":\"x\",\"t\":\"y\"}}\n" ++ commit)
+  rejectedText "repeated header key" "line 1: duplicate key \"definition\" at offset 29"
+    "{\"definition\":{},\"definition\":{}}\n"
+  rejectedText "repeated definition key" "line 1: duplicate key \"main\" at offset 32"
+    "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n"
+  rejectedSteps "recorder repeated payload" "duplicate payloads for [t]" users
+    [(.start (some "t"), [("t", "x"), ("t", "y")])]
+  ensure (Suimon.Trace.duplicates ["a", "b", "a", "c", "b", "a"] == ["a", "b"]) "duplicates"
+  -- A record replays against the definition of its header: users records are rejected under merge.
+  rejectedText "another definition" "line 3: rejected"
+    (header p ++ startInput ++ ",\"values\":{\"t\":\"x\"}}\n" ++ commit)
   -- The recorder refuses a transition without the payloads it introduces, and an op the rules reject.
   rejectedSteps "recorder missing payload" "missing payloads" users [(.start (some "t"), [])]
   rejectedSteps "recorder rejected op" "ALREADY_STARTED" p [(.start none, []), (.start none, [])]

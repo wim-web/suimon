@@ -7,7 +7,7 @@ namespace Suimon.Settle
 
 open State
 
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 namespace Own
 

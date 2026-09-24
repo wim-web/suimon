@@ -2,6 +2,8 @@ package suimon
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -48,8 +50,7 @@ var sample = wireObj(
 	field("nums", wireArr(wireNat(0), wireNat(7), wireNat(10), wireNat(^uint64(0)))),
 	field("flags", wireArr(wireBool(true), wireBool(false), wireNull())),
 	field("nested", wireArr(wireArr(), wireObj(), wireArr(wireArr(wireObj(field("", wireArr())))))),
-	field("dup", wireNat(1)),
-	field("dup", wireNat(2)))
+	field("same key, other objects", wireArr(wireObj(field("a", wireObj(field("a", wireNat(1))))), wireObj(field("a", wireNat(2))))))
 
 func TestWireText(t *testing.T) {
 	renders(t, "scalars", wireArr(wireNull(), wireBool(true), wireBool(false), wireNat(0), wireNat(42)),
@@ -76,6 +77,32 @@ func TestWireText(t *testing.T) {
 		if w, err := parseWire(text); err == nil {
 			t.Errorf("%s: accepted %s as %s", label, text, w.render())
 		}
+	}
+	// An object may not repeat a key, compared after its escapes are decoded; the error is right after
+	// the repeated key.
+	for text, want := range map[string]string{
+		`{"a":1,"a":2}`: `duplicate key "a" at offset 10`,
+		wireObj(field("z", wireNat(1)), field("a", wireNat(2)), field("z", wireNat(3))).render(): `duplicate key "z" at offset 16`,
+		`[{"x":{"b":[],"b":{}}}]`:         `duplicate key "b" at offset 17`,
+		`{"a":1,"\u0061":2}`:              `duplicate key "a" at offset 15`,
+		"{\"\\n\\\"\":1, \"\\n\\\"\" :2}": `duplicate key "\n\"" at offset 17`,
+		`{"a":1,"a"`:                      `duplicate key "a" at offset 10`,
+	} {
+		if _, err := parseWire(text); err == nil || err.Error() != want {
+			t.Errorf("%s: got %v, want %q", text, err, want)
+		}
+	}
+	// A big object keeps its keys in a map; the check is the same.
+	var big strings.Builder
+	big.WriteString("{")
+	for i := range 40 {
+		fmt.Fprintf(&big, `"k%d":%d,`, i, i)
+	}
+	if _, err := parseWire(big.String() + `"k0":0}`); err == nil || err.Error() != fmt.Sprintf(`duplicate key "k0" at offset %d`, big.Len()+4) {
+		t.Errorf("big object: %v", err)
+	}
+	if w, err := parseWire(big.String() + `"k40":40}`); err != nil || len(w.fields) != 41 {
+		t.Errorf("big object without a repeated key: %v", err)
 	}
 	// A natural number beyond 2^64-1 parses, and is flagged.
 	if w, err := parseWire("1234567890123456789012345678901234567890"); err != nil || !w.overflow {

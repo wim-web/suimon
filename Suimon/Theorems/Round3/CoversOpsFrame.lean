@@ -13,7 +13,7 @@ namespace Suimon.Round3
 namespace CoversOpsAux
 open State
 
-variable {p : Program} {s t u : State}
+variable {p : Definition} {s t u : State}
 
 /-- The fields of a call fixed at its creation. -/
 def callFix (c : Call) : String × String × Option String × CallTarget × Option Value × Bool × Timeout × Policy :=
@@ -25,11 +25,11 @@ theorem callFix_eq {c c' : Call} (h : callFix c = callFix c') :
   simpa [callFix] using h
 
 /-- A task began, or its declared input transform exists. -/
-def Justified (p : Program) (s : State) (e : Execution) (name : String) : Prop :=
+def Justified (p : Definition) (s : State) (e : Execution) (name : String) : Prop :=
   ¬ NotBegun s e name ∨ ∃ spec tid, s.taskSpec p e name = .ok spec ∧ spec.input = some (.declared tid)
 
 /-- The fields each record takes at its creation from its owner, and two facts on tasks. -/
-structure Created (p : Program) (s : State) : Prop where
+structure Created (p : Definition) (s : State) : Prop where
   invCall : ∀ c ∈ s.calls, c.task = none → ∀ i ∈ s.invocations, i.id = c.owner →
     c.input = i.input ∧ ∀ w pl, s.workflow? p i.run = some w → w.placement? i.placement = some pl →
       c.timeout = pl.timeout ∧ c.policy = pl.policy
@@ -85,7 +85,7 @@ theorem justified_of_run {e : Execution} {name : String} {r : Run} (hr : r ∈ s
 
 /-- How a task may change in a step that creates nothing: its input only when it leaves pending, it
     becomes pending never, and failed only when it began or has a declared input transform. -/
-def TaskMove (p : Program) (t : State) (e : Execution) (tk₀ tk : TaskState) : Prop :=
+def TaskMove (p : Definition) (t : State) (e : Execution) (tk₀ tk : TaskState) : Prop :=
   tk₀.name = tk.name ∧ (tk₀.input = tk.input ∨ tk₀.status = .pending) ∧
   (tk.status = .pending → tk₀.status = .pending ∧ tk₀.input = tk.input) ∧
   (tk.status = .failed → tk₀.status = .failed ∨ Justified p t e tk.name)
@@ -94,7 +94,7 @@ theorem TaskMove.refl {e : Execution} (tk : TaskState) : TaskMove p t e tk tk :=
   ⟨rfl, Or.inl rfl, fun h => ⟨h, rfl⟩, fun h => Or.inl h⟩
 
 /-- Every record after the step is a record from before with the same fixed fields. -/
-structure Frame (p : Program) (s t : State) : Prop where
+structure Frame (p : Definition) (s t : State) : Prop where
   kept : Delivery.Kept s t
   calls : ∀ c ∈ t.calls, ∃ c₀ ∈ s.calls, callFix c₀ = callFix c
   invocations : ∀ i ∈ t.invocations, Delivery.InvOld s i

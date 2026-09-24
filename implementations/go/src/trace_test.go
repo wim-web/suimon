@@ -24,15 +24,29 @@ func genPayloads(t *testing.T, recorder *Recorder, op Op) []Payload {
 	return values
 }
 
-// recorded is the record of a random walk: its transitions with the payloads gen writes, the text,
-// and the state before the first transition and after each committed one.
-func recorded(t *testing.T, p *Program, seed uint64) ([]Transition, string, []*State) {
+// loadHeader reads the definition of a header as suimon check does: decoded, then validated.
+func loadHeader(definition []byte) (*Definition, error) {
+	p, err := ParseDefinition(definition)
+	if err != nil {
+		return nil, err
+	}
+	return p, p.Validate()
+}
+
+// header is the header line of a record of p, with its newline.
+func header(p *Definition) string { return EncodeHeader(p) + "\n" }
+
+// recorded is the record of a random walk: its transitions with the payloads gen writes, the text
+// (the header, then the records), and the state before the first transition and after each
+// committed one.
+func recorded(t *testing.T, p *Definition, seed uint64) ([]Transition, string, []*State) {
 	t.Helper()
 	_, ops := Walk(p, DefaultConfig(), seed, 10000)
 	recorder := NewRecorder(p)
 	states := []*State{recorder.State()}
 	var steps []Transition
 	var text strings.Builder
+	text.WriteString(header(p))
 	for _, op := range ops {
 		values := genPayloads(t, recorder, op)
 		records, err := recorder.Record(op, values)
@@ -72,23 +86,34 @@ func splitPayloads(values []Payload, keep func(Payload) bool) (kept, dropped []P
 	return kept, dropped
 }
 
-func checked(t *testing.T, label string, p *Program, text string) Checked {
+func checkedText(t *testing.T, label, text string) Checked {
 	t.Helper()
-	c, err := Check(p, text)
+	c, err := Check(text, loadHeader)
 	if err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}
 	return c
 }
 
-func rejectedTrace(t *testing.T, label, fragment string, p *Program, text string) {
+func rejectedText(t *testing.T, label, fragment, text string) {
 	t.Helper()
-	_, err := Check(p, text)
+	_, err := Check(text, loadHeader)
 	if err == nil {
 		t.Errorf("%s: accepted, expected %q", label, fragment)
 	} else if !hasFragment(err.Error(), fragment) {
 		t.Errorf("%s: expected %q, got %v", label, fragment, err)
 	}
+}
+
+// checked checks a record of p whose lines after the header are text.
+func checked(t *testing.T, label string, p *Definition, text string) Checked {
+	t.Helper()
+	return checkedText(t, label, header(p)+text)
+}
+
+func rejectedTrace(t *testing.T, label, fragment string, p *Definition, text string) {
+	t.Helper()
+	rejectedText(t, label, fragment, header(p)+text)
 }
 
 // half is the first half of a line in characters, like Lean's line.take (line.length / 2).
@@ -98,17 +123,20 @@ func half(line string) string {
 }
 
 func TestTraceReplay(t *testing.T) {
-	for _, name := range append(programNames, extraPrograms...) {
+	for _, name := range append(definitionNames, extraDefinitions...) {
 		p := load(t, name)
 		listCases := 0
 		for seed := uint64(1); seed <= 20; seed++ {
 			label := fmt.Sprintf("%s seed %d", name, seed)
 			steps, text, states := recorded(t, p, seed)
 			final := states[len(states)-1]
-			// Replaying a whole record reproduces the state of the run that wrote it.
-			whole := checked(t, label, p, text)
+			// Replaying a whole record reproduces the state of the run that wrote it, with its definition.
+			whole := checkedText(t, label, text)
 			if !whole.State.Equal(final) || whole.Committed+1 != len(states) || whole.Uncommitted {
 				t.Fatalf("%s: replay differs from the run", label)
+			}
+			if whole.Definition == nil || EncodeHeader(whole.Definition) != EncodeHeader(p) {
+				t.Fatalf("%s: another definition", label)
 			}
 			for _, v := range whole.State.Values() {
 				if !hasPayload(whole.Values, v) {
@@ -116,7 +144,8 @@ func TestTraceReplay(t *testing.T) {
 				}
 			}
 			// A commit needs the payload of each value its transition introduces, lists the engine
-			// builds included; an earlier committed record may hold it, a later one may not.
+			// builds included; an earlier committed record may hold it, a later one may not. The
+			// header is line 1.
 			for i, step := range steps {
 				kept, lists := splitPayloads(step.Values, func(v Payload) bool { return !isList(v.Value) })
 				if len(lists) == 0 {
@@ -129,7 +158,7 @@ func TestTraceReplay(t *testing.T) {
 					return out
 				}
 				stripped := with(i, nil)
-				rejectedTrace(t, label+" list payload", fmt.Sprintf("line %d: missing payloads", 2*i+2), p, written(stripped))
+				rejectedTrace(t, label+" list payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), p, written(stripped))
 				if _, _, err := RecordTransitions(p, &State{}, stripped, nil, 1); err == nil || !hasFragment(err.Error(), "missing payloads") {
 					t.Fatalf("%s: recorder without a list payload: %v", label, err)
 				}
@@ -141,14 +170,14 @@ func TestTraceReplay(t *testing.T) {
 					t.Fatalf("%s: recorder with an early payload: %v", label, err)
 				}
 				if i+1 < len(steps) {
-					rejectedTrace(t, label+" later payload", fmt.Sprintf("line %d: missing payloads", 2*i+2), p, written(with(i+1, lists)))
+					rejectedTrace(t, label+" later payload", fmt.Sprintf("line %d: missing payloads", 2*i+3), p, written(with(i+1, lists)))
 				}
 				listCases++
 				break
 			}
 			// Every op survives its encoding, and every line is canonical.
-			for _, line := range strings.Split(text, "\n") {
-				if line == "" {
+			for i, line := range strings.Split(text, "\n") {
+				if line == "" || i == 0 {
 					continue
 				}
 				r, err := DecodeRecord(line)
@@ -165,7 +194,8 @@ func TestTraceReplay(t *testing.T) {
 					}
 				}
 			}
-			// A crash may cut the record anywhere; recovery keeps exactly the committed transitions.
+			// A crash may cut the record anywhere, the header included; recovery keeps exactly the
+			// committed transitions, and knows the definition once the header is complete.
 			lines := strings.Split(text, "\n")
 			lines = lines[:len(lines)-1]
 			for cut := 0; cut <= len(lines); cut++ {
@@ -177,26 +207,30 @@ func TestTraceReplay(t *testing.T) {
 				if cut < len(lines) {
 					torn += half(lines[cut])
 				}
+				committed := max(cut-1, 0) / 2
 				for _, text := range []string{prefix, torn} {
-					c := checked(t, fmt.Sprintf("%s cut %d", label, cut), p, text)
-					if c.Committed != cut/2 || !c.State.Equal(states[cut/2]) {
+					c := checkedText(t, fmt.Sprintf("%s cut %d", label, cut), text)
+					if c.Committed != committed || !c.State.Equal(states[committed]) {
 						t.Fatalf("%s cut %d: wrong recovered state", label, cut)
 					}
-					if c.Uncommitted != (cut%2 == 1 || len(text) > len(prefix)) {
+					if (c.Definition == nil) != (cut == 0) {
+						t.Fatalf("%s cut %d: definition %v", label, cut, c.Definition)
+					}
+					if c.Uncommitted != ((cut > 0 && (cut-1)%2 == 1) || len(text) > len(prefix)) {
 						t.Fatalf("%s cut %d: uncommitted flag", label, cut)
 					}
-					if recovered, err := Recover(p, text); err != nil || !recovered.Equal(states[cut/2]) {
+					if recovered, err := Recover(text, loadHeader); err != nil || !recovered.Equal(states[committed]) {
 						t.Fatalf("%s cut %d: recover", label, cut)
 					}
 				}
 			}
 			// Corruption before the last commit is an error, not a torn tail.
-			if len(lines) >= 4 {
+			if len(lines) >= 5 {
 				corrupt := append([]string(nil), lines...)
-				corrupt[1] = `{"seq":2`
-				rejectedTrace(t, label+" corrupt", "line 2", p, strings.Join(corrupt, "\n")+"\n")
-				reordered := append([]string{lines[1], lines[0]}, lines[2:]...)
-				rejectedTrace(t, label+" reordered", "expected sequence 1", p, strings.Join(reordered, "\n")+"\n")
+				corrupt[2] = `{"seq":2`
+				rejectedText(t, label+" corrupt", "line 3", strings.Join(corrupt, "\n")+"\n")
+				reordered := append([]string{lines[0], lines[2], lines[1]}, lines[3:]...)
+				rejectedText(t, label+" reordered", "line 2: expected sequence 1", strings.Join(reordered, "\n")+"\n")
 			}
 		}
 		if listCases == 0 {
@@ -210,7 +244,7 @@ func TestTraceRejections(t *testing.T) {
 	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
 	rejectedTrace(t, "commit twice", "a commit without an op", merge, start+"{\"seq\":3,\"commit\":true}\n")
 	again := strings.ReplaceAll(strings.ReplaceAll(start, `"seq":1`, `"seq":3`), `"seq":2`, `"seq":4`)
-	rejectedTrace(t, "rejected op", "rejected", merge, start+again)
+	rejectedTrace(t, "rejected op", "line 5: rejected", merge, start+again)
 	users := load(t, "users")
 	rejectedTrace(t, "missing payload", "missing payloads", users,
 		"{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n{\"seq\":2,\"commit\":true}\n")
@@ -225,11 +259,29 @@ func TestTraceRejections(t *testing.T) {
 	rejectedTrace(t, "unknown record field", "unknown field extra", merge, "{\"seq\":1,\"op\":{\"type\":\"start\"},\"extra\":1}\n")
 	rejectedTrace(t, "op and commit", "either an op or a commit", merge, "{\"seq\":1,\"op\":{\"type\":\"start\"},\"commit\":true}\n")
 	rejectedTrace(t, "unknown op", "unknown op type", merge, "{\"seq\":1,\"op\":{\"type\":\"retry\"}}\n")
-	rejectedTrace(t, "empty line", "line 1", merge, "\n")
+	rejectedTrace(t, "empty line", "line 2", merge, "\n")
 	torn := checked(t, "torn start", merge, "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"com")
 	if torn.Committed != 0 || !torn.Uncommitted || !torn.State.Equal(&State{}) {
 		t.Errorf("torn start: %+v", torn)
 	}
+	// The header comes first and only there, and its definition must load.
+	if c := checkedText(t, "header only", header(merge)); c.Definition == nil || c.Committed != 0 || c.Uncommitted ||
+		!c.State.Equal(&State{}) || c.Length != len(header(merge)) {
+		t.Errorf("header only: %+v", c)
+	}
+	if c := checkedText(t, "torn header", header(merge)[:30]); c.Definition != nil || c.Committed != 0 || !c.Uncommitted ||
+		!c.State.Equal(&State{}) || c.Length != 0 {
+		t.Errorf("torn header: %+v", c)
+	}
+	if c := checkedText(t, "empty", ""); c.Definition != nil || c.Committed != 0 || c.Uncommitted || !c.State.Equal(&State{}) {
+		t.Errorf("empty: %+v", c)
+	}
+	rejectedText(t, "no header", "line 1: header: unknown field seq", start)
+	rejectedTrace(t, "header twice", "line 2: record: missing field seq", merge, header(merge))
+	rejectedTrace(t, "header after records", "line 4: record: missing field seq", merge, start+header(merge))
+	// A record replays against the definition of its header: users records are rejected under merge.
+	rejectedText(t, "another definition", "line 3: rejected", header(merge)+
+		"{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n")
 	startInput := "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}"
 	rejectedTrace(t, "payload not a string", "expected a string", users, startInput+",\"values\":{\"t\":1}}\n")
 	withPayload := checked(t, "payload", users, startInput+",\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n")
@@ -242,37 +294,67 @@ func TestTraceRejections(t *testing.T) {
 		label, text, want string
 	}{
 		{"missing payload", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n{\"seq\":2,\"commit\":true}\n",
-			"line 2: missing payloads for [t]"},
-		{"rejected op", start + again, `line 4: rejected {"type":"start"}: ALREADY_STARTED`},
+			"line 3: missing payloads for [t]"},
+		{"rejected op", start + again, `line 5: rejected {"type":"start"}: ALREADY_STARTED`},
 		{"an op before the commit", "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"op\":{\"type\":\"start\"}}\n",
-			"line 2: an op before the previous commit"},
-		{"parse error", "{\"seq\":1,\n", "line 1: unterminated object at offset 9"},
-		{"not an object", "[]\n", "line 1: record: expected an object"},
-		{"neither", "{\"seq\":1}\n", "line 1: record: either an op or a commit"},
-		{"commit false", "{\"seq\":1,\"commit\":false}\n", "line 1: record: either an op or a commit"},
-		{"unknown field", "{\"seq\":1,\"commit\":true,\"at\":0}\n", "line 1: record: unknown field at"},
-		{"values", "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":[]}\n", "line 1: record.values: expected an object"},
-		{"payload", "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":1}}\n", "line 1: record.values.v: expected a string"},
-		{"op field", "{\"seq\":1,\"op\":{\"type\":\"fetch\",\"call\":\"c\",\"x\":1}}\n", "line 1: op fetch: unknown field x"},
-		{"op type", "{\"seq\":1,\"op\":{\"type\":\"jump\"}}\n", "line 1: unknown op type jump"},
-		{"null", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":null}}\n", "line 1: op.input: expected a string"},
-		{"path", "{\"seq\":1,\"op\":{\"type\":\"closeRun\",\"run\":[1]}}\n", "line 1: op.run: expected an array of strings"},
-		{"negative", "{\"seq\":-1,\"commit\":true}\n", "line 1: unexpected character '-' at offset 7"},
-		{"seq", "{\"seq\":2,\"commit\":true}\n", "line 1: expected sequence 1, got 2"},
-		{"huge", "{\"seq\":99999999999999999999,\"commit\":true}\n", "line 1: expected sequence 1, got 99999999999999999999"},
+			"line 3: an op before the previous commit"},
+		{"parse error", "{\"seq\":1,\n", "line 2: unterminated object at offset 9"},
+		{"not an object", "[]\n", "line 2: record: expected an object"},
+		{"neither", "{\"seq\":1}\n", "line 2: record: either an op or a commit"},
+		{"commit false", "{\"seq\":1,\"commit\":false}\n", "line 2: record: either an op or a commit"},
+		{"unknown field", "{\"seq\":1,\"commit\":true,\"at\":0}\n", "line 2: record: unknown field at"},
+		{"values", "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":[]}\n", "line 2: record.values: expected an object"},
+		{"payload", "{\"seq\":1,\"op\":{\"type\":\"start\"},\"values\":{\"v\":1}}\n", "line 2: record.values.v: expected a string"},
+		{"op field", "{\"seq\":1,\"op\":{\"type\":\"fetch\",\"call\":\"c\",\"x\":1}}\n", "line 2: op fetch: unknown field x"},
+		{"op type", "{\"seq\":1,\"op\":{\"type\":\"jump\"}}\n", "line 2: unknown op type jump"},
+		{"null", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":null}}\n", "line 2: op.input: expected a string"},
+		{"path", "{\"seq\":1,\"op\":{\"type\":\"closeRun\",\"run\":[1]}}\n", "line 2: op.run: expected an array of strings"},
+		{"negative", "{\"seq\":-1,\"commit\":true}\n", "line 2: unexpected character '-' at offset 7"},
+		{"seq", "{\"seq\":2,\"commit\":true}\n", "line 2: expected sequence 1, got 2"},
+		{"huge", "{\"seq\":99999999999999999999,\"commit\":true}\n", "line 2: expected sequence 1, got 99999999999999999999"},
 		{"huge index", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n" +
 			"{\"seq\":3,\"op\":{\"type\":\"taskOutputFailed\",\"execution\":\"e\",\"task\":\"t\",\"index\":99999999999999999999}}\n{\"seq\":4,\"commit\":true}\n",
-			"line 4: rejected {\"type\":\"taskOutputFailed\",\"execution\":\"e\",\"task\":\"t\",\"index\":9223372036854775807}: UNKNOWN_EXECUTION"},
-		{"invalid UTF-8", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"\xff\"}}\n", "line 1: invalid UTF-8"},
+			"line 5: rejected {\"type\":\"taskOutputFailed\",\"execution\":\"e\",\"task\":\"t\",\"index\":9223372036854775807}: UNKNOWN_EXECUTION"},
+		{"invalid UTF-8", "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"\xff\"}}\n", "line 2: invalid UTF-8"},
+		{"repeated op key", "{\"seq\":1,\"op\":{\"type\":\"start\",\"type\":\"cancel\"}}\n{\"seq\":2,\"commit\":true}\n",
+			`line 2: duplicate key "type" at offset 36`},
+		{"repeated payload key", startInput + ",\"values\":{\"t\":\"x\",\"t\":\"y\"}}\n{\"seq\":2,\"commit\":true}\n",
+			`line 2: duplicate key "t" at offset 64`},
 	}
 	for _, c := range exact {
-		_, err := Check(users, c.text)
+		p := users
 		if c.label == "rejected op" || c.label == "an op before the commit" {
-			_, err = Check(merge, c.text)
+			p = merge
 		}
-		if err == nil || err.Error() != c.want {
+		if _, err := Check(header(p)+c.text, loadHeader); err == nil || err.Error() != c.want {
 			t.Errorf("%s: got %v, want %q", c.label, err, c.want)
 		}
+	}
+	// The header is line 1, and its definition is read like a definition file.
+	headers := []struct {
+		label, text, want string
+	}{
+		{"empty first line", "\n", "line 1: unexpected end of input at offset 0"},
+		{"not an object", "[]\n", "line 1: header: expected an object"},
+		{"without definition", "{}\n", "line 1: header: missing field definition"},
+		{"unknown field", "{\"definition\":{},\"seq\":0}\n", "line 1: header: unknown field seq"},
+		{"undecodable definition", "{\"definition\":{}}\n", "line 1: definition: missing field main"},
+		{"invalid definition", "{\"definition\":{\"main\":\"w\",\"workflows\":[]}}\n", "line 1: unknown main workflow w"},
+		{"invalid UTF-8", "{\"definition\":\"\xff\"}\n", "line 1: invalid UTF-8"},
+		{"repeated definition key", "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n",
+			`line 1: duplicate key "main" at offset 32`},
+	}
+	for _, c := range headers {
+		if _, err := Check(c.text, loadHeader); err == nil || err.Error() != c.want {
+			t.Errorf("header %s: got %v, want %q", c.label, err, c.want)
+		}
+	}
+	// Check gives the definition of the header to load as its canonical JSON, whatever the formatting.
+	var given string
+	if _, err := Check("{ \"definition\" : {\"workflows\":[], \"main\":\"w\", \"limit\":123456789012345678901234567890} }\n",
+		func(definition []byte) (*Definition, error) { given = string(definition); return merge, nil }); err != nil ||
+		given != `{"workflows":[],"main":"w","limit":123456789012345678901234567890}` {
+		t.Errorf("the definition given to load: %v %s", err, given)
 	}
 }
 
@@ -280,14 +362,22 @@ func TestTornTail(t *testing.T) {
 	merge := load(t, "merge")
 	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
 	// A crash inside a multi-byte character leaves invalid UTF-8 in the partial last line only.
-	c, err := Check(merge, start+"{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3\x81")
+	c, err := Check(header(merge)+start+"{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"\xe3\x81", loadHeader)
 	if err != nil || c.Committed != 1 || !c.Uncommitted {
 		t.Errorf("torn tail: %+v %v", c, err)
 	}
-	// The first field of a name counts; every field must be known.
-	c, err = Check(merge, "{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n")
-	if err != nil || c.Committed != 1 {
-		t.Errorf("duplicate field: %+v %v", c, err)
+	c, err = Check("{\"definition\":{\"main\":\"\xe3\x81", loadHeader)
+	if err != nil || c.Definition != nil || !c.Uncommitted {
+		t.Errorf("torn header: %+v %v", c, err)
+	}
+	// No object of a line may repeat a key, at any depth, the definition of the header included.
+	_, err = Check(header(merge)+"{\"seq\":1,\"seq\":7,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n", loadHeader)
+	if err == nil || err.Error() != `line 2: duplicate key "seq" at offset 14` {
+		t.Errorf("duplicate field: %v", err)
+	}
+	_, err = Check("{\"definition\":{\"main\":\"x\"},\"definition\":{}}\n", func([]byte) (*Definition, error) { return merge, nil })
+	if err == nil || err.Error() != `line 1: duplicate key "definition" at offset 39` {
+		t.Errorf("duplicate header field: %v", err)
 	}
 }
 
@@ -386,6 +476,15 @@ func TestRecorder(t *testing.T) {
 	if _, err := recorder.Record(OpStart{Input: ptr("t")}, []Payload{{"t", "\xff"}}); err == nil {
 		t.Error("a payload must be valid UTF-8")
 	}
+	// A line may not repeat a key, so a value has one payload.
+	if _, err := recorder.Record(OpStart{Input: ptr("t")}, []Payload{{"t", "x"}, {"u", "y"}, {"t", "z"}, {"u", "w"}, {"t", "v"}}); err == nil ||
+		err.Error() != "duplicate payloads for [t, u]" {
+		t.Errorf("repeated payload: %v", err)
+	}
+	if _, _, err := Transaction(users, &State{}, OpStart{Input: ptr("t")}, []Payload{{"t", "x"}, {"t", "x"}}, nil, 1); err == nil ||
+		err.Error() != "duplicate payloads for [t]" {
+		t.Errorf("repeated payload in a transaction: %v", err)
+	}
 	records, err := recorder.Record(OpStart{Input: ptr("t")}, []Payload{{"t", `{"tenant":1}`}})
 	if err != nil || len(records) != 2 || records[0].Seq != 1 || !records[1].Commit || records[1].Seq != 2 {
 		t.Fatalf("start: %+v %v", records, err)
@@ -405,6 +504,9 @@ func TestRecorder(t *testing.T) {
 		t.Fatalf("RecordTransitions: %v", err)
 	}
 	c := checked(t, "recorder", users, RecordsText(all))
+	if c.Definition == nil || EncodeHeader(c.Definition) != EncodeHeader(users) {
+		t.Errorf("check: definition %v", c.Definition)
+	}
 	if c.Committed != 2 || len(c.Values) != 1 || c.Values[0].Payload != `{"tenant":1}` {
 		t.Errorf("check: %+v", c)
 	}
@@ -461,7 +563,7 @@ func TestIntroduced(t *testing.T) {
 // A recorder continues a record after its committed transitions, wherever a crash cut it; the
 // continued record replays to the state of the uncut one.
 func TestRecorderFrom(t *testing.T) {
-	for _, name := range append(programNames, extraPrograms...) {
+	for _, name := range append(definitionNames, extraDefinitions...) {
 		p := load(t, name)
 		// The longest of a few walks.
 		var steps []Transition
@@ -472,17 +574,26 @@ func TestRecorderFrom(t *testing.T) {
 				steps, text, states = s, x, st
 			}
 		}
+		// The first line is the header; a cut inside it keeps nothing, and the header is written again.
 		lines := strings.SplitAfter(text, "\n")
 		lines = lines[:len(lines)-1]
 		offset := 0
 		for i, line := range lines {
 			for _, cut := range []int{offset, offset + len(line)/2} {
-				c := checked(t, name, p, text[:cut])
-				if c.Committed != i/2 || c.Length != len(strings.Join(lines[:2*c.Committed], "")) {
+				c := checkedText(t, name, text[:cut])
+				committed, length := 0, 0
+				if i > 0 {
+					committed = (i - 1) / 2
+					length = len(strings.Join(lines[:2*committed+1], ""))
+				}
+				if c.Committed != committed || c.Length != length || (c.Definition == nil) != (i == 0) {
 					t.Fatalf("%s cut %d: committed %d, length %d", name, cut, c.Committed, c.Length)
 				}
 				recorder := NewRecorderFrom(p, c)
 				continued := text[:c.Length]
+				if c.Definition == nil {
+					continued = header(p)
+				}
 				for _, step := range steps[c.Committed:] {
 					records, err := recorder.RecordWith(step.Op, func(v string) (string, error) { return v, nil })
 					if err != nil {

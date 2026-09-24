@@ -15,26 +15,24 @@ import (
 	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
-// The scenarios: each is a program in programs/ run with the functions bound below. Durations are
-// multiples of one unit of simulated I/O, taken from the context of the execution, so that one
-// registry and one engine per program serve every run.
+// The scenarios: each is a definition in definitions/ run with the functions bound below. Durations
+// are multiples of one unit of simulated I/O, taken from the context of the execution, so that one
+// registry and one engine per definition serve every run.
 
-//go:embed programs/*.json
-var programFiles embed.FS
+//go:embed definitions/*.json
+var definitionFiles embed.FS
 
-// A scenario is one program with a default input.
+// A scenario is one definition with a default input.
 type scenario struct {
 	ID          string          `json:"id"`
 	Title       string          `json:"title"`
 	Description string          `json:"description"`
-	Program     json.RawMessage `json:"program"`
+	Definition  json.RawMessage `json:"definition"`
 	Input       json.RawMessage `json:"input,omitempty"`
 	// Compare names the scenario that runs the same input with the same delays another way.
 	Compare string `json:"compare,omitempty"`
 
 	engine *suimon.Engine
-	// program is the parsed Program, for replaying the record into a state.
-	program *suimon.Program
 }
 
 var scenarioList = []struct {
@@ -49,7 +47,7 @@ var scenarioList = []struct {
 	{"stop", "Stop policy", "charge fails and its policy is stop: the workflow stops, and the running ship call is cancelled.", `{"id":"A-200","amount":80}`, ""},
 }
 
-// loadScenarios parses and validates every program (NewEngine) against one registry.
+// loadScenarios parses and validates every definition (NewEngine) against one registry.
 func loadScenarios() ([]*scenario, error) {
 	registry, err := suimon.NewRegistry(bindings()...)
 	if err != nil {
@@ -57,11 +55,11 @@ func loadScenarios() ([]*scenario, error) {
 	}
 	var out []*scenario
 	for _, s := range scenarioList {
-		data, err := programFiles.ReadFile("programs/" + s.id + ".json")
+		data, err := definitionFiles.ReadFile("definitions/" + s.id + ".json")
 		if err != nil {
 			return nil, err
 		}
-		p, err := suimon.ParseProgram(data)
+		p, err := suimon.ParseDefinition(data)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", s.id, err)
 		}
@@ -73,8 +71,8 @@ func loadScenarios() ([]*scenario, error) {
 		if err := json.Compact(&compact, data); err != nil {
 			return nil, err
 		}
-		sc := &scenario{ID: s.id, Title: s.title, Description: s.description, Program: json.RawMessage(compact.String()),
-			Compare: s.compare, engine: engine, program: p}
+		sc := &scenario{ID: s.id, Title: s.title, Description: s.description, Definition: json.RawMessage(compact.String()),
+			Compare: s.compare, engine: engine}
 		if s.input != "" {
 			sc.Input = json.RawMessage(s.input)
 		}

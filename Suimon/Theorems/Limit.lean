@@ -12,17 +12,17 @@ def State.TaskCallsOwned (s : State) : Prop :=
   ∀ c ∈ s.calls, ∀ name, c.task = some name →
     ∃ e ∈ s.executions, e.id = c.owner ∧ ∃ t ∈ e.tasks, t.name = name ∧ t.status ≠ .pending ∧ t.status ≠ .ready
 
-theorem Reachable.taskCallsOwned {p : Program} {s : State} (h : Reachable p s) : s.TaskCallsOwned :=
+theorem Reachable.taskCallsOwned {p : Definition} {s : State} (h : Reachable p s) : s.TaskCallsOwned :=
   (Limit.reachable_inv h).calls
 
-/-- Task names are distinct within each execution (from a valid program, §8.1). --/
-theorem Reachable.taskNames {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
+/-- Task names are distinct within each execution (from a valid definition, §8.1). --/
+theorem Reachable.taskNames {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
     ∀ e ∈ s.executions, (e.tasks.map (·.name)).Nodup :=
   (Limit.reachable_limit valid h).1
 
 /-- A concurrency execution never runs more tasks than its limit, counting a cancelled call until it
     terminates (§8.2). --/
-theorem Reachable.withinLimit {p : Program} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
+theorem Reachable.withinLimit {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
     ∀ e ∈ s.executions, ∀ c, s.concurrencyOf p e = .ok c → (e.tasks.filter (s.holdsSlot e)).length ≤ c.limit :=
   (Limit.reachable_limit valid h).2
 
@@ -33,7 +33,7 @@ theorem State.holdsSlot_of_taskEnded {s : State} {e : Execution} {t : TaskState}
   exact h.1.2
 
 /-- Task results and task calls stay inside their own execution (§8.4). --/
-theorem Reachable.taskResultsOwned {p : Program} {s : State} (h : Reachable p s) :
+theorem Reachable.taskResultsOwned {p : Definition} {s : State} (h : Reachable p s) :
     ∀ r ∈ s.taskResults, ∃ e ∈ s.executions, e.id = r.execution ∧ ∃ t ∈ e.tasks, t.name = r.task := by
   intro r hr
   obtain ⟨e, he, hid, x, hx, hn, -⟩ := (Limit.reachable_inv h).results r hr

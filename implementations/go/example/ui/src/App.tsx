@@ -79,7 +79,7 @@ export function App() {
   });
   const report = current ? reports[current.id] : undefined;
 
-  return <WorkflowWorkbench key={scenario.id} program={scenario.program} state={current?.state} records={current?.records}
+  return <WorkflowWorkbench key={scenario.id} definition={scenario.definition} state={current?.state} records={current?.records}
     title={scenario.title} subtitle="suimon Go runtime · playground"
     actions={<>
       <button className="sui-button" aria-pressed={timeline} onClick={() => setTimeline(!timeline)}><ChartGantt size={13} />Timeline</button>

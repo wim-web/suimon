@@ -7,12 +7,12 @@ namespace Suimon.Round3
 namespace RunConformAux
 open State
 
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- How a task of an execution after a step that does not stop came to be: a task of a new execution;
     the same task as before, still not begun if it had not; a pending task whose input was transformed
     or failed to transform (without a stop); or a task that began, or whose call or run moved it on. -/
-def TaskFrom (p : Program) (s t : State) (op : Op) (e : Execution) (tk : TaskState) : Prop :=
+def TaskFrom (p : Definition) (s t : State) (op : Op) (e : Execution) (tk : TaskState) : Prop :=
   (e.id ∉ s.executions.map (·.id) ∧ tk.input = none ∧
     ∃ c, t.concurrencyOf p e = .ok c ∧ tk.status = (if c.input.isSome then .pending else .ready)) ∨
   ∃ e₀ ∈ s.executions, e₀.id = e.id ∧ e₀.run = e.run ∧ e₀.placement = e.placement ∧

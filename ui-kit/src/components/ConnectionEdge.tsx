@@ -1,7 +1,7 @@
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath } from '@xyflow/react';
 import type { Edge, EdgeProps } from '@xyflow/react';
 import type { Connection } from '../types';
-import type { Kind } from '../lib/program';
+import type { Kind } from '../lib/definition';
 import type { ConnectionStatus } from '../lib/status';
 
 export type ConnectionEdgeData = { index: number; connection: Connection; kind: Kind | null; status?: ConnectionStatus; highlighted?: boolean };

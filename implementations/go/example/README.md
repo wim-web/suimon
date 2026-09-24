@@ -18,4 +18,4 @@ go -C implementations/go run ./example -ui
 
 [http://127.0.0.1:8080](http://127.0.0.1:8080) を開きます。オプションは `go -C implementations/go run ./example -h` で確認できます。
 
-[プログラム](programs/) / [関数と登録](scenarios.go) / [API](server.go) / [UI](ui/src/)
+[workflow構成](definitions/) / [関数と登録](scenarios.go) / [API](server.go) / [UI](ui/src/)

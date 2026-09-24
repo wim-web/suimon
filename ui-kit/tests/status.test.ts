@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest';
 import type { RuntimeState } from '../src/types';
 import { armOutcome, childRuns, invocationResults, resultSource, runLabel, runOverlay, runTree, taskOutputValue } from '../src/lib/status';
-import { program, state } from './helpers';
+import { definition, state } from './helpers';
 
 it('summarizes each placement of the root run', () => {
-  const overlay = runOverlay(program('users'), state('users-a'), [])!;
+  const overlay = runOverlay(definition('users'), state('users-a'), [])!;
   expect(overlay.run.workflow).toBe('users');
   const perUser = overlay.placements.perUser!;
   expect(perUser.counts).toEqual({ succeeded: 2 });
@@ -17,7 +17,7 @@ it('summarizes each placement of the root run', () => {
   expect(overlay.placements.fetchAllUsers!.results).toBe(2);
   expect(overlay.placements.all!.results).toBe(1);
   expect(overlay.connections).toEqual({ 0: { values: 2, triggers: 0, failed: 0 }, 1: { values: 2, triggers: 0, failed: 0 } });
-  expect(runOverlay(program('merge'), state('merge-a'), [])!.connections[2]).toEqual({ values: 0, triggers: 1, failed: 0 });
+  expect(runOverlay(definition('merge'), state('merge-a'), [])!.connections[2]).toEqual({ values: 0, triggers: 1, failed: 0 });
 });
 
 it('nests child runs under the run that called them, through the execution of a task', () => {
@@ -27,14 +27,14 @@ it('nests child runs under the run that called them, through the execution of a 
   const child = tree[1]!;
   expect(child.owner?.execution?.placement).toBe('perUser');
   expect(childRuns(s, child.run.owner!, 'profile')).toEqual([child.run]);
-  const overlay = runOverlay(program('users'), s, child.run.path)!;
+  const overlay = runOverlay(definition('users'), s, child.run.path)!;
   expect(overlay.run.workflow).toBe('profileFlow');
   expect(Object.values(overlay.placements).map(p => [p.placement, p.counts.succeeded, p.settled?.outcome])).toEqual([['fetch', 1, 'normal'], ['format', 1, 'normal']]);
-  expect(runOverlay(program('users'), s, ['nope'])).toBeNull();
+  expect(runOverlay(definition('users'), s, ['nope'])).toBeNull();
 });
 
 it('distinguishes running, waiting, skipped and failed placements', () => {
-  const branch = program('branch');
+  const branch = definition('branch');
   const s: RuntimeState = {
     status: 'running', started: true, cancelled: false,
     runs: [{ path: [], workflow: 'shipping', input: null, owner: null, task: null, complete: false }],
@@ -62,7 +62,7 @@ it('distinguishes running, waiting, skipped and failed placements', () => {
 });
 
 it('counts task outputs by state and attributes results to their producer', () => {
-  const p = program('users');
+  const p = definition('users');
   const failed = runOverlay(p, state('users-b'), [])!.placements.perUser!;
   expect(failed.taskOutputs).toEqual({ value: 2, failed: 1 });
   expect(failed.failures.map(f => [f.task, f.cause]).sort()).toEqual([['orders', 'timeout'], ['profile', 'transform']]);

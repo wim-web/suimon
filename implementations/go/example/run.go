@@ -12,8 +12,8 @@ import (
 )
 
 // A run is one execution of a scenario. It is its own journal: the engine appends the record
-// lines to it, and progress replays them with Check into the current state, as a reader of a
-// journal file would.
+// lines to it, the header with the definition first, and progress replays them with Check into the
+// current state, as a reader of a journal file would.
 type run struct {
 	id       string
 	scenario *scenario
@@ -82,16 +82,16 @@ func (r *run) signal() {
 // progress is what a client sees of a run: the record lines from offset on, the state they
 // establish, and the spans of user code.
 type progress struct {
-	ID        string          `json:"id"`
-	Scenario  string          `json:"scenario"`
-	Program   json.RawMessage `json:"program"`
-	State     json.RawMessage `json:"state"`
-	Offset    int             `json:"offset"`
-	Records   []string        `json:"records"`
-	Spans     []span          `json:"spans"`
-	ElapsedMs float64         `json:"elapsedMs"`
-	Done      bool            `json:"done"`
-	Error     string          `json:"error,omitempty"`
+	ID         string          `json:"id"`
+	Scenario   string          `json:"scenario"`
+	Definition json.RawMessage `json:"definition"`
+	State      json.RawMessage `json:"state"`
+	Offset     int             `json:"offset"`
+	Records    []string        `json:"records"`
+	Spans      []span          `json:"spans"`
+	ElapsedMs  float64         `json:"elapsedMs"`
+	Done       bool            `json:"done"`
+	Error      string          `json:"error,omitempty"`
 }
 
 // progress returns the progress from record offset on, and a channel closed on the next change.
@@ -101,7 +101,7 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	done, runErr, changed := r.done, r.err, r.changed
 	r.mu.Unlock()
 	offset = min(max(offset, 0), len(lines))
-	checked, err := suimon.Check(r.scenario.program, strings.Join(lines, "\n")+"\n")
+	checked, err := suimon.Check(strings.Join(lines, "\n")+"\n", readDefinition)
 	if err != nil {
 		return progress{}, nil, fmt.Errorf("replaying the record: %w", err)
 	}
@@ -109,9 +109,19 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	if err != nil {
 		return progress{}, nil, err
 	}
-	return progress{ID: r.id, Scenario: r.scenario.ID, Program: r.scenario.Program, State: state, Offset: offset,
+	return progress{ID: r.id, Scenario: r.scenario.ID, Definition: r.scenario.Definition, State: state, Offset: offset,
 		Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(), ElapsedMs: r.env.now(), Done: done,
 		Error: runErr}, changed, nil
+}
+
+// readDefinition reads the definition of the header of a record, as a reader of a journal file would:
+// decoded, then validated.
+func readDefinition(data []byte) (*suimon.Definition, error) {
+	p, err := suimon.ParseDefinition(data)
+	if err != nil {
+		return nil, err
+	}
+	return p, p.Validate()
 }
 
 // wait waits for the run to finish.

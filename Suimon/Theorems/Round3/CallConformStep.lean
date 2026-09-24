@@ -11,7 +11,7 @@ open State
 
 namespace CallConformAux
 
-variable {p : Program} {env : Env} {s t : State}
+variable {p : Definition} {env : Env} {s t : State}
 
 /-- A task that has not begun has no call, so storing it keeps the owner of every call. -/
 theorem Facts.ownerKept_setTask (F : Facts p s) {e : Execution} {ts ts' : TaskState}

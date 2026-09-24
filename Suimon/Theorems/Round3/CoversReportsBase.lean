@@ -11,7 +11,7 @@ run 2 (`Covers`), where it ended (`Saturated`), and `CallConform` in both runs p
 script. So the call, the results it reported and its owner agree with `T`. -/
 
 section Base
-variable {p : Program} {env : Env} {T s s' : State}
+variable {p : Definition} {env : Env} {T s s' : State}
 
 /-! ### How a script ends a call -/
 
@@ -117,7 +117,7 @@ theorem nonjudge_owner_arm (own : Delivery.Own p s) (wk : s.WellKeyed) {c : Call
 /-! ### What both runs give at a report step -/
 
 /-- The facts a report step of run 1 gives about both runs. -/
-structure Facts (p : Program) (env : Env) (T s s' : State) : Prop where
+structure Facts (p : Definition) (env : Env) (T s s' : State) : Prop where
   reach : Reachable p s
   wk : s.WellKeyed
   act : Settle.Active p s

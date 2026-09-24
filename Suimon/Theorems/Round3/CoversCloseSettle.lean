@@ -15,7 +15,7 @@ open State
 
 namespace CoversCloseAux
 
-variable {p : Program} {env : Env} {s T : State}
+variable {p : Definition} {env : Env} {s T : State}
 
 /-- A result of `T` of a placement whose invocations in `T` are ended invocations of `s` is a result of
     `s`, unless it is the aggregate of a waitStream or Merge that `T` settled normally. -/
@@ -204,7 +204,7 @@ theorem inputs_back (valid : p.validate = .ok ()) (hT : Reachable p T) (cov : Co
   | entry =>
     exfalso
     obtain ⟨pl', hpl', hcase⟩ := Delivery.shape?_eq hsh
-    have hname := ((Program.validate_ok valid).workflows w hwm).names
+    have hname := ((Definition.validate_ok valid).workflows w hwm).names
     rw [Workflow.placement?_of_mem hname hplm] at hpl'
     cases hpl'
     rcases hcase with ⟨-, h⟩ | ⟨hm, ⟨he, -⟩ | ⟨-, -, h⟩ | ⟨-, j', c', -, ⟨-, h⟩ | ⟨-, h⟩⟩⟩

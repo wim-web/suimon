@@ -6,7 +6,7 @@ namespace Suimon.Settle
 
 open State
 
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 namespace SettledInv
 
@@ -506,7 +506,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
 end SettledInv
 
 /-- All four layers of the settlement invariant hold in every reachable state. --/
-theorem reachable {p : Program} {s : State} (h : Reachable p s) :
+theorem reachable {p : Definition} {s : State} (h : Reachable p s) :
     Own p s ∧ Active p s ∧ Prov p s ∧ SettledInv p s := by
   induction h with
   | empty => exact ⟨Own.empty, Active.empty, Prov.empty, SettledInv.empty⟩

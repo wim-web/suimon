@@ -7,7 +7,7 @@ open State
 /-! ## [24] Round3/CoversClose.lean — task F6 -/
 
 section CoversClose
-variable {p : Program} {env : Env} {s s' T : State}
+variable {p : Definition} {env : Env} {s s' T : State}
 
 open CoversCloseAux in
 /-- `settle`: `settle_view_agree`, then `settleOutcome_congr`, then `Stable.settled` in `T` give the

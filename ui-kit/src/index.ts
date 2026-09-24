@@ -1,10 +1,10 @@
 import './styles.css';
 
 export * from './types';
-export { parseProgram, parseState, parseRecords, parseRecordLog } from './lib/parse';
+export { parseDefinition, parseState, parseRecords, parseRecordLog } from './lib/parse';
 export type { RecordOptions } from './lib/parse';
-export { findWorkflow, findPlacement, renderValueType, isEntry, isEndpoint, incoming, outgoing, calledWorkflows, bodyLabel, deriveKinds } from './lib/program';
-export type { Kind, IndexedConnection } from './lib/program';
+export { findWorkflow, findPlacement, renderValueType, isEntry, isEndpoint, incoming, outgoing, calledWorkflows, bodyLabel, deriveKinds } from './lib/definition';
+export type { Kind, IndexedConnection } from './lib/definition';
 export { layoutWorkflow, placementHeight, NODE_WIDTH } from './lib/layout';
 export type { Point, LayoutNode, LayoutEdge, WorkflowLayout } from './lib/layout';
 export { samePath, pathKey, findRun, findInvocation, findExecution, runOwner, childRuns, runTree, runLabel, runOverlay, armOutcome, taskOutputValue, taskOutputState, resultSource, invocationResults } from './lib/status';

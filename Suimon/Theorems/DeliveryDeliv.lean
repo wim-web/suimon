@@ -8,7 +8,7 @@ open State
 /-- A Single placement has at most one result in a run, and a settled placement received every
     eligible result on each input connection; unless its source settled, that connection has a
     delivery and a Single source. --/
-structure Deliv (p : Program) (s : State) : Prop where
+structure Deliv (p : Definition) (s : State) : Prop where
   one : ∀ w path name, s.workflow? p path = some w → w.outputKind? p name = some .single →
     ∀ r ∈ s.results, ∀ r' ∈ s.results, r.run = path → r.placement = name → r'.run = path → r'.placement = name →
       r.id = r'.id
@@ -17,11 +17,11 @@ structure Deliv (p : Program) (s : State) : Prop where
       (∀ r ∈ s.eligible x.run c, (s.delivery? x.run j r.id).isSome) ∧
       ((s.settled? x.run c.source).isSome ∨ (s.deliveriesOn x.run j ≠ [] ∧ w.outputKind? p c.source = some .single))
 
-theorem Deliv.empty (p : Program) : Deliv p {} :=
+theorem Deliv.empty (p : Definition) : Deliv p {} :=
   ⟨(fun _ _ _ _ _ _ h => nomatch h), (fun _ h => nomatch h)⟩
 
 section
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- The run of a result exists. --/
 theorem result_run (inv : Inv p s) {r : Result} (hr : r ∈ s.results) : ∃ w, s.workflow? p r.run = some w := by
@@ -248,7 +248,7 @@ theorem step_deliv (inv : Inv p s) (d : Deliv p s) (hs : step p s op = .ok t) : 
 
 end
 
-theorem Reachable.deliv {p : Program} {s : State} (h : Reachable p s) : Deliv p s := by
+theorem Reachable.deliv {p : Definition} {s : State} (h : Reachable p s) : Deliv p s := by
   induction h with
   | empty => exact Deliv.empty p
   | step op hr hs ih => exact step_deliv (Reachable.inv hr) ih hs

@@ -1,5 +1,5 @@
-import type { ExecutionRecord, Op, Path, Program, RuntimeState, Transition } from '../types';
-import { findWorkflow } from './program';
+import type { Definition, ExecutionRecord, Op, Path, RuntimeState, Transition } from '../types';
+import { findWorkflow } from './definition';
 import { findExecution, findInvocation, findRun, runOwner, samePath } from './status';
 
 /** Op records with whether their commit followed; an op without its commit is uncommitted. */
@@ -57,14 +57,14 @@ function callRelation(state: RuntimeState | undefined, id: string): RecordRelati
  * Relates an op to a run and placement. invoke and settle name them; call, task and execution ops
  * are resolved through the state, so they stay unrelated when the state does not know the call yet.
  */
-export function recordRelation(op: Op, program: Program, state?: RuntimeState): RecordRelation {
+export function recordRelation(op: Op, definition: Definition, state?: RuntimeState): RecordRelation {
   const workflowOf = (run: Path) => {
     const found = state && findRun(state, run);
-    return findWorkflow(program, found ? found.workflow : run.length ? '' : program.main);
+    return findWorkflow(definition, found ? found.workflow : run.length ? '' : definition.main);
   };
   switch (op.type) {
     case 'start': {
-      const main = findWorkflow(program, program.main);
+      const main = findWorkflow(definition, definition.main);
       return main?.input ? { run: [], placement: main.input.placement } : { run: [] };
     }
     case 'invoke': case 'settle': return { run: op.run, placement: op.placement };

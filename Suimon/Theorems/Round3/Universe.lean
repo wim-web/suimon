@@ -8,15 +8,15 @@ open State
 /-! ## [11] Round3/Universe.lean — task D2
 
 Identities never contain values, so the records a conforming execution can create are bounded by a
-finite set computed from the program and the behavior alone: every source result may trigger every
+finite set computed from the definition and the behavior alone: every source result may trigger every
 target (arms and transform failures are ignored), and every call may yield all its elements. -/
 
 section UniverseSection
-variable {p : Program} {env : Env} {s : State}
+variable {p : Definition} {env : Env} {s : State}
 
 /-- Result identities a placement of the run at `path` can produce, over-approximated. The fuel bounds
     connection paths, as for `Workflow.kind?`; `w.placements.length + 1` suffices in an acyclic workflow. -/
-def possibleResults (p : Program) (B : Behavior) (path : Path) (w : Workflow) : Nat → String → List ResultId
+def possibleResults (p : Definition) (B : Behavior) (path : Path) (w : Workflow) : Nat → String → List ResultId
   | 0, _ => []
   | fuel + 1, name =>
     match w.placement? name with
@@ -62,7 +62,7 @@ def Universe.join (us : List Universe) : Universe := us.foldr (· ++ ·) {}
 
 /-- The records of one run of `w` at `path` and of the runs it calls. `depth` bounds the nesting of
     workflow calls; `p.depth` suffices when calls are acyclic (`call_rank`). -/
-def runUniverse (p : Program) (B : Behavior) : Nat → Path → Workflow → Universe
+def runUniverse (p : Definition) (B : Behavior) : Nat → Path → Workflow → Universe
   | 0, _, _ => {}
   | depth + 1, path, w =>
     let results := possibleResults p B path w (w.placements.length + 1)
@@ -99,8 +99,8 @@ def runUniverse (p : Program) (B : Behavior) : Nat → Path → Workflow → Uni
       | .waitStream _ | .merge _ => own
     ({ runs := [path] } : Universe) ++ Universe.join (w.placements.map perPlacement)
 
-/-- The universe of a program under a behavior. It does not depend on the input value. -/
-def universeOf (p : Program) (B : Behavior) : Universe :=
+/-- The universe of a definition under a behavior. It does not depend on the input value. -/
+def universeOf (p : Definition) (B : Behavior) : Universe :=
   match p.workflow? p.main with
   | some w => runUniverse p B p.depth [] w
   | none => {}
@@ -125,7 +125,7 @@ def Universe.weight (B : Behavior) (u : Universe) : Nat :=
     2 * u.executions.length + 3 * u.tasks.length + u.results.length + 2 * u.taskResults.length +
     u.deliveries.length + u.settled.length
 
-def workBound (p : Program) (B : Behavior) : Nat := (universeOf p B).weight B
+def workBound (p : Definition) (B : Behavior) : Nat := (universeOf p B).weight B
 
 namespace UniverseProof
 
@@ -135,9 +135,9 @@ namespace UniverseProof
 `perPlacement`, `execU`, `childU`). Every result is allowed by the universe of its run
 (`results_allowed`, by induction on the placement rank, from the result shapes of `UniverseInv.lean`),
 hence so is every available trigger (`trigger_allowed`); the universe of every run is part of the
-program's universe (`RunU`, by induction over the execution, with `call_rank` bounding the depth). Each
-record's key is then found in the part of its placement (`covers_of_conforming`), and unique keys give
-the bound (`work_le_weight`).
+definition's universe (`RunU`, by induction over the execution, with `call_rank` bounding the depth).
+Each record's key is then found in the part of its placement (`covers_of_conforming`), and unique keys
+give the bound (`work_le_weight`).
 
 ### Universes as key sets -/
 
@@ -225,7 +225,7 @@ def triggersBy (w : Workflow) (name : String) (res : String → List ResultId) :
     | cs => cs.flatMap fun c => (res c.source).map some
 
 /-- One unfolding of `possibleResults`. -/
-theorem possibleResults_succ {p : Program} {B : Behavior} {path : Path} {w : Workflow} {fuel : Nat}
+theorem possibleResults_succ {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {fuel : Nat}
     {name : String} :
     possibleResults p B path w (fuel + 1) name = match w.placement? name with
       | none => []
@@ -234,21 +234,21 @@ theorem possibleResults_succ {p : Program} {B : Behavior} {path : Path} {w : Wor
   rfl
 
 /-- The results function of `runUniverse`. -/
-def resultsIn (p : Program) (B : Behavior) (path : Path) (w : Workflow) : String → List ResultId :=
+def resultsIn (p : Definition) (B : Behavior) (path : Path) (w : Workflow) : String → List ResultId :=
   possibleResults p B path w (w.placements.length + 1)
 
 /-- The triggers function of `runUniverse`. -/
-def triggersIn (p : Program) (B : Behavior) (path : Path) (w : Workflow) (name : String) : List (Option ResultId) :=
+def triggersIn (p : Definition) (B : Behavior) (path : Path) (w : Workflow) (name : String) : List (Option ResultId) :=
   triggersBy w name (resultsIn p B path w)
 
 /-- A child run's universe. -/
-def childU (p : Program) (B : Behavior) (depth : Nat) (childPath : Path) (wf : String) : Universe :=
+def childU (p : Definition) (B : Behavior) (depth : Nat) (childPath : Path) (wf : String) : Universe :=
   match p.workflow? wf with
   | some cw => runUniverse p B depth childPath cw
   | none => {}
 
 /-- The records the universe keeps for one invocation of a concurrency. -/
-def execU (p : Program) (B : Behavior) (depth : Nat) (path : Path) (cc : Concurrency) (id : String) : Universe :=
+def execU (p : Definition) (B : Behavior) (depth : Nat) (path : Path) (cc : Concurrency) (id : String) : Universe :=
   ({ tasks := cc.tasks.map fun t => (id, t.name)
      calls := cc.tasks.filterMap fun t => match t.body with
        | .function _ => some (Key.task id t.name)
@@ -261,12 +261,12 @@ def execU (p : Program) (B : Behavior) (depth : Nat) (path : Path) (cc : Concurr
 
 /-- The part of a run's universe every placement has, whatever its control: its settlement, its
     results and the deliveries on its input connections. -/
-def ownU (p : Program) (B : Behavior) (path : Path) (w : Workflow) (pl : Placement) : Universe := {
+def ownU (p : Definition) (B : Behavior) (path : Path) (w : Workflow) (pl : Placement) : Universe := {
     settled := [(path, pl.name)], results := resultsIn p B path w pl.name
     deliveries := (w.inputs pl.name).flatMap fun (j, c) => (resultsIn p B path w c.source).map fun r => (path, j, r) }
 
 /-- The records the universe keeps for one placement of a run. -/
-def perPlacement (p : Program) (B : Behavior) (depth : Nat) (path : Path) (w : Workflow) (pl : Placement) :
+def perPlacement (p : Definition) (B : Behavior) (depth : Nat) (path : Path) (w : Workflow) (pl : Placement) :
     Universe :=
   let ids := (triggersIn p B path w pl.name).map (Key.invocation path pl.name)
   match pl.control with
@@ -279,7 +279,7 @@ def perPlacement (p : Program) (B : Behavior) (depth : Nat) (path : Path) (w : W
   | .waitStream _ | .merge _ => ownU p B path w pl
 
 /-- One unfolding of `runUniverse`. -/
-theorem runUniverse_succ {p : Program} {B : Behavior} {depth : Nat} {path : Path} {w : Workflow} :
+theorem runUniverse_succ {p : Definition} {B : Behavior} {depth : Nat} {path : Path} {w : Workflow} :
     runUniverse p B (depth + 1) path w =
       ({ runs := [path] } : Universe) ++ Universe.join (w.placements.map (perPlacement p B depth path w)) := by
   rw [runUniverse]
@@ -287,7 +287,7 @@ theorem runUniverse_succ {p : Program} {B : Behavior} {depth : Nat} {path : Path
 
 /-! ### Fuel stability of `possibleResults` -/
 
-theorem possibleResults_of_not_mem {p : Program} {B : Behavior} {path : Path} {w : Workflow} {name : String}
+theorem possibleResults_of_not_mem {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {name : String}
     (h : name ∉ w.placements.map (·.name)) : ∀ fuel, possibleResults p B path w fuel name = []
   | 0 => rfl
   | _ + 1 => by rw [possibleResults_succ, Workflow.placement?_eq_none h]
@@ -306,7 +306,7 @@ theorem triggersBy_congr {w : Workflow} {name : String} {res res' : String → L
 
 /-- `possibleResults` stops depending on the fuel once the fuel exceeds the rank of the placement, for
     any rank that increases along connections (the model is `Workflow.kind?_fuel_stable`). -/
-theorem possibleResults_fuel_stable {p : Program} {B : Behavior} {path : Path} {w : Workflow} {rank : String → Nat}
+theorem possibleResults_fuel_stable {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {rank : String → Nat}
     (hrank : ∀ c ∈ w.connections, c.source ∈ w.placements.map (·.name) →
       c.target ∈ w.placements.map (·.name) → rank c.source < rank c.target) :
     ∀ m name f g, (name ∈ w.placements.map (·.name) → rank name < m) → m ≤ f → m ≤ g →
@@ -335,7 +335,7 @@ theorem possibleResults_fuel_stable {p : Program} {B : Behavior} {path : Path} {
     · rw [possibleResults_of_not_mem hn, possibleResults_of_not_mem hn]
 
 /-- In an acyclic workflow, `resultsIn` is the rule applied to `triggersIn`. -/
-theorem resultsIn_eq {p : Program} {B : Behavior} {path : Path} {w : Workflow} {name : String}
+theorem resultsIn_eq {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {name : String}
     (hacyc : w.acyclic = true) :
     resultsIn p B path w name = match w.placement? name with
       | none => []
@@ -413,7 +413,7 @@ theorem mem_resultsFor_aggregate {B : Behavior} {path : Path} {name : String} {c
 /-! ### Every result and every trigger is allowed -/
 
 /-- An available trigger is allowed once the results of the placement's sources are. -/
-theorem trigAvail_mem {p : Program} {B : Behavior} {s : State} (inv : Delivery.Inv p s) {path : Path}
+theorem trigAvail_mem {p : Definition} {B : Behavior} {s : State} (inv : Delivery.Inv p s) {path : Path}
     {w : Workflow} {name : String} {trig : Option ResultId} (hw : s.workflow? p path = some w)
     (h : TrigAvail s path w name trig)
     (hsrc : ∀ r ∈ s.results, ∀ c ∈ w.connections, c.target = name → r.run = path → r.placement = c.source →
@@ -435,15 +435,15 @@ theorem trigAvail_mem {p : Program} {B : Behavior} {s : State} (inv : Delivery.I
 /-- Every result of a conforming execution is allowed by the universe of its run. By induction on the
     rank of its placement: the trigger of the invocation it comes from is a result of a source, which
     has a lower rank. -/
-theorem results_allowed {p : Program} {B : Behavior} {s : State} (valid : p.validate = .ok ()) (reach : Reachable p s)
+theorem results_allowed {p : Definition} {B : Behavior} {s : State} (valid : p.validate = .ok ()) (reach : Reachable p s)
     (hshape : ∀ r ∈ s.results, ResultShape p B s r) :
     ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → r.id ∈ resultsIn p B r.run w r.placement := by
   have inv := Delivery.Reachable.inv reach
   intro r hr w hw
   obtain ⟨run, -, hwf⟩ := Delivery.workflow?_iff.mp hw
-  have hwm : w ∈ p.workflows := (Program.workflow?_eq_some hwf).1
+  have hwm : w ∈ p.workflows := (Definition.workflow?_eq_some hwf).1
   obtain ⟨rank, -, hedge⟩ := placement_rank valid w hwm
-  have hacyc := ((Program.validate_ok valid).workflows w hwm).acyclic
+  have hacyc := ((Definition.validate_ok valid).workflows w hwm).acyclic
   suffices H : ∀ n, ∀ r' ∈ s.results, r'.run = r.run → rank r'.placement < n →
       r'.id ∈ resultsIn p B r.run w r'.placement from H _ r hr rfl (Nat.lt_succ_self _)
   intro n
@@ -473,7 +473,7 @@ theorem results_allowed {p : Program} {B : Behavior} {s : State} (valid : p.vali
       exact mem_resultsFor_aggregate hctrl
 
 /-- Every available trigger is allowed. -/
-theorem trigger_allowed {p : Program} {B : Behavior} {s : State} (reach : Reachable p s)
+theorem trigger_allowed {p : Definition} {B : Behavior} {s : State} (reach : Reachable p s)
     (hres : ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → r.id ∈ resultsIn p B r.run w r.placement)
     {path : Path} {w : Workflow} {name : String} {trig : Option ResultId} (hw : s.workflow? p path = some w)
     (h : TrigAvail s path w name trig) : trig ∈ triggersIn p B path w name :=
@@ -484,17 +484,17 @@ theorem trigger_allowed {p : Program} {B : Behavior} {s : State} (reach : Reacha
 /-! ### The parts of a run's universe -/
 
 /-- A run's universe has its path. -/
-theorem path_mem_runUniverse {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} :
+theorem path_mem_runUniverse {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} :
     path ∈ (runUniverse p B (d + 1) path w).runs := by
   rw [runUniverse_succ]; simp
 
 /-- A run's universe has the part of each placement. -/
-theorem sub_perPlacement {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} {pl : Placement}
+theorem sub_perPlacement {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} {pl : Placement}
     (hpl : pl ∈ w.placements) : Sub (perPlacement p B d path w pl) (runUniverse p B (d + 1) path w) := by
   rw [runUniverse_succ]
   exact (Sub.join (List.mem_map.2 ⟨pl, hpl, rfl⟩)).trans (Sub.right _ _)
 
-theorem sub_ownU {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} {pl : Placement} :
+theorem sub_ownU {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow} {pl : Placement} :
     Sub (ownU p B path w pl) (perPlacement p B d path w pl) := by
   rcases pl with ⟨name, control, policy, timeout⟩
   cases control with
@@ -507,19 +507,19 @@ theorem sub_ownU {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workf
   | waitStream e => exact Sub.refl _
   | merge e => exact Sub.refl _
 
-theorem ownU_settled {p : Program} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} :
+theorem ownU_settled {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} :
     (path, pl.name) ∈ (ownU p B path w pl).settled := List.mem_singleton_self _
 
-theorem ownU_results {p : Program} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} {rid : ResultId}
+theorem ownU_results {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} {rid : ResultId}
     (h : rid ∈ resultsIn p B path w pl.name) : rid ∈ (ownU p B path w pl).results := h
 
-theorem ownU_deliveries {p : Program} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} {j : Nat}
+theorem ownU_deliveries {p : Definition} {B : Behavior} {path : Path} {w : Workflow} {pl : Placement} {j : Nat}
     {c : Connection} {rid : ResultId} (hjc : (j, c) ∈ w.inputs pl.name) (h : rid ∈ resultsIn p B path w c.source) :
     (path, j, rid) ∈ (ownU p B path w pl).deliveries :=
   List.mem_flatMap.2 ⟨(j, c), hjc, List.mem_map.2 ⟨rid, h, rfl⟩⟩
 
 /-- An invocable placement has the invocations of its allowed triggers. -/
-theorem perPlacement_invocations {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
+theorem perPlacement_invocations {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} (hinv : Delivery.Invocable pl.control)
     (ht : trig ∈ triggersIn p B path w pl.name) :
     Key.invocation path pl.name trig ∈ (perPlacement p B d path w pl).invocations := by
@@ -541,7 +541,7 @@ theorem perPlacement_invocations {p : Program} {B : Behavior} {d : Nat} {path : 
   | merge e => exact hinv.elim
 
 /-- A function call or branch has the calls of its invocations. -/
-theorem perPlacement_calls {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
+theorem perPlacement_calls {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId}
     (hctrl : (∃ f, pl.control = .call (.function f)) ∨ (∃ j arms, pl.control = .branch j arms))
     (ht : trig ∈ triggersIn p B path w pl.name) :
@@ -556,7 +556,7 @@ theorem perPlacement_calls {p : Program} {B : Behavior} {d : Nat} {path : Path} 
     simp only [perPlacement, append_calls]; exact List.mem_append_right _ hid
 
 /-- A concurrency has the executions of its invocations. -/
-theorem perPlacement_executions {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
+theorem perPlacement_executions {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} {cc : Concurrency} (hctrl : pl.control = .concurrency cc)
     (ht : trig ∈ triggersIn p B path w pl.name) :
     Key.invocation path pl.name trig ∈ (perPlacement p B d path w pl).executions := by
@@ -568,7 +568,7 @@ theorem perPlacement_executions {p : Program} {B : Behavior} {d : Nat} {path : P
   exact List.mem_append_left _ (List.mem_append_right _ hid)
 
 /-- A concurrency has the tasks, task calls, task results and task runs of its invocations. -/
-theorem sub_execU {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
+theorem sub_execU {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} {cc : Concurrency} (hctrl : pl.control = .concurrency cc)
     (ht : trig ∈ triggersIn p B path w pl.name) :
     Sub (execU p B d path cc (Key.invocation path pl.name trig)) (perPlacement p B d path w pl) := by
@@ -579,7 +579,7 @@ theorem sub_execU {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Work
   exact (Sub.join (List.mem_map.2 ⟨_, hid, rfl⟩)).trans (Sub.right _ _)
 
 /-- A sub-workflow call has the runs of its invocations. -/
-theorem sub_childU_call {p : Program} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
+theorem sub_childU_call {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} {wf out : String} (hctrl : pl.control = .call (.workflow wf out))
     (ht : trig ∈ triggersIn p B path w pl.name) :
     Sub (childU p B d (path ++ [Key.invocation path pl.name trig]) wf) (perPlacement p B d path w pl) := by
@@ -593,18 +593,18 @@ theorem sub_childU_call {p : Program} {B : Behavior} {d : Nat} {path : Path} {w 
   dsimp only at hctrl; subst hctrl
   exact (Sub.join hmem).trans (Sub.right _ _)
 
-theorem execU_tasks {p : Program} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem execU_tasks {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) : (id, task.name) ∈ (execU p B d path cc id).tasks := by
   simp only [execU, append_tasks]
   exact List.mem_append_left _ (List.mem_map.2 ⟨task, htask, rfl⟩)
 
-theorem execU_calls {p : Program} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem execU_calls {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {f : String} (hbody : task.body = .function f) :
     Key.task id task.name ∈ (execU p B d path cc id).calls := by
   simp only [execU, append_calls]
   exact List.mem_append_left _ (List.mem_filterMap.2 ⟨task, htask, by rw [hbody]⟩)
 
-theorem execU_taskResults {p : Program} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem execU_taskResults {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {j : Nat}
     (hj : j < max 1 (B.script (Key.task id task.name)).yields.length) :
     (id, task.name, j) ∈ (execU p B d path cc id).taskResults := by
@@ -612,7 +612,7 @@ theorem execU_taskResults {p : Program} {B : Behavior} {d : Nat} {path : Path} {
   exact List.mem_append_left _ (List.mem_flatMap.2 ⟨task, htask, List.mem_map.2 ⟨j, mem_stepsOf hj, rfl⟩⟩)
 
 /-- A workflow task has its run. -/
-theorem sub_childU_task {p : Program} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem sub_childU_task {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {wf out : String} (hbody : task.body = .workflow wf out) :
     Sub (childU p B d (path ++ [Key.task id task.name]) wf) (execU p B d path cc id) := by
   have hmem := List.mem_map_of_mem (f := fun t : TaskSpec => match t.body with
@@ -622,20 +622,20 @@ theorem sub_childU_task {p : Program} {B : Behavior} {d : Nat} {path : Path} {cc
   exact (Sub.join hmem).trans (Sub.right _ _)
 
 /-- The universe of a child run whose workflow exists. -/
-theorem childU_eq {p : Program} {B : Behavior} {d : Nat} {childPath : Path} {wf : String} {cw : Workflow}
+theorem childU_eq {p : Definition} {B : Behavior} {d : Nat} {childPath : Path} {wf : String} {cw : Workflow}
     (h : p.workflow? wf = some cw) : childU p B d childPath wf = runUniverse p B d childPath cw := by
   simp only [childU, h]
 
-/-! ### Every run's universe is part of the program's -/
+/-! ### Every run's universe is part of the definition's -/
 
-/-- The universe of every run is part of the program's universe, at a depth that leaves room for the
+/-- The universe of every run is part of the definition's universe, at a depth that leaves room for the
     sub-workflow and workflow-task runs below it (`call_rank`). -/
-def RunU (p : Program) (B : Behavior) (rank : String → Nat) (s : State) : Prop :=
+def RunU (p : Definition) (B : Behavior) (rank : String → Nat) (s : State) : Prop :=
   ∀ r ∈ s.runs, ∃ w d, p.workflow? r.workflow = some w ∧ p.workflows.length - rank w.id ≤ d ∧
     Sub (runUniverse p B (d + 1) r.path w) (universeOf p B)
 
 /-- `RunU` depends only on the paths and workflows of the runs. -/
-theorem RunU.of_old {p : Program} {B : Behavior} {rank : String → Nat} {s t : State} (h : RunU p B rank s)
+theorem RunU.of_old {p : Definition} {B : Behavior} {rank : String → Nat} {s t : State} (h : RunU p B rank s)
     (ht : ∀ r ∈ t.runs, ∃ r₀ ∈ s.runs, r₀.path = r.path ∧ r₀.workflow = r.workflow) : RunU p B rank t := by
   intro r hr
   obtain ⟨r₀, hr₀, hpath, hwf⟩ := ht r hr
@@ -643,7 +643,7 @@ theorem RunU.of_old {p : Program} {B : Behavior} {rank : String → Nat} {s t : 
   exact ⟨w, d, hwf ▸ hw, hd, hpath ▸ hsub⟩
 
 /-- The universe of the run at a path. -/
-theorem RunU.ctx {p : Program} {B : Behavior} {rank : String → Nat} {s : State} (h : RunU p B rank s) {path : Path}
+theorem RunU.ctx {p : Definition} {B : Behavior} {rank : String → Nat} {s : State} (h : RunU p B rank s) {path : Path}
     {w : Workflow} (hw : s.workflow? p path = some w) :
     ∃ d, p.workflows.length - rank w.id ≤ d ∧ Sub (runUniverse p B (d + 1) path w) (universeOf p B) := by
   obtain ⟨R, hR, hRw⟩ := Delivery.workflow?_iff.mp hw
@@ -655,7 +655,7 @@ theorem RunU.ctx {p : Program} {B : Behavior} {rank : String → Nat} {s : State
   exact ⟨d, hd, hRp ▸ hsub⟩
 
 /-- A run called from a placement of a run gets the child universe, one level down. -/
-theorem child_ctx {p : Program} {B : Behavior} {rank : String → Nat}
+theorem child_ctx {p : Definition} {B : Behavior} {rank : String → Nat}
     (hlt : ∀ w ∈ p.workflows, rank w.id < p.workflows.length)
     (hedge : ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ wf ∈ pl.control.workflowRefs, ∀ w' ∈ p.workflows,
       w'.id = wf → rank w.id < rank w'.id)
@@ -663,7 +663,7 @@ theorem child_ctx {p : Program} {B : Behavior} {rank : String → Nat}
     {pl : Placement} (hpl : pl ∈ w.placements) {wf : String} (hwf : wf ∈ pl.control.workflowRefs) {cw : Workflow}
     (hcw : p.workflow? wf = some cw) {childPath : Path} (hsub : Sub (childU p B d childPath wf) (universeOf p B)) :
     ∃ d', p.workflows.length - rank cw.id ≤ d' ∧ Sub (runUniverse p B (d' + 1) childPath cw) (universeOf p B) := by
-  obtain ⟨hcwm, hcwid⟩ := Program.workflow?_eq_some hcw
+  obtain ⟨hcwm, hcwid⟩ := Definition.workflow?_eq_some hcw
   have h1 := hlt w hwm
   have h2 := hlt cw hcwm
   have h3 := hedge w hwm pl hpl wf hwf cw hcwm hcwid
@@ -674,7 +674,7 @@ theorem child_ctx {p : Program} {B : Behavior} {rank : String → Nat}
 
 /-- Every step keeps `RunU`: `start` creates the root with the whole universe, and `invoke` and
     `beginTask` create child runs inside the universe of their parent, for an allowed trigger. -/
-theorem step_runU {p : Program} {B : Behavior} {s t : State} {op : Op} (valid : p.validate = .ok ())
+theorem step_runU {p : Definition} {B : Behavior} {s t : State} {op : Op} (valid : p.validate = .ok ())
     {rank : String → Nat} (hlt : ∀ w ∈ p.workflows, rank w.id < p.workflows.length)
     (hedge : ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ wf ∈ pl.control.workflowRefs, ∀ w' ∈ p.workflows,
       w'.id = wf → rank w.id < rank w'.id)
@@ -717,7 +717,7 @@ theorem step_runU {p : Program} {B : Behavior} {s t : State} {op : Op} (valid : 
       have hpath := (run?_eq_some hr).2
       have hwp : s.workflow? p path = some w := Delivery.workflow?_iff.mpr ⟨r, hr, hw⟩
       obtain ⟨d, hd, hsub⟩ := ih.ctx hwp
-      have hwm := (Program.workflow?_eq_some hw).1
+      have hwm := (Definition.workflow?_eq_some hw).1
       obtain ⟨hplm, hname⟩ := Workflow.placement?_eq_some hpl
       obtain ⟨cw, hcw⟩ := call_workflow_exists valid hwm hplm hctrl
       have htrig : trigger ∈ triggersIn p B path w pl.name := by
@@ -791,7 +791,7 @@ theorem step_runU {p : Program} {B : Behavior} {s t : State} {op : Op} (valid : 
       obtain ⟨d, hd, hsub⟩ := ih.ctx hw
       have hwm : w ∈ p.workflows := by
         obtain ⟨R, -, hRw⟩ := Delivery.workflow?_iff.mp hw
-        exact (Program.workflow?_eq_some hRw).1
+        exact (Definition.workflow?_eq_some hRw).1
       obtain ⟨hplm, hname⟩ := Workflow.placement?_eq_some hpl
       have htrig : i.trigger ∈ triggersIn p B e.run w pl.name := by
         rw [hname]; exact trigger_allowed reach hres hw htrigA
@@ -835,7 +835,7 @@ theorem step_runU {p : Program} {B : Behavior} {s t : State} {op : Op} (valid : 
     · exact old rfl
 
 /-- `RunU` holds along a conforming execution. -/
-theorem conforming_runU {p : Program} {env : Env} {tr : List Op} {s : State} (valid : p.validate = .ok ())
+theorem conforming_runU {p : Definition} {env : Env} {tr : List Op} {s : State} (valid : p.validate = .ok ())
     {rank : String → Nat} (hlt : ∀ w ∈ p.workflows, rank w.id < p.workflows.length)
     (hedge : ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ wf ∈ pl.control.workflowRefs, ∀ w' ∈ p.workflows,
       w'.id = wf → rank w.id < rank w'.id)
@@ -849,7 +849,7 @@ theorem conforming_runU {p : Program} {env : Env} {tr : List Op} {s : State} (va
 /-! ### Every record is covered -/
 
 section Cover
-variable {p : Program} {B : Behavior} {rank : String → Nat} {s : State}
+variable {p : Definition} {B : Behavior} {rank : String → Nat} {s : State}
 
 /-- The universe part of a placement of an existing run. -/
 theorem placement_ctx (hrun : RunU p B rank s) {path : Path} {w : Workflow} {name : String} {pl : Placement}
@@ -909,7 +909,7 @@ theorem execution_names (reach : Reachable p s) {e : Execution} (he : e ∈ s.ex
 end Cover
 
 /-- Every record's key lies in the universe part of its placement (`universe_covers`). -/
-theorem covers_of_conforming {p : Program} {env : Env} {tr : List Op} {s : State} (valid : p.validate = .ok ())
+theorem covers_of_conforming {p : Definition} {env : Env} {tr : List Op} {s : State} (valid : p.validate = .ok ())
     (h : Conforming p env tr s) : (universeOf p env.behavior).Covers s := by
   obtain ⟨rank, hlt, hedge⟩ := call_rank valid
   have reach := h.reachable
@@ -987,7 +987,7 @@ theorem covers_of_conforming {p : Program} {env : Env} {tr : List Op} {s : State
     intro dl hdl
     obtain ⟨w, c, r, hw, hc, hr, hid, hrun', hpl, -⟩ := inv.own.deliveries dl hdl
     obtain ⟨R, -, hRw⟩ := Delivery.workflow?_iff.mp hw
-    have hwm : w ∈ p.workflows := (Program.workflow?_eq_some hRw).1
+    have hwm : w ∈ p.workflows := (Definition.workflow?_eq_some hRw).1
     obtain ⟨-, dst, -, hdst, -⟩ := typedConnections_of_validate valid w hwm c (List.mem_of_getElem? hc)
     obtain ⟨d, hsub⟩ := placement_ctx hrun hw hdst
     have hdname := (Workflow.placement?_eq_some hdst).2

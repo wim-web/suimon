@@ -20,6 +20,10 @@ private theorem throw_error {α ε : Type} (e : ε) : (throw e : Except ε α) =
 private theorem map_error {α β ε : Type} (e : ε) (f : α → β) : (f <$> Except.error e : Except ε β) = .error e :=
   rfl
 
+private theorem mapError_ok {α ε ε' : Type} (x : α) (f : ε → ε') :
+    (Except.ok x : Except ε α).mapError f = .ok x :=
+  rfl
+
 theorem strings_map_str (at_ : String) (items : List String) : strings at_ (items.map .str) = .ok items := by
   induction items with
   | nil => rfl
@@ -56,15 +60,62 @@ theorem recordOfWire_recordWire (r : Record) : recordOfWire (recordWire r) = .ok
       simp [recordWire, recordOfWire, optional, valuesWire, hne, getNat, strict, List.lookup, List.find?,
         opOfWire_opWire, payloads_valuesWire, ok_bind, map_ok]
 
-/-- A text form of `Wire` values that reads back what it renders, on one line, gives a lawful codec. --/
-theorem Codec.ofWire_lawful {render : Wire → String} {parse : String → Except String Wire}
-    (hparse : ∀ r, parse (render (recordWire r)) = .ok (recordWire r))
-    (hline : ∀ r, '\n' ∉ (render (recordWire r)).toList) : (Codec.ofWire render parse).Lawful :=
-  ⟨fun r => by simp [Codec.ofWire, hparse, ok_bind, recordOfWire_recordWire], hline⟩
+theorem headerOfWire_headerWire (w : Wire) : headerOfWire (headerWire w) = .ok w := by
+  simp [headerWire, headerOfWire, strict, List.lookup, List.find?, ok_bind, pure_ok]
 
-/-- Records are written and read back through the verified text form of `Wire` values. --/
+/-! ## Keys -/
+
+theorem pathWire_distinctKeys (path : Path) : (pathWire path).DistinctKeys :=
+  .arr fun w hw => by
+    obtain ⟨s, -, rfl⟩ := List.mem_map.1 hw
+    exact .str s
+
+/-- Each op has fixed, distinct keys, and its fields are strings, numbers, booleans and paths. --/
+theorem opWire_distinctKeys (o : Op) : (opWire o).DistinctKeys := by
+  cases o
+  case start input => cases input <;> simp [opWire, optional, Wire.distinctKeys_obj_iff, Wire.DistinctKeys.str]
+  case invoke run placement trigger =>
+    cases trigger <;> simp [opWire, optional, Wire.distinctKeys_obj_iff, pathWire_distinctKeys, Wire.DistinctKeys.str]
+  case deliver run connection source value =>
+    cases value <;> simp [opWire, optional, Wire.distinctKeys_obj_iff, pathWire_distinctKeys, Wire.DistinctKeys.str,
+      Wire.DistinctKeys.nat]
+  case taskInput execution task value =>
+    cases value <;> simp [opWire, optional, Wire.distinctKeys_obj_iff, Wire.DistinctKeys.str]
+  all_goals simp [opWire, Wire.distinctKeys_obj_iff, pathWire_distinctKeys, Wire.DistinctKeys.str,
+    Wire.DistinctKeys.nat, Wire.DistinctKeys.bool]
+
+/-- A record whose payloads have distinct keys has no repeated key. --/
+theorem recordWire_distinctKeys {r : Record} (hr : r.DistinctKeys) : (recordWire r).DistinctKeys := by
+  cases r with
+  | commit seq => simp [recordWire, Wire.distinctKeys_obj_iff, Wire.DistinctKeys.nat, Wire.DistinctKeys.bool]
+  | op seq o values =>
+    simp only [Record.DistinctKeys] at hr
+    have hvalues : (valuesWire values).DistinctKeys :=
+      .obj (by simpa [valuesWire, Function.comp_def] using hr) fun f hf => by
+        obtain ⟨⟨_, payload⟩, -, rfl⟩ := List.mem_map.1 hf
+        exact .str payload
+    by_cases hv : values = [] <;>
+      simp [recordWire, optional, hv, Wire.distinctKeys_obj_iff, Wire.DistinctKeys.nat, opWire_distinctKeys, hvalues]
+
+theorem headerWire_distinctKeys {w : Wire} (hw : w.DistinctKeys) : (headerWire w).DistinctKeys := by
+  simp [headerWire, Wire.distinctKeys_obj_iff, hw]
+
+/-- A text form of `Wire` values that reads back what it renders, when no key repeats, on one line,
+    gives a lawful codec. --/
+theorem Codec.ofWire_lawful {render : Wire → String} {parse : String → Except String Wire}
+    (hparse : ∀ w, w.DistinctKeys → parse (render w) = .ok w) (hline : ∀ w, '\n' ∉ (render w).toList) :
+    (Codec.ofWire render parse).Lawful where
+  decode_encode r hr := by
+    simp [Codec.ofWire, hparse _ (recordWire_distinctKeys hr), ok_bind, recordOfWire_recordWire]
+  newline_not_mem_encode r := hline (recordWire r)
+  decodeHeader_encodeHeader w hw := by
+    simp [Codec.ofWire, hparse _ (headerWire_distinctKeys hw), ok_bind, headerOfWire_headerWire]
+  newline_not_mem_encodeHeader w := hline (headerWire w)
+
+/-- The header and the records are written and read back through the verified text form of `Wire`
+    values, whose one side condition, that no key repeats, `Codec.Lawful` carries. --/
 theorem wireCodec_lawful : wireCodec.Lawful :=
-  Codec.ofWire_lawful (fun r => Wire.parse_render (recordWire r)) (fun r => Wire.newline_not_mem_render (recordWire r))
+  Codec.ofWire_lawful Wire.parse_render Wire.newline_not_mem_render
 
 /-! ## Lines -/
 
@@ -104,27 +155,45 @@ theorem text_toList (c : Codec) (rs : List Record) :
     (text c rs).toList = (rs.map fun r => (c.encode r).toList).flatMap (· ++ ['\n']) := by
   simp [text, String.toList_join, List.flatMap_map]
 
+/-- A recording is the lines of the header and the records, each ended by a newline. --/
+theorem recording_toList (c : Codec) (header : Wire) (rs : List Record) :
+    (recording c header rs).toList =
+      ((c.encodeHeader header).toList :: rs.map fun r => (c.encode r).toList).flatMap (· ++ ['\n']) := by
+  simp [recording, text_toList]
+
+/-- The lines of a recording have no newline of their own. --/
+theorem newline_not_mem_lines {c : Codec} (hc : c.Lawful) (header : Wire) (rs : List Record) :
+    ∀ l ∈ (c.encodeHeader header).toList :: rs.map fun r => (c.encode r).toList, '\n' ∉ l := by
+  intro l hl
+  rcases List.mem_cons.1 hl with rfl | hl
+  · exact hc.newline_not_mem_encodeHeader header
+  · obtain ⟨r, -, rfl⟩ := List.mem_map.1 hl
+    exact hc.newline_not_mem_encode r
+
 /-! ## Recording -/
 
-theorem transaction_eq_ok {p : Program} {s : State} {o : Op} {values known : List (Value × String)} {seq : Nat}
+theorem transaction_eq_ok {p : Definition} {s : State} {o : Op} {values known : List (Value × String)} {seq : Nat}
     {next : State} {records : List Record} :
     transaction p s o values known seq = .ok (next, records) ↔
-      step p s o = .ok next ∧ missing s next values known = [] ∧
+      (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ missing s next values known = [] ∧
         records = [.op seq o values, .commit (seq + 1)] := by
   unfold transaction
-  cases hs : step p s o with
-  | error e => simp [error_bind]
-  | ok n =>
-    cases hm : (missing s n values known).isEmpty <;> simp_all [ok_bind, pure_ok, error_bind, throw_error] <;>
-      rintro rfl
-    · exact fun h => absurd h hm
-    · simp only [hm, true_and]
-      exact eq_comm
+  by_cases hk : (values.map (·.1)).Nodup
+  · simp only [hk, ↓reduceIte, pure_ok, true_and]
+    cases hs : step p s o with
+    | error e => simp [error_bind]
+    | ok n =>
+      cases hm : (missing s n values known).isEmpty <;> simp_all [ok_bind, error_bind, throw_error] <;>
+        rintro rfl
+      · exact fun h => absurd h hm
+      · simp only [hm, true_and]
+        exact eq_comm
+  · simp [hk, throw_error, error_bind]
 
-theorem record_cons_ok {p : Program} {s t : State} {o : Op} {values known : List (Value × String)}
+theorem record_cons_ok {p : Definition} {s t : State} {o : Op} {values known : List (Value × String)}
     {rest : List (Op × List (Value × String))} {seq : Nat} {rs : List Record}
     (h : record p s ((o, values) :: rest) known seq = .ok (t, rs)) :
-    ∃ next later, step p s o = .ok next ∧ missing s next values known = [] ∧
+    ∃ next later, (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ missing s next values known = [] ∧
       record p next rest (known ++ values) (seq + 2) = .ok (t, later) ∧
       rs = .op seq o values :: .commit (seq + 1) :: later := by
   simp only [record] at h
@@ -132,25 +201,25 @@ theorem record_cons_ok {p : Program} {s t : State} {o : Op} {values known : List
   | error e => simp [ht, error_bind] at h
   | ok x =>
     obtain ⟨next, records⟩ := x
-    obtain ⟨hs, hm, rfl⟩ := transaction_eq_ok.1 ht
+    obtain ⟨hk, hs, hm, rfl⟩ := transaction_eq_ok.1 ht
     cases hr : record p next rest (known ++ values) (seq + 2) with
     | error e => simp [ht, hr, ok_bind, map_error] at h
     | ok y =>
       obtain ⟨final, later⟩ := y
       simp [ht, hr, ok_bind, pure_ok] at h
       obtain ⟨rfl, rfl⟩ := h
-      exact ⟨next, later, hs, hm, hr, rfl⟩
+      exact ⟨next, later, hk, hs, hm, hr, rfl⟩
 
-theorem record_cons_of {p : Program} {s next t : State} {o : Op} {values known : List (Value × String)}
+theorem record_cons_of {p : Definition} {s next t : State} {o : Op} {values known : List (Value × String)}
     {rest : List (Op × List (Value × String))} {seq : Nat} {later : List Record}
-    (hs : step p s o = .ok next) (hm : missing s next values known = [])
+    (hk : (values.map (·.1)).Nodup) (hs : step p s o = .ok next) (hm : missing s next values known = [])
     (hr : record p next rest (known ++ values) (seq + 2) = .ok (t, later)) :
     record p s ((o, values) :: rest) known seq = .ok (t, .op seq o values :: .commit (seq + 1) :: later) := by
   have ht : transaction p s o values known seq = .ok (next, [.op seq o values, .commit (seq + 1)]) :=
-    transaction_eq_ok.2 ⟨hs, hm, rfl⟩
+    transaction_eq_ok.2 ⟨hk, hs, hm, rfl⟩
   simp [record, ht, hr, ok_bind, pure_ok]
 
-theorem record_length {p : Program} :
+theorem record_length {p : Definition} :
     ∀ {steps : List (Op × List (Value × String))} {s t : State} {known : List (Value × String)} {seq : Nat}
       {rs : List Record}, record p s steps known seq = .ok (t, rs) → rs.length = 2 * steps.length := by
   intro steps
@@ -163,13 +232,34 @@ theorem record_length {p : Program} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro s t known seq rs h
-    obtain ⟨next, later, -, -, hr, rfl⟩ := record_cons_ok h
+    obtain ⟨next, later, -, -, -, hr, rfl⟩ := record_cons_ok h
     simp [ih hr]
     omega
 
+/-- The recorder repeats no payload key, so every record it writes reads back (`Codec.Lawful`). --/
+theorem record_distinctKeys {p : Definition} :
+    ∀ {steps : List (Op × List (Value × String))} {s t : State} {known : List (Value × String)} {seq : Nat}
+      {rs : List Record}, record p s steps known seq = .ok (t, rs) → ∀ r ∈ rs, r.DistinctKeys := by
+  intro steps
+  induction steps with
+  | nil =>
+    intro s t known seq rs h
+    simp only [record, pure_ok, Except.ok.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    simp
+  | cons step rest ih =>
+    obtain ⟨o, values⟩ := step
+    intro s t known seq rs h r hr
+    obtain ⟨next, later, hk, -, -, hlater, rfl⟩ := record_cons_ok h
+    rcases List.mem_cons.1 hr with rfl | hr
+    · exact hk
+    rcases List.mem_cons.1 hr with rfl | hr
+    · trivial
+    · exact ih hlater r hr
+
 /-- Recording two lists of transactions one after the other records their concatenation; the
     second recording knows the payloads of the first. --/
-theorem record_append {p : Program} :
+theorem record_append {p : Definition} :
     ∀ {xs ys : List (Op × List (Value × String))} {s u t : State} {known : List (Value × String)} {seq : Nat}
       {rs₁ rs₂ : List Record},
       record p s xs known seq = .ok (u, rs₁) →
@@ -185,15 +275,19 @@ theorem record_append {p : Program} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro ys s u t known seq rs₁ rs₂ h₁ h₂
-    obtain ⟨next, later, hs, hm, hr, rfl⟩ := record_cons_ok h₁
+    obtain ⟨next, later, hk, hs, hm, hr, rfl⟩ := record_cons_ok h₁
     have h₂' : record p u ys (known ++ values ++ rest.flatMap (·.2)) (seq + 2 + 2 * rest.length) =
         .ok (t, rs₂) := by
       rw [show seq + 2 + 2 * rest.length = seq + 2 * (rest.length + 1) by omega]
       simpa using h₂
-    exact record_cons_of hs hm (ih hr h₂')
+    exact record_cons_of hk hs hm (ih hr h₂')
 
 theorem text_append (c : Codec) (rs₁ rs₂ : List Record) : text c (rs₁ ++ rs₂) = text c rs₁ ++ text c rs₂ := by
   simp [text, String.join_append]
+
+theorem recording_append (c : Codec) (header : Wire) (rs₁ rs₂ : List Record) :
+    recording c header rs₁ ++ text c rs₂ = recording c header (rs₁ ++ rs₂) := by
+  simp [recording, text_append, String.append_assoc]
 
 /-! ## Replay -/
 
@@ -209,27 +303,30 @@ theorem missing_known {before after : State} {values : List (Value × String)}
     simp at this
   · simp
 
-theorem replayLine_op {c : Codec} (hc : c.Lawful) (p : Program) (r : Replay) (index seq : Nat) (o : Op)
-    (values : List (Value × String)) (hpending : r.pending = none) (hnext : r.next = seq) :
+theorem replayLine_op {c : Codec} (hc : c.Lawful) (p : Definition) (r : Replay) (index seq : Nat) (o : Op)
+    (values : List (Value × String)) (hkeys : (values.map (·.1)).Nodup) (hpending : r.pending = none)
+    (hnext : r.next = seq) :
     replayLine c p r index (String.ofList (c.encode (.op seq o values)).toList) =
       .ok { r with pending := some (o, values), next := seq + 1 } := by
+  have hdecode := hc.decode_encode (.op seq o values) hkeys
   obtain ⟨state, committed, known, pending, next⟩ := r
   simp only at hpending hnext
   subst hpending hnext
-  simp [replayLine, hc.1, Record.seq, pure_ok]
+  simp [replayLine, hdecode, Record.seq, pure_ok]
 
-theorem replayLine_commit {c : Codec} (hc : c.Lawful) (p : Program) (r : Replay) (index seq : Nat) (o : Op)
+theorem replayLine_commit {c : Codec} (hc : c.Lawful) (p : Definition) (r : Replay) (index seq : Nat) (o : Op)
     (values : List (Value × String)) (next : State) (hpending : r.pending = some (o, values))
     (hnext : r.next = seq) (hs : step p r.state o = .ok next) (hm : missing r.state next values r.values = []) :
     replayLine c p r index (String.ofList (c.encode (.commit seq)).toList) =
       .ok { state := next, committed := r.committed + 1, values := r.values ++ values, pending := none,
             next := seq + 1 } := by
+  have hdecode := hc.decode_encode (.commit seq) trivial
   obtain ⟨state, committed, known, pending, n⟩ := r
   simp only at hpending hnext hs hm
   subst hpending hnext
-  simp [replayLine, hc.1, Record.seq, hs, hm, pure_ok]
+  simp [replayLine, hdecode, Record.seq, hs, hm, pure_ok]
 
-theorem replayLines_append (c : Codec) (p : Program) (xs ys : List (List Char)) :
+theorem replayLines_append (c : Codec) (p : Definition) (xs ys : List (List Char)) :
     ∀ (r : Replay) (index : Nat), replayLines c p r index (xs ++ ys) =
       replayLines c p r index xs >>= fun r' => replayLines c p r' (index + xs.length) ys := by
   induction xs with
@@ -245,7 +342,7 @@ theorem replayLines_append (c : Codec) (p : Program) (xs ys : List (List Char)) 
 
 /-- Replaying the first `k` lines of a recording commits `k / 2` transitions and holds the op of the
     next one when `k` is odd. The replay starts where the recording did, knowing the same payloads. --/
-theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Program} :
+theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Definition} :
     ∀ {steps : List (Op × List (Value × String))} {s t : State} {known : List (Value × String)} {seq : Nat}
       {rs : List Record},
       record p s steps known seq = .ok (t, rs) →
@@ -272,8 +369,8 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Program} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro s t known seq rs h r index k hstate hvalues hpending hnext hk
-    obtain ⟨next, later, hs, hm, hr, rfl⟩ := record_cons_ok h
-    have hop := replayLine_op hc p r index seq o values hpending hnext
+    obtain ⟨next, later, hkeys, hs, hm, hr, rfl⟩ := record_cons_ok h
+    have hop := replayLine_op hc p r index seq o values hkeys hpending hnext
     match k with
     | 0 =>
       refine ⟨s, by simp [record, pure_ok], ?_⟩
@@ -301,7 +398,7 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Program} :
       · have hhalf : (k + 2) / 2 = k / 2 + 1 := by omega
         have htwice : 2 * (k / 2 + 1) = 2 * (k / 2) + 1 + 1 := by omega
         rw [hhalf, List.take_succ_cons, htwice, List.take_succ_cons, List.take_succ_cons]
-        exact record_cons_of hs hm hu
+        exact record_cons_of hkeys hs hm hu
       · simp only [List.take_succ_cons, List.map_cons, replayLines]
         rw [hop]
         simp only [ok_bind]
@@ -316,26 +413,44 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Program} :
 
 /-! ## Replay and crash recovery (§12.1, §15.2) -/
 
-/-- A crash leaves the first `k` lines a recorder wrote and possibly the start of the next line.
-    Checking such a text replays exactly the committed transitions, the first `k / 2`, and reports
-    the rest as uncommitted. --/
-theorem check_torn {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
+/-- The header of a recording loads the definition that `load` gives for it. --/
+theorem decodeHeader_encodeHeader_load {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition}
+    {w : Wire} (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) :
+    (c.decodeHeader (String.ofList (c.encodeHeader w).toList) >>= load).mapError (s!"line 1: {·}") = .ok p := by
+  simp [hc.decodeHeader_encodeHeader w hw, hload, ok_bind, mapError_ok]
+
+/-- A crash inside the header, the first line, leaves no complete line: nothing is committed, and the
+    record names no definition yet. --/
+theorem check_torn_header (c : Codec) (load : Wire → Except String Definition) {tail : String}
+    (htail : '\n' ∉ tail.toList) :
+    check c load tail =
+      .ok { definition := none, state := {}, committed := 0, uncommitted := decide (tail ≠ ""), values := [] } := by
+  have hsplit : splitLines tail.toList [] = ([], tail.toList) := by simpa using splitLines_of_not_mem htail []
+  have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
+    rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
+  simp only [check, hsplit, pure_ok, htailEmpty]
+  simp
+
+/-- A crash after the header leaves it, the first `k` records a recorder wrote, and possibly the start
+    of the next line. Checking such a text loads the definition of the header, replays exactly the
+    committed transitions, the first `k / 2`, and reports the rest as uncommitted. With
+    `check_torn_header`, this covers a crash anywhere in a recording. The header repeats no key; a
+    recorder writes the canonical form of its definition, which has none
+    (`Codec.definitionWire_distinctKeys`). --/
+theorem check_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
+    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
     {tail : String} (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      check c p (text c (rs.take k) ++ tail) =
-        .ok { state := u, committed := k / 2, uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""),
-              values := (steps.take (k / 2)).flatMap (·.2) } := by
-  obtain ⟨u, hu, hreplay⟩ := replayLines_take hc h {} 0 k rfl rfl rfl rfl hk
+      check c load (recording c w (rs.take k) ++ tail) =
+        .ok { definition := some p, state := u, committed := k / 2,
+              uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
+  obtain ⟨u, hu, hreplay⟩ := replayLines_take hc h {} 1 k rfl rfl rfl rfl hk
   refine ⟨u, hu, ?_⟩
-  have hlines : ∀ l ∈ (rs.take k).map (fun x => (c.encode x).toList), '\n' ∉ l := by
-    intro l hl
-    obtain ⟨x, -, rfl⟩ := List.mem_map.1 hl
-    exact hc.2 x
-  have hsplit : splitLines (text c (rs.take k) ++ tail).toList [] =
-      ((rs.take k).map fun x => (c.encode x).toList, tail.toList) := by
-    rw [String.toList_append, text_toList]
-    exact splitLines_lines hlines htail
+  have hsplit : splitLines (recording c w (rs.take k) ++ tail).toList [] =
+      ((c.encodeHeader w).toList :: (rs.take k).map fun x => (c.encode x).toList, tail.toList) := by
+    rw [String.toList_append, recording_toList]
+    exact splitLines_lines (newline_not_mem_lines hc w (rs.take k)) htail
   have hlen := record_length h
   have hpending : (if k % 2 = 1 then steps[k / 2]? else none).isSome = decide (k % 2 = 1) := by
     by_cases hodd : k % 2 = 1
@@ -344,16 +459,19 @@ theorem check_torn {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op �
     · simp [hodd]
   have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
     rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
-  simp only [check, hsplit, hreplay, ok_bind, pure_ok, hpending, htailEmpty]
+  simp only [check, hsplit, decodeHeader_encodeHeader_load hc hw hload, hreplay, ok_bind, pure_ok, hpending,
+    htailEmpty]
   simp
 
 /-- Replaying a whole record reproduces the state of the run that wrote it. --/
-theorem check_text {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
-    check c p (text c rs) =
-      .ok { state := t, committed := steps.length, uncommitted := false, values := steps.flatMap (·.2) } := by
+theorem check_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
+    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
+    check c load (recording c w rs) =
+      .ok { definition := some p, state := t, committed := steps.length, uncommitted := false,
+            values := steps.flatMap (·.2) } := by
   have hlen := record_length h
-  obtain ⟨u, hu, hcheck⟩ := check_torn hc h (Nat.le_refl rs.length) (tail := "") (by simp)
+  obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h (Nat.le_refl rs.length) (tail := "") (by simp)
   have hhalf : rs.length / 2 = steps.length := by omega
   have hmod : rs.length % 2 = 0 := by omega
   rw [hhalf, List.take_length, h] at hu
@@ -361,40 +479,42 @@ theorem check_text {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op �
   rw [List.take_length, String.append_empty, hhalf, hmod, List.take_length] at hcheck
   simpa using hcheck
 
-theorem recover_text {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
-    recover c p (text c rs) = .ok t := by
-  simp [recover, check_text hc h, Except.map]
+theorem recover_text {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
+    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) :
+    recover c load (recording c w rs) = .ok t := by
+  simp [recover, check_text hc hw hload h, Except.map]
 
 /-- After a crash, recovery resumes from the state of the committed transitions. --/
-theorem recover_torn {c : Codec} (hc : c.Lawful) {p : Program} {steps : List (Op × List (Value × String))}
-    {t : State} {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
+theorem recover_torn {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps : List (Op × List (Value × String))} {t : State}
+    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
     {tail : String} (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      recover c p (text c (rs.take k) ++ tail) = .ok u := by
-  obtain ⟨u, hu, hcheck⟩ := check_torn hc h hk htail
+      recover c load (recording c w (rs.take k) ++ tail) = .ok u := by
+  obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h hk htail
   exact ⟨u, hu, by simp [recover, hcheck, Except.map]⟩
 
-/-- After a crash the runtime keeps the committed lines, resumes from the recovered state with the
-    committed payloads, and appends the records of new transactions; the result replays like an
-    uninterrupted record. --/
-theorem check_resume {c : Codec} (hc : c.Lawful) {p : Program}
-    {steps more : List (Op × List (Value × String))} {t : State} {rs : List Record}
-    (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
-    (htail : '\n' ∉ tail.toList) {u t' : State} {rs' : List Record}
-    (hu : recover c p (text c (rs.take k) ++ tail) = .ok u)
+/-- After a crash the runtime keeps the header and the committed lines, resumes from the recovered
+    state with the committed payloads, and appends the records of new transactions; the result
+    replays like an uninterrupted record. --/
+theorem check_resume {c : Codec} (hc : c.Lawful) {load : Wire → Except String Definition} {w : Wire}
+    (hw : w.DistinctKeys) {p : Definition} (hload : load w = .ok p) {steps more : List (Op × List (Value × String))} {t : State}
+    {rs : List Record} (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length)
+    {tail : String} (htail : '\n' ∉ tail.toList) {u t' : State} {rs' : List Record}
+    (hu : recover c load (recording c w (rs.take k) ++ tail) = .ok u)
     (hmore : record p u more ((steps.take (k / 2)).flatMap (·.2)) (2 * (k / 2) + 1) = .ok (t', rs')) :
-    check c p (text c (rs.take (2 * (k / 2))) ++ text c rs') =
-      .ok { state := t', committed := k / 2 + more.length, uncommitted := false,
+    check c load (recording c w (rs.take (2 * (k / 2))) ++ text c rs') =
+      .ok { definition := some p, state := t', committed := k / 2 + more.length, uncommitted := false,
             values := (steps.take (k / 2) ++ more).flatMap (·.2) } := by
-  obtain ⟨u₀, hu₀, hrecover⟩ := recover_torn hc h hk htail
+  obtain ⟨u₀, hu₀, hrecover⟩ := recover_torn hc hw hload h hk htail
   rw [hu] at hrecover
   obtain rfl := (Except.ok.inj hrecover).symm
   have hlen := record_length h
   have htake : (steps.take (k / 2)).length = k / 2 := by simp; omega
   have hall : record p {} (steps.take (k / 2) ++ more) [] 1 = .ok (t', rs.take (2 * (k / 2)) ++ rs') :=
     record_append hu₀ (by rw [htake, Nat.add_comm]; simpa using hmore)
-  rw [← text_append, check_text hc hall, List.length_append, htake]
+  rw [recording_append, check_text hc hw hload hall, List.length_append, htake]
 
 /-! ## Payloads of a recovered state (§12.1) -/
 
@@ -419,7 +539,7 @@ theorem covered_of_missing {before after : State} {values known : List (Value ×
 /-- The payloads read so far cover every value the replayed state mentions. --/
 def Replay.Covered (r : Replay) : Prop := ∀ v ∈ r.state.values, r.values.any (·.1 == v) = true
 
-theorem replayLine_covered {c : Codec} {p : Program} {r r' : Replay} {index : Nat} {line : String}
+theorem replayLine_covered {c : Codec} {p : Definition} {r r' : Replay} {index : Nat} {line : String}
     (hr : r.Covered) (h : replayLine c p r index line = .ok r') : r'.Covered := by
   simp only [replayLine] at h
   split at h
@@ -441,7 +561,7 @@ theorem replayLine_covered {c : Codec} {p : Program} {r r' : Replay} {index : Na
       · simp [throw_error] at h
       · simp [throw_error] at h
 
-theorem replayLines_covered {c : Codec} {p : Program} :
+theorem replayLines_covered {c : Codec} {p : Definition} :
     ∀ {lines : List (List Char)} {r r' : Replay} {index : Nat}, r.Covered →
       replayLines c p r index lines = .ok r' → r'.Covered := by
   intro lines
@@ -461,14 +581,24 @@ theorem replayLines_covered {c : Codec} {p : Program} :
 
 /-- Every value a checked state mentions has its payload among the committed ones, so a recovered
     state never names a lost value (§12.1). --/
-theorem check_payloads {c : Codec} {p : Program} {text : String} {checked : Checked}
-    (h : check c p text = .ok checked) : ∀ v ∈ checked.state.values, checked.values.any (·.1 == v) = true := by
+theorem check_payloads {c : Codec} {load : Wire → Except String Definition} {text : String}
+    {checked : Checked} (h : check c load text = .ok checked) :
+    ∀ v ∈ checked.state.values, checked.values.any (·.1 == v) = true := by
+  have hempty : Replay.Covered {} := fun v hv => by simp [State.values] at hv
   simp only [check] at h
-  cases hr : replayLines c p {} 0 (splitLines text.toList []).1 with
-  | error e => simp only [hr, error_bind, reduceCtorEq] at h
-  | ok r =>
-    simp only [hr, ok_bind, pure_ok, Except.ok.injEq] at h
+  split at h
+  · simp only [pure_ok, Except.ok.injEq] at h
     subst h
-    exact replayLines_covered (fun v hv => by simp [State.values] at hv) hr
+    exact hempty
+  · rename_i header lines _
+    cases hp : (c.decodeHeader (String.ofList header) >>= load).mapError (s!"line 1: {·}") with
+    | error e => simp only [hp, error_bind, reduceCtorEq] at h
+    | ok p =>
+      cases hr : replayLines c p {} 1 lines with
+      | error e => simp only [hp, hr, ok_bind, error_bind, reduceCtorEq] at h
+      | ok r =>
+        simp only [hp, hr, ok_bind, pure_ok, Except.ok.injEq] at h
+        subst h
+        exact replayLines_covered hempty hr
 
 end Suimon.Trace

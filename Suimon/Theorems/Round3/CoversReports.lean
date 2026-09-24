@@ -12,7 +12,7 @@ by the behavior (`CallConform` and `OwnerConform` in both runs), so the call, it
 agree. -/
 
 section CoversReports
-variable {p : Program} {env : Env} {s s' T : State}
+variable {p : Definition} {env : Env} {s s' T : State}
 
 theorem covers_returned {id : String} {value : Value} (h : StepCtx p env T s (.returned id value) s') :
     Covers p T s' := by

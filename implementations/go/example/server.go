@@ -16,7 +16,7 @@ import (
 
 // The JSON API of the playground:
 //
-//	GET  /api/scenarios            the scenarios with their programs and default inputs
+//	GET  /api/scenarios            the scenarios with their definitions and default inputs
 //	POST /api/runs                 {"scenario": id, "input": value?} starts a run; returns {"id": ...}
 //	GET  /api/runs/{id}?after=n    the progress, with the record lines from n on
 //	GET  /api/runs/{id}/events     the same progress as server-sent events, until the run is done

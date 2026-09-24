@@ -1,9 +1,9 @@
-import { parseProgram, parseRecords, parseState } from '@suimon/ui-kit';
-import type { ExecutionRecord, JsonValue, Program, RuntimeState } from '@suimon/ui-kit';
+import { parseDefinition, parseRecords, parseState } from '@suimon/ui-kit';
+import type { Definition, ExecutionRecord, JsonValue, RuntimeState } from '@suimon/ui-kit';
 
 /* The JSON API of the example server (implementations/go/example/server.go). */
 
-export interface Scenario { id: string; title: string; description: string; program: Program; input?: JsonValue; compare?: string }
+export interface Scenario { id: string; title: string; description: string; definition: Definition; input?: JsonValue; compare?: string }
 export interface Span { function: string; detail: string; startMs: number; endMs: number | null; marks: number[]; outcome: 'running' | 'ok' | 'error' | 'cancelled' }
 /** One progress message: the records from `offset` on, and the state they establish. */
 export interface Progress { id: string; scenario: string; state: RuntimeState; offset: number; records: string[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
@@ -32,7 +32,7 @@ const outcomes = ['running', 'ok', 'error', 'cancelled'] as const;
 export function parseScenarios(value: unknown): Scenario[] {
   return array(value, 'scenarios').map((item, i) => {
     const at = `scenarios[${i}]`, o = object(item, at);
-    const scenario: Scenario = { id: string(o.id, `${at}.id`), title: string(o.title, `${at}.title`), description: string(o.description, `${at}.description`), program: parseProgram(o.program) };
+    const scenario: Scenario = { id: string(o.id, `${at}.id`), title: string(o.title, `${at}.title`), description: string(o.description, `${at}.description`), definition: parseDefinition(o.definition) };
     if (o.input !== undefined) scenario.input = o.input as JsonValue;
     if (o.compare !== undefined) scenario.compare = string(o.compare, `${at}.compare`);
     return scenario;
@@ -79,7 +79,7 @@ export function parseReport(value: unknown): Report {
   };
 }
 
-/** The accumulated view of one run: every record so far, parsed. */
+/** The accumulated view of one run: every line so far, the header first, and the records after it, parsed. */
 export interface RunView { id: string; scenario: string; state: RuntimeState; lines: string[]; records: ExecutionRecord[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
 
 /**
@@ -91,7 +91,7 @@ export function applyProgress(previous: RunView | null, p: Progress): RunView {
   const lines = base?.lines ?? [];
   if (p.offset !== lines.length) throw new Error(`progress at record ${p.offset}, but ${lines.length} records were received`);
   const all = p.records.length || !base ? [...lines, ...p.records] : lines;
-  // parseRecords checks the sequence from 1, so the whole record is parsed again.
+  // parseRecords checks the header, the first line, and the sequence from 1, so the whole record is parsed again.
   const view: RunView = {
     id: p.id, scenario: p.scenario, state: p.state, lines: all, records: all === lines && base ? base.records : parseRecords(all),
     spans: p.spans, elapsedMs: p.elapsedMs, done: p.done,

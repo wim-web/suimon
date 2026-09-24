@@ -1,11 +1,11 @@
 // Package suimon is the Go implementation of the suimon workflow engine. The control semantics
 // are defined in Lean (Suimon/*.lean at the repository root). The model part of this package
 // ports each Lean declaration under the same name, so that the two can be read side by side: the
-// program and its validation, the state and Step, exploration, and the execution record (Recorder,
+// definition and its validation, the state and Step, exploration, and the execution record (Recorder,
 // Check).
 //
-// The runtime runs a program with Go functions: NewRegistry binds the functions, judges and
-// transforms the program names, NewEngine checks the program and the bindings, and Engine.Start,
+// The runtime runs a definition with Go functions: NewRegistry binds the functions, judges and
+// transforms the definition names, NewEngine checks the definition and the bindings, and Engine.Start,
 // Run and Resume drive executions with Step, recording each accepted operation in a Journal
 // before publishing its effects.
 package suimon

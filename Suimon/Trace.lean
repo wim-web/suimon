@@ -3,9 +3,10 @@ import Suimon.WireText
 
 namespace Suimon.Trace
 
-/-! An execution record is a sequence of lines. Each accepted transition is one `op` record
-    followed by one `commit` record; only committed transitions are part of the record (§12.1).
-    A record is first written as a `Wire` value, and a `Codec` turns it into one line of text. -/
+/-! An execution record is a sequence of lines. The first line is the header, which holds the
+    definition of the execution. Each accepted transition is then one `op` record followed by one
+    `commit` record; only committed transitions are part of the record (§12.1). A record is first
+    written as a `Wire` value, and a `Codec` turns it into one line of text. -/
 
 /-- Values the transition from `before` to `after` introduces: those `after` mentions and `before`
     does not, each once. This includes lists the engine builds. Their payloads are stored by the
@@ -21,6 +22,13 @@ inductive Record where
 
 def Record.seq : Record → Nat
   | .op seq .. | .commit seq => seq
+
+/-- The payloads of an op record have distinct keys. A line may not repeat a key in any object
+    (`Wire.parse`), so only such records read back, and the recorder writes no other
+    (`transaction`). --/
+def Record.DistinctKeys : Record → Prop
+  | .op _ _ values => (values.map (·.1)).Nodup
+  | .commit _ => True
 
 /-! ## Wire form -/
 
@@ -75,7 +83,8 @@ def recordWire : Record → Wire
       optional "values" (if values.isEmpty then none else some (valuesWire values)))
   | .commit seq => .obj [("seq", .nat seq), ("commit", .bool true)]
 
-/-! Decoding looks fields up by name. -/
+/-! Decoding looks fields up by name. The text form rejects a repeated key, so a name has at most one
+    field. -/
 
 abbrev Fields := List (String × Wire)
 
@@ -199,24 +208,48 @@ def recordOfWire (wire : Wire) : Except String Record := do
     return .op seq (← opOfWire o) values
   | _, _ => throw "record: either an op or a commit"
 
+/-! The header holds the definition of the execution, which a recorder writes in the canonical form
+    of the definition file (`Codec.definitionWire`). It has no sequence number, so no other line reads
+    as a header, and it reads as no other line. -/
+
+def headerWire (definition : Wire) : Wire := .obj [("definition", definition)]
+
+def headerOfWire (wire : Wire) : Except String Wire := do
+  let .obj fields := wire | throw "header: expected an object"
+  strict fields ["definition"] "header"
+  match fields.lookup "definition" with
+  | some definition => pure definition
+  | none => throw "header: missing field definition"
+
 /-! ## Text form -/
 
-/-- A text form of records, one line each. Recovery needs only that decoding inverts encoding and
-    that an encoded record contains no newline (`Codec.Lawful`). --/
+/-- A text form of the header and the records, one line each. Recovery needs only that decoding
+    inverts encoding, for the lines a recorder writes, and that an encoded line contains no newline
+    (`Codec.Lawful`). --/
 structure Codec where
   encode : Record → String
   decode : String → Except String Record
+  /-- The header holds a definition as a `Wire` value; `check` leaves reading it to its caller. --/
+  encodeHeader : Wire → String
+  decodeHeader : String → Except String Wire
 
-def Codec.Lawful (c : Codec) : Prop :=
-  (∀ r, c.decode (c.encode r) = .ok r) ∧ (∀ r, '\n' ∉ (c.encode r).toList)
+/-- Decoding inverts encoding for the records and headers without repeated keys, which are all a
+    recorder writes (`transaction`, `Codec.definitionWire_distinctKeys`), and a line has no newline. --/
+structure Codec.Lawful (c : Codec) : Prop where
+  decode_encode : ∀ r, r.DistinctKeys → c.decode (c.encode r) = .ok r
+  newline_not_mem_encode : ∀ r, '\n' ∉ (c.encode r).toList
+  decodeHeader_encodeHeader : ∀ w, w.DistinctKeys → c.decodeHeader (c.encodeHeader w) = .ok w
+  newline_not_mem_encodeHeader : ∀ w, '\n' ∉ (c.encodeHeader w).toList
 
 /-- A codec from a text form of `Wire` values. --/
 def Codec.ofWire (render : Wire → String) (parse : String → Except String Wire) : Codec where
   encode r := render (recordWire r)
   decode line := parse line >>= recordOfWire
+  encodeHeader w := render (headerWire w)
+  decodeHeader line := parse line >>= headerOfWire
 
-/-- The text form of records: compact JSON with the fields in the order `recordWire` gives them,
-    one record per line (`wireCodec_lawful`). --/
+/-- The text form of the header and the records: compact JSON with the fields in the order
+    `headerWire` and `recordWire` give them, one per line (`wireCodec_lawful`). --/
 def wireCodec : Codec := .ofWire Wire.render Wire.parse
 
 /-! ## Replay -/
@@ -232,6 +265,9 @@ def splitLines : List Char → List Char → List (List Char) × List Char
     else splitLines rest (c :: current)
 
 structure Checked where
+  /-- The definition of the header, which the record replays against; `none` while the record has
+      no complete line. --/
+  definition : Option Definition
   state : State
   /-- The number of committed transitions. --/
   committed : Nat
@@ -257,7 +293,7 @@ def missing (before after : State) (values known : List (Value × String)) : Lis
 
 /-- Replay one complete line; the op of a transition is applied at its commit, which also checks
     the payloads of the values it introduces. --/
-def replayLine (c : Codec) (p : Program) (r : Replay) (index : Nat) (line : String) :
+def replayLine (c : Codec) (p : Definition) (r : Replay) (index : Nat) (line : String) :
     Except String Replay :=
   let at_ := s!"line {index + 1}"
   match c.decode line with
@@ -278,37 +314,49 @@ def replayLine (c : Codec) (p : Program) (r : Replay) (index : Nat) (line : Stri
       | .op .., some _ => throw s!"{at_}: an op before the previous commit"
       | .commit _, none => throw s!"{at_}: a commit without an op"
 
-def replayLines (c : Codec) (p : Program) : Replay → Nat → List (List Char) → Except String Replay
+def replayLines (c : Codec) (p : Definition) : Replay → Nat → List (List Char) → Except String Replay
   | r, _, [] => pure r
   | r, index, line :: rest => do
     replayLines c p (← replayLine c p r index (String.ofList line)) (index + 1) rest
 
-/-- Replay the committed transitions of a record. A crash may leave an op without its commit, and
-    a partial last line; both are reported as uncommitted and ignored. --/
-def check (c : Codec) (p : Program) (text : String) : Except String Checked := do
+/-- Replay the committed transitions of a record. `load` reads the definition of the header, the first
+    line, and the other lines replay against it; line numbers count the header. A crash may leave an
+    op without its commit, and a partial last line, which may be the header; both are reported as
+    uncommitted and ignored. --/
+def check (c : Codec) (load : Wire → Except String Definition) (text : String) : Except String Checked := do
   let split := splitLines text.toList []
-  let r ← replayLines c p {} 0 split.1
-  return { state := r.state, committed := r.committed, uncommitted := r.pending.isSome || !split.2.isEmpty,
-           values := r.values }
+  match split.1 with
+  | [] => return { definition := none, state := {}, committed := 0, uncommitted := !split.2.isEmpty, values := [] }
+  | header :: lines =>
+    let p ← (c.decodeHeader (String.ofList header) >>= load).mapError (s!"line 1: {·}")
+    let r ← replayLines c p {} 1 lines
+    return { definition := some p, state := r.state, committed := r.committed,
+             uncommitted := r.pending.isSome || !split.2.isEmpty, values := r.values }
 
 /-- The state a crashed run resumes from (§12.1). --/
-def recover (c : Codec) (p : Program) (text : String) : Except String State :=
-  (check c p text).map (·.state)
+def recover (c : Codec) (load : Wire → Except String Definition) (text : String) : Except String State :=
+  (check c load text).map (·.state)
 
 /-! ## Recording -/
 
-/-- The records of one accepted transition, starting at `seq`, under the rule `check` applies: each
-    value the transition introduces has its payload in the op record or in `known`, the payloads of
-    the transitions recorded before. --/
-def transaction (p : Program) (s : State) (o : Op) (values known : List (Value × String)) (seq : Nat) :
+/-- The keys that occur more than once, each once, in the order they first occur. --/
+def duplicates (keys : List String) : List String :=
+  (keys.filter fun k => keys.count k > 1).eraseDups
+
+/-- The records of one accepted transition, starting at `seq`, under the rules `check` applies: the
+    payloads of the op record have distinct keys, and each value the transition introduces has its
+    payload in the op record or in `known`, the payloads of the transitions recorded before. --/
+def transaction (p : Definition) (s : State) (o : Op) (values known : List (Value × String)) (seq : Nat) :
     Except String (State × List Record) := do
+  let keys := values.map (·.1)
+  unless keys.Nodup do throw s!"duplicate payloads for {duplicates keys}"
   let next ← step p s o
   let absent := missing s next values known
   unless absent.isEmpty do throw s!"missing payloads for {absent}"
   return (next, [.op seq o values, .commit (seq + 1)])
 
 /-- Consecutive transactions from sequence number `seq`, after transitions whose payloads are `known`. --/
-def record (p : Program) : State → List (Op × List (Value × String)) → List (Value × String) → Nat →
+def record (p : Definition) : State → List (Op × List (Value × String)) → List (Value × String) → Nat →
     Except String (State × List Record)
   | s, [], _, _ => pure (s, [])
   | s, (o, values) :: rest, known, seq => do
@@ -317,5 +365,9 @@ def record (p : Program) : State → List (Op × List (Value × String)) → Lis
     return (final, records ++ later)
 
 def text (c : Codec) (rs : List Record) : String := String.join (rs.map (c.encode · ++ "\n"))
+
+/-- The whole text a recorder writes: the header with the definition, then the records. --/
+def recording (c : Codec) (header : Wire) (rs : List Record) : String :=
+  c.encodeHeader header ++ "\n" ++ text c rs
 
 end Suimon.Trace

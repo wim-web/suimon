@@ -16,7 +16,7 @@ open State
 /-! ### Ownership -/
 
 /-- A run is the root, or the run of a sub-workflow call, or the run of a workflow task (§4.5, §8.1). --/
-def RunOwned (p : Program) (s : State) (r : Run) : Prop :=
+def RunOwned (p : Definition) (s : State) (r : Run) : Prop :=
   (r.owner = none ∧ r.task = none ∧ r.path = []) ∨
   (r.task = none ∧ ∃ i ∈ s.invocations, r.owner = some i.id ∧ r.path = i.run ++ [i.id] ∧
     ∃ w pl wf out, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧
@@ -26,13 +26,13 @@ def RunOwned (p : Program) (s : State) (r : Run) : Prop :=
 
 /-- An invocation is identified by where it comes from, applies an invocable placement of its run, and
     took a trigger that fits the input shape; only a branch records an arm. --/
-def InvocationPlaced (p : Program) (s : State) (i : Invocation) : Prop :=
+def InvocationPlaced (p : Definition) (s : State) (i : Invocation) : Prop :=
   i.id = Key.invocation i.run i.placement i.trigger ∧
   ∃ w pl sh, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧ Invocable pl.control ∧
     w.shape? p i.placement = some sh ∧ TriggerOk s i.run i sh ∧ (i.arm = none ∨ ∃ j arms, pl.control = .branch j arms)
 
 /-- A call belongs to the invocation of a function call or branch, or to a task with a function body. --/
-def CallOwned (p : Program) (s : State) (c : Call) : Prop :=
+def CallOwned (p : Definition) (s : State) (c : Call) : Prop :=
   (c.task = none ∧ c.id = c.owner ∧ ∃ i ∈ s.invocations, i.id = c.owner ∧ ∃ w pl, s.workflow? p i.run = some w ∧
     w.placement? i.placement = some pl ∧
     ((∃ f d, pl.control = .call (.function f) ∧ p.function? f = some d ∧ c.target = .function f ∧
@@ -42,15 +42,15 @@ def CallOwned (p : Program) (s : State) (c : Call) : Prop :=
     (∃ tk ∈ e.tasks, tk.name = name) ∧ ∃ spec f, s.taskSpec p e name = .ok spec ∧ spec.body = .function f)
 
 /-- An execution belongs to the invocation of its concurrency placement. --/
-def ExecutionOwned (p : Program) (s : State) (e : Execution) : Prop :=
+def ExecutionOwned (p : Definition) (s : State) (e : Execution) : Prop :=
   ∃ i ∈ s.invocations, i.id = e.id ∧ i.run = e.run ∧ i.placement = e.placement ∧ ∃ c, s.concurrencyOf p e = .ok c
 
 /-- A delivery carries a result of its connection's source, on the connection's arm (§6, §7.2). --/
-def DeliveryEligible (p : Program) (s : State) (d : Delivery) : Prop :=
+def DeliveryEligible (p : Definition) (s : State) (d : Delivery) : Prop :=
   ∃ w c r, s.workflow? p d.run = some w ∧ w.connections[d.connection]? = some c ∧ r ∈ s.results ∧
     r.id = d.source ∧ r.run = d.run ∧ r.placement = c.source ∧ (c.arm = none ∨ r.arm = c.arm)
 
-structure Own (p : Program) (s : State) : Prop where
+structure Own (p : Definition) (s : State) : Prop where
   runs : ∀ r ∈ s.runs, RunOwned p s r
   invocations : ∀ i ∈ s.invocations, InvocationPlaced p s i
   calls : ∀ c ∈ s.calls, CallOwned p s c
@@ -61,20 +61,20 @@ structure Own (p : Program) (s : State) : Prop where
 
 /-- The placement of `i` is a Stream function call or a concurrency with Stream output: its results are
     accepted before its invocation ends and stay if it fails (§4.1, §8.3). --/
-def StreamSource (p : Program) (s : State) (i : Invocation) : Prop :=
+def StreamSource (p : Definition) (s : State) (i : Invocation) : Prop :=
   ∃ w pl, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧
     ((∃ f d, pl.control = .call (.function f) ∧ p.function? f = some d ∧ d.output.kind = .stream) ∨
      (∃ c, pl.control = .concurrency c ∧ c.output = .stream))
 
 /-- A result belongs to the invocation that produced it, which succeeded unless its results stream,
     or it is the aggregate of a waitStream or Merge that settled normally (§9, §10.2). --/
-def ResultOwned (p : Program) (s : State) (r : Result) : Prop :=
+def ResultOwned (p : Definition) (s : State) (r : Result) : Prop :=
   (∃ i ∈ s.invocations, i.id = r.producer ∧ i.run = r.run ∧ i.placement = r.placement ∧ i.arm = r.arm ∧
     (i.status = .succeeded ∨ StreamSource p s i)) ∨
   (r.producer = Key.aggregate r.run r.placement ∧ r.arm = none ∧
     ∃ x ∈ s.settled, x.run = r.run ∧ x.placement = r.placement ∧ x.outcome = .normal ∧ x.arms = [])
 
-structure Dyn (p : Program) (s : State) : Prop where
+structure Dyn (p : Definition) (s : State) : Prop where
   /-- An invocation that is no longer active runs no call, and its sub-run and execution completed. --/
   nonActive : ∀ i ∈ s.invocations, i.status ≠ .active →
     (∀ c ∈ s.calls, c.owner = i.id → c.task = none → c.status ≠ .running ∧ c.status ≠ .fetching) ∧
@@ -93,7 +93,7 @@ structure Dyn (p : Program) (s : State) : Prop where
 
 /-! ### Settlements -/
 
-structure Sett (p : Program) (s : State) : Prop where
+structure Sett (p : Definition) (s : State) : Prop where
   /-- A settled placement ended all its invocations (§10.3). --/
   ended : ∀ x ∈ s.settled, ∀ i ∈ s.invocations, i.run = x.run → i.placement = x.placement →
     s.invocationEnded i = true
@@ -109,7 +109,7 @@ structure Sett (p : Program) (s : State) : Prop where
     ∀ w, p.workflow? r.workflow = some w → ∀ pl ∈ w.placements, (s.settled? r.path pl.name).isSome
 
 /-- The invariant of reachable states. --/
-structure Inv (p : Program) (s : State) : Prop where
+structure Inv (p : Definition) (s : State) : Prop where
   wk : s.WellKeyed
   fresh : s.started = false → s = {}
   own : Own p s
@@ -119,7 +119,7 @@ structure Inv (p : Program) (s : State) : Prop where
 /-! ### Records a step creates -/
 
 /-- An invocation `invoke` creates, with what it checked. --/
-def NewInvocation (p : Program) (s : State) (i : Invocation) : Prop :=
+def NewInvocation (p : Definition) (s : State) (i : Invocation) : Prop :=
   s.started = true ∧ s.status = .running ∧
   ∃ r w pl, s.run? i.run = some r ∧ r.complete = false ∧ p.workflow? r.workflow = some w ∧
     w.placement? i.placement = some pl ∧ Invocable pl.control ∧
@@ -128,7 +128,7 @@ def NewInvocation (p : Program) (s : State) (i : Invocation) : Prop :=
     (∀ i' ∈ s.invocationsOf i.run i.placement, i'.trigger ≠ i.trigger) ∧ s.invocation? i.id = none
 
 /-- A call `invoke` or `beginTask` creates. --/
-def NewCall (p : Program) (s t : State) (c : Call) : Prop :=
+def NewCall (p : Definition) (s t : State) (c : Call) : Prop :=
   s.call? c.id = none ∧ c.status = .running ∧
   ((c.task = none ∧ c.id = c.owner ∧ ∃ i ∈ t.invocations, i.id = c.owner ∧ NewInvocation p s i ∧
       ∃ w pl, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧
@@ -141,7 +141,7 @@ def NewCall (p : Program) (s t : State) (c : Call) : Prop :=
       withTask e { ts with status := .active } ∈ t.executions ∧ s.status = .running))
 
 /-- A run `start`, `invoke` or `beginTask` creates. --/
-def NewRun (p : Program) (s t : State) (r : Run) : Prop :=
+def NewRun (p : Definition) (s t : State) (r : Run) : Prop :=
   s.run? r.path = none ∧ r.complete = false ∧
   ((s.started = false ∧ r.owner = none ∧ r.task = none ∧ r.path = []) ∨
    (r.task = none ∧ ∃ i ∈ t.invocations, r.owner = some i.id ∧ NewInvocation p s i ∧ r.path = i.run ++ [i.id] ∧
@@ -153,14 +153,14 @@ def NewRun (p : Program) (s t : State) (r : Run) : Prop :=
       withTask e { ts with status := .active } ∈ t.executions ∧ s.status = .running))
 
 /-- An execution `invoke` creates. --/
-def NewExecution (p : Program) (s t : State) (e : Execution) : Prop :=
+def NewExecution (p : Definition) (s t : State) (e : Execution) : Prop :=
   s.execution? e.id = none ∧ e.complete = false ∧
   ∃ i ∈ t.invocations, i.id = e.id ∧ i.run = e.run ∧ i.placement = e.placement ∧ NewInvocation p s i ∧
     ∃ w pl c, s.workflow? p e.run = some w ∧ w.placement? e.placement = some pl ∧ pl.control = .concurrency c ∧
       e.tasks.map (·.name) = c.tasks.map (·.name) ∧ ∀ tk ∈ e.tasks, tk.status ≠ .active
 
 /-- A result a step accepts, with where it came from (§10.2). --/
-def NewResult (p : Program) (s t : State) (r : Result) : Prop :=
+def NewResult (p : Definition) (s t : State) (r : Result) : Prop :=
   s.started = true ∧ s.status = .running ∧ s.result? r.id = none ∧
   ((∃ c ∈ s.calls, ∃ i ∈ s.invocations, c.task = none ∧ c.status = .running ∧ c.stream = false ∧
       (∃ f, c.target = .function f) ∧ i.id = c.owner ∧ r.run = i.run ∧ r.placement = i.placement ∧
@@ -186,13 +186,13 @@ def NewResult (p : Program) (s t : State) (r : Result) : Prop :=
       x ∈ t.settled))
 
 /-- A delivery a step records, checked against the state before it. --/
-def NewDelivery (p : Program) (s : State) (d : Delivery) : Prop :=
+def NewDelivery (p : Definition) (s : State) (d : Delivery) : Prop :=
   s.started = true ∧ s.status = .running ∧ s.delivery? d.run d.connection d.source = none ∧
   ∃ w c r, s.workflow? p d.run = some w ∧ w.connections[d.connection]? = some c ∧ s.result? d.source = some r ∧
     r.run = d.run ∧ r.placement = c.source ∧ (c.arm = none ∨ r.arm = c.arm)
 
 /-- A settlement a step records: `settle` changes nothing else but may add the aggregate. --/
-def NewSettled (p : Program) (s t : State) (x : Settled) : Prop :=
+def NewSettled (p : Definition) (s t : State) (x : Settled) : Prop :=
   s.started = true ∧ s.status = .running ∧
   ∃ run w pl shape kind res, s.run? x.run = some run ∧ run.complete = false ∧ p.workflow? run.workflow = some w ∧
     w.placement? x.placement = some pl ∧ s.settled? x.run x.placement = none ∧ w.shape? p x.placement = some shape ∧

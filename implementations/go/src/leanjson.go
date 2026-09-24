@@ -8,10 +8,12 @@ import (
 	"unicode/utf8"
 )
 
-// A port of Lean's Json.parse (Lean/Data/Json/Parser.lean), which reads program files. Porting it
-// keeps the accepted inputs and the error messages of the Lean CLI: objects keep one field per key
-// (the last one) in key order, numbers are a mantissa and a decimal exponent, a lone surrogate
-// escape becomes U+FFFD, and errors report the byte offset.
+// A port of Codec.parse of Suimon/Json.lean, which reads definition files: Lean's Json.parse
+// (Lean/Data/Json/Parser.lean), except that an object may not repeat a key. Porting it keeps the
+// accepted inputs and the error messages of the Lean CLI: objects keep their fields in key order,
+// numbers are a mantissa and a decimal exponent, a lone surrogate escape becomes U+FFFD, and errors
+// report the byte offset. A repeated key, compared after its escapes are decoded, fails right after
+// its closing quote.
 
 type ljKind int
 
@@ -30,7 +32,7 @@ type ljValue struct {
 	num   ljNumber
 	str   string
 	items []ljValue
-	// fields are sorted by key, one per key, like Lean's Std.TreeMap.
+	// fields are sorted by key, like Lean's Std.TreeMap; no key repeats.
 	fields []ljField
 }
 
@@ -46,16 +48,29 @@ type ljNumber struct {
 	exponent *big.Int
 }
 
-// nat is Lean's Json.getNat?: a number with exponent 0 and a non-negative mantissa. Values above
-// 2^64-1 are clamped (see Timeout).
+// nat is Codec.nat? of Suimon/Json.lean: the value of a number that is a natural number in any
+// notation, so 2.0 and 20e-1 are 2. Trailing zeros are stripped rather than computing
+// 10^exponent, which takes at most one step per digit of the mantissa whatever the exponent.
+// Values above 2^64-1 are clamped (see Timeout).
 func (n ljNumber) nat() (uint64, bool) {
-	if n.exponent.Sign() != 0 || n.neg {
+	if n.mantissa.Sign() == 0 {
+		return 0, true
+	}
+	if n.neg {
 		return 0, false
 	}
-	if !n.mantissa.IsUint64() {
+	m, e := n.mantissa, n.exponent
+	for e.Sign() > 0 {
+		q, r := new(big.Int).QuoRem(m, bigTen, new(big.Int))
+		if r.Sign() != 0 {
+			return 0, false
+		}
+		m, e = q, new(big.Int).Sub(e, bigOne)
+	}
+	if !m.IsUint64() {
 		return math.MaxUint64, true
 	}
-	return n.mantissa.Uint64(), true
+	return m.Uint64(), true
 }
 
 func (v ljValue) field(key string) (ljValue, bool) {
@@ -81,7 +96,8 @@ type ljParser struct {
 	pos int
 }
 
-// parseLeanJSON parses valid UTF-8 text as Lean's Json.parse does.
+// parseLeanJSON parses valid UTF-8 text as Codec.parse does: as Lean's Json.parse does, except that a
+// repeated key is an error.
 func parseLeanJSON(s string) (ljValue, error) {
 	p := &ljParser{s: s}
 	p.ws()
@@ -252,6 +268,7 @@ func (p *ljParser) arrayCore() ([]ljValue, error) {
 
 func (p *ljParser) objectCore() ([]ljField, error) {
 	var fields []ljField
+	seen := map[string]bool{}
 	for {
 		if err := p.lookahead(func(c rune) bool { return c == '"' }, `"`); err != nil {
 			return nil, err
@@ -261,6 +278,10 @@ func (p *ljParser) objectCore() ([]ljField, error) {
 		if err != nil {
 			return nil, err
 		}
+		if seen[key] {
+			return nil, p.fail("duplicate key " + quoteString(key))
+		}
+		seen[key] = true
 		p.ws()
 		if err := p.lookahead(func(c rune) bool { return c == ':' }, ":"); err != nil {
 			return nil, err
@@ -279,29 +300,14 @@ func (p *ljParser) objectCore() ([]ljField, error) {
 		switch c {
 		case '}':
 			p.ws()
-			return treeMap(fields), nil
+			sort.Slice(fields, func(i, j int) bool { return fields[i].key < fields[j].key })
+			return fields, nil
 		case ',':
 			p.ws()
 		default:
 			return nil, p.fail("unexpected character in object")
 		}
 	}
-}
-
-// treeMap keeps the last field of each key and sorts the fields by key.
-func treeMap(fields []ljField) []ljField {
-	last := make(map[string]int, len(fields))
-	for i, f := range fields {
-		last[f.key] = i
-	}
-	out := make([]ljField, 0, len(last))
-	for i, f := range fields {
-		if last[f.key] == i {
-			out = append(out, f)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
-	return out
 }
 
 func (p *ljParser) str() (string, error) {
@@ -426,8 +432,9 @@ func (p *ljParser) digits() (*big.Int, int) {
 }
 
 var (
+	bigOne    = big.NewInt(1)
 	bigTen    = big.NewInt(10)
-	usizeSize = new(big.Int).Lsh(big.NewInt(1), 64)
+	usizeSize = new(big.Int).Lsh(bigOne, 64)
 	// hugeShift is a shift beyond which any non-zero mantissa exceeds 2^64, so the exact value no
 	// longer matters (see ljNumber.nat).
 	hugeShift = big.NewInt(64)

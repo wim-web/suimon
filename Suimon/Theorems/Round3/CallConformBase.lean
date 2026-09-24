@@ -10,7 +10,7 @@ open State
 
 namespace CallConformAux
 
-variable {p : Program} {env : Env} {s t u : State}
+variable {p : Definition} {env : Env} {s t u : State}
 
 theorem ite_of_pos {α : Type} {c : Prop} [Decidable c] {a b : α} (h : c) : (if c then a else b) = a := by
   simp [h]

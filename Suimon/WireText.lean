@@ -1,8 +1,8 @@
 import Suimon.Wire
 
 /-! The text encoding of `Wire` values: compact JSON with a fixed rendering and a parser that
-    accepts at least every rendering. Records are written one per line, so a rendering never
-    contains a raw newline. -/
+    accepts at least every rendering of a value without repeated keys. Records are written one per
+    line, so a rendering never contains a raw newline. -/
 
 namespace Suimon
 
@@ -216,7 +216,8 @@ def parseItems : Nat → List Char → Array Wire → Parsed Wire
         else if c = ']' then .ok (.arr (acc.push w).toList, cs)
         else fail "expected ',' or ']'" (c :: cs)
 
-/-- Reads object fields from the first key on, through the closing brace. --/
+/-- Reads object fields from the first key on, through the closing brace. A key the object already
+    has, compared after its escapes are decoded, is rejected right after its closing quote. --/
 def parseFields : Nat → List Char → Array (String × Wire) → Parsed Wire
   | 0, cs, _ => fail "input too deeply nested" cs
   | fuel + 1, cs, acc =>
@@ -227,7 +228,8 @@ def parseFields : Nat → List Char → Array (String × Wire) → Parsed Wire
         match parseStringBody cs "" with
         | .error e => .error e
         | .ok (k, rest) =>
-          match skipWs rest with
+          if acc.any (·.1 == k) then fail s!"duplicate key {k.quote}" rest
+          else match skipWs rest with
           | [] => fail "unterminated object" []
           | c :: cs =>
             if c = ':' then
@@ -249,7 +251,8 @@ end WireText
 
 open WireText in
 /-- Parses JSON text into a `Wire`: whitespace between tokens and the standard escapes are
-    accepted, numbers must be natural numbers, and nothing may follow the value. --/
+    accepted, numbers must be natural numbers, no object may repeat a key, and nothing may follow
+    the value. --/
 def Wire.parse (s : String) : Except String Wire :=
   let cs := s.toList
   let err (e : String × Nat) : Except String Wire :=

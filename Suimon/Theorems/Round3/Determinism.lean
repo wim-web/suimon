@@ -8,9 +8,9 @@ open State
 /-! ## [28] Round3/Determinism.lean — proven assembly -/
 
 section Determinism
-variable {p : Program} {env : Env}
+variable {p : Definition} {env : Env}
 
-/-- **Determinism of results.** Two conforming executions of a valid program in the same environment
+/-- **Determinism of results.** Two conforming executions of a valid definition in the same environment
     (input, behavior of calls and transforms) that complete (the root run completed, so neither stopped
     nor was cancelled) end in states equal up to the order of every record list, whatever the schedule,
     including the order in which tasks got concurrency slots. -/

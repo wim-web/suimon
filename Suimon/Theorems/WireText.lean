@@ -55,6 +55,14 @@ theorem Wire.induction {P : Wire → Prop} (null : P .null) (bool : ∀ b, P (.b
     (fun _ _ hh ht x hx => (List.mem_cons.1 hx).elim (fun h => h ▸ hh) (ht x))
     (fun _ _ h => h) w
 
+theorem Wire.distinctKeys_arr_iff {items : List Wire} :
+    (Wire.arr items).DistinctKeys ↔ ∀ w ∈ items, w.DistinctKeys :=
+  ⟨fun | .arr h => h, .arr⟩
+
+theorem Wire.distinctKeys_obj_iff {fields : List (String × Wire)} :
+    (Wire.obj fields).DistinctKeys ↔ (fields.map (·.1)).Nodup ∧ ∀ f ∈ fields, f.2.DistinctKeys :=
+  ⟨fun | .obj hk hf => ⟨hk, hf⟩, fun ⟨hk, hf⟩ => .obj hk hf⟩
+
 namespace WireText
 
 theorem toNat_ofNat (n : Nat) : (Char.ofNat n).toNat = if n.isValidChar then n else 0 := by
@@ -312,33 +320,44 @@ theorem parseStringBody_strChars (k : String) (rest : List Char) :
     parseStringBody (k.toList.flatMap escChars ++ '"' :: rest) "" = .ok (k, rest) := by
   simp [parseStringBody_escaped]
 
+/-- A key that comes after the fields read so far, in fields without repeated keys, is new. --/
+theorem any_key_eq_false {acc : Array (String × Wire)} {k : String} {v : Wire} {fs : List (String × Wire)}
+    (h : ((acc.toList ++ (k, v) :: fs).map (·.1)).Nodup) : acc.any (·.1 == k) = false := by
+  rw [← Array.any_toList, List.any_eq_false]
+  intro f hf heq
+  simp only [List.map_append, List.map_cons, List.nodup_append] at h
+  exact h.2.2 f.1 (List.mem_map_of_mem hf) k List.mem_cons_self (by simpa using heq)
+
 theorem parseFields_fieldsChars (fs : List (String × Wire)) (hfs : ∀ f ∈ fs, ValueOK f.2) :
     ∀ k v, ValueOK v → ∀ fuel rest acc,
+      ((acc.toList ++ (k, v) :: fs).map (·.1)).Nodup →
       (strChars k ++ ':' :: (v.textChars ++ Wire.fieldsChars fs false)).length + 1 ≤ fuel →
       parseFields fuel (strChars k ++ ':' :: (v.textChars ++ (Wire.fieldsChars fs false ++ '}' :: rest)))
         acc = .ok (.obj (acc.toList ++ (k, v) :: fs), rest) := by
   induction fs with
   | nil =>
-    intro k v hv fuel rest acc hf
+    intro k v hv fuel rest acc hkeys hf
     obtain ⟨g, rfl⟩ : ∃ g, fuel = g + 1 := ⟨fuel - 1, by omega⟩
     have hval := hv g (Wire.fieldsChars [] false ++ '}' :: rest) (by simp at hf; omega)
       (delim_fieldsTail [] rest)
+    have hnew := any_key_eq_false hkeys
     simp only [Wire.fieldsChars, List.nil_append] at hval
-    simp [parseFields, strChars, Wire.fieldsChars, parseStringBody_strChars, hval, skipWs, isWs]
+    simp [parseFields, strChars, Wire.fieldsChars, parseStringBody_strChars, hnew, hval, skipWs, isWs]
   | cons f fs ih =>
-    intro k v hv fuel rest acc hf
+    intro k v hv fuel rest acc hkeys hf
     obtain ⟨k', v'⟩ := f
     simp only [List.mem_cons, forall_eq_or_imp] at hfs
     obtain ⟨g, rfl⟩ : ∃ g, fuel = g + 1 := ⟨fuel - 1, by omega⟩
     have hval := hv g (Wire.fieldsChars ((k', v') :: fs) false ++ '}' :: rest)
       (by simp at hf; omega) (delim_fieldsTail _ rest)
-    have hrec := ih hfs.2 k' v' hfs.1 g rest (acc.push (k, v))
+    have hnew := any_key_eq_false hkeys
+    have hrec := ih hfs.2 k' v' hfs.1 g rest (acc.push (k, v)) (by simpa using hkeys)
       (by simp [Wire.fieldsChars] at hf ⊢; omega)
     simp only [Wire.fieldsChars, Bool.false_eq_true, ↓reduceIte, List.cons_append,
       List.nil_append, List.append_assoc, strChars] at hval hrec ⊢
-    simp [parseFields, parseStringBody_strChars, hval, skipWs, isWs, hrec]
+    simp [parseFields, parseStringBody_strChars, hnew, hval, skipWs, isWs, hrec]
 
-theorem parseValue_textChars (w : Wire) : ValueOK w := by
+theorem parseValue_textChars (w : Wire) (hw : w.DistinctKeys) : ValueOK w := by
   induction w using Wire.induction with
   | null =>
     intro fuel rest hf hd
@@ -374,6 +393,7 @@ theorem parseValue_textChars (w : Wire) : ValueOK w := by
     obtain ⟨g, rfl⟩ : ∃ g, fuel = g + 1 := ⟨fuel - 1, by simp [Wire.textChars, strChars] at hf; omega⟩
     simp [parseValue, Wire.textChars, strChars, skipWs, isWs, parseStringBody_strChars]
   | arr items ih =>
+    replace ih : ∀ w ∈ items, ValueOK w := fun w m => ih w m (Wire.distinctKeys_arr_iff.1 hw w m)
     intro fuel rest hf hd
     obtain ⟨g, rfl⟩ : ∃ g, fuel = g + 1 := ⟨fuel - 1, by simp [Wire.textChars] at hf; omega⟩
     cases items with
@@ -392,6 +412,8 @@ theorem parseValue_textChars (w : Wire) : ValueOK w := by
       rw [skipWs_cons_of _ hws]
       simp [hne, hitems]
   | obj fields ih =>
+    obtain ⟨hkeys, hall⟩ := Wire.distinctKeys_obj_iff.1 hw
+    replace ih : ∀ f ∈ fields, ValueOK f.2 := fun f m => ih f m (hall f m)
     intro fuel rest hf hd
     obtain ⟨g, rfl⟩ : ∃ g, fuel = g + 1 := ⟨fuel - 1, by simp [Wire.textChars] at hf; omega⟩
     cases fields with
@@ -399,7 +421,7 @@ theorem parseValue_textChars (w : Wire) : ValueOK w := by
     | cons f fs =>
       obtain ⟨k, v⟩ := f
       simp only [List.mem_cons, forall_eq_or_imp] at ih
-      have hfields := parseFields_fieldsChars fs ih.2 k v ih.1 g rest #[]
+      have hfields := parseFields_fieldsChars fs ih.2 k v ih.1 g rest #[] (by simpa using hkeys)
         (by simp [Wire.textChars, Wire.fieldsChars] at hf ⊢; omega)
       simp only [Wire.textChars, Wire.fieldsChars, ↓reduceIte, List.nil_append, strChars,
         List.cons_append, List.append_assoc] at hfields ⊢
@@ -478,9 +500,9 @@ theorem Wire.newline_not_mem_render (w : Wire) : '\n' ∉ (Wire.render w).toList
   rw [Wire.render_toList]
   exact newline_not_mem_textChars w
 
-/-- Parsing inverts rendering. --/
-theorem Wire.parse_render (w : Wire) : Wire.parse (Wire.render w) = .ok w := by
-  have h := parseValue_textChars w (w.textChars.length + 1) [] (by omega) delim_nil
+/-- Parsing inverts rendering for a value without repeated keys (the parser rejects a repeated key). --/
+theorem Wire.parse_render (w : Wire) (hw : w.DistinctKeys) : Wire.parse (Wire.render w) = .ok w := by
+  have h := parseValue_textChars w hw (w.textChars.length + 1) [] (by omega) delim_nil
   rw [List.append_nil] at h
   simp [Wire.parse, Wire.render_toList, h, skipWs]
 

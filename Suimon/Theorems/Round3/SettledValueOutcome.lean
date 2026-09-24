@@ -10,11 +10,11 @@ open State
 /-! ### Static facts -/
 
 /-- A connection out of a branch names one of its arms; any other connection has no arm. -/
-theorem connection_arm {p : Program} {w : Workflow} {c : Connection} (h : p.validateConnection w c = .ok ())
+theorem connection_arm {p : Definition} {w : Workflow} {c : Connection} (h : p.validateConnection w c = .ok ())
     {src : Placement} (hsrc : w.placement? c.source = some src) :
     (∀ j arms, src.control = .branch j arms → ∃ a, c.arm = some a ∧ a ∈ arms) ∧
     ((∀ j arms, src.control ≠ .branch j arms) → c.arm = none) := by
-  unfold Program.validateConnection at h
+  unfold Definition.validateConnection at h
   simp only [Static.except_bind_eq_ok, Validate.need_eq_ok, hsrc, Option.some.injEq, exists_eq_left'] at h
   obtain ⟨dst, -, h⟩ := h
   split at h
@@ -31,7 +31,7 @@ theorem connection_arm {p : Program} {w : Workflow} {c : Connection} (h : p.vali
     exact ⟨fun j arms hc => absurd hc (hne j arms), fun _ => harm⟩
 
 /-- A placement with a Single output and a Stream input is a waitStream (§5.2). -/
-theorem waitStream_of_stream {p : Program} {w : Workflow} {name : String} {pl : Placement} {j : Nat}
+theorem waitStream_of_stream {p : Definition} {w : Workflow} {name : String} {pl : Placement} {j : Nat}
     {c : Connection} (hpl : w.placement? name = some pl) (hsh : w.shape? p name = some (.stream j c))
     (hk : w.outputKind? p name = some .single) : ∃ e, pl.control = .waitStream e := by
   have hm : ∀ e, pl.control ≠ .merge e := fun e he => by
@@ -42,13 +42,13 @@ theorem waitStream_of_stream {p : Program} {w : Workflow} {name : String} {pl : 
   cases hc : pl.control with
   | waitStream e => exact ⟨e, rfl⟩
   | merge e => exact absurd hc (hm e)
-  | call b => rw [hc] at hout; simp [Program.outputKind] at hout
-  | branch j arms => rw [hc] at hout; simp [Program.outputKind] at hout
-  | concurrency cc => rw [hc] at hout; simp [Program.outputKind] at hout
+  | call b => rw [hc] at hout; simp [Definition.outputKind] at hout
+  | branch j arms => rw [hc] at hout; simp [Definition.outputKind] at hout
+  | concurrency cc => rw [hc] at hout; simp [Definition.outputKind] at hout
 
 /-- Controls whose succeeded invocation produced a result: a function call with a Single contract, a
     sub-workflow call, a branch, and a concurrency with a List output. -/
-def SingleBody (p : Program) : Control → Prop
+def SingleBody (p : Definition) : Control → Prop
   | .call (.function f) => ∃ decl, p.function? f = some decl ∧ decl.output.kind = .single
   | .call (.workflow _ _) => True
   | .branch _ _ => True
@@ -56,7 +56,7 @@ def SingleBody (p : Program) : Control → Prop
   | _ => False
 
 /-- An invoked placement with a Single output has a Single body. -/
-theorem singleBody_of_kind {p : Program} {w : Workflow} {name : String} {pl : Placement} {sh : Workflow.Shape}
+theorem singleBody_of_kind {p : Definition} {w : Workflow} {name : String} {pl : Placement} {sh : Workflow.Shape}
     (hpl : w.placement? name = some pl) (hsh : w.shape? p name = some sh) (hk : w.outputKind? p name = some .single)
     (hinv : (∃ b, pl.control = .call b) ∨ (∃ j arms, pl.control = .branch j arms) ∨
       (∃ cc, pl.control = .concurrency cc)) :
@@ -71,7 +71,7 @@ theorem singleBody_of_kind {p : Program} {w : Workflow} {name : String} {pl : Pl
     obtain ⟨inp, -, hout, -⟩ := Delivery.outputKind?_shape hsh hk hpl hm
     rw [hc] at hout
     show cc.output = .list
-    rcases inp with _ | (_ | _) <;> cases ho : cc.output <;> simp [Program.outputKind, ho] at hout ⊢
+    rcases inp with _ | (_ | _) <;> cases ho : cc.output <;> simp [Definition.outputKind, ho] at hout ⊢
 
 /-! ### Settlements with a value -/
 

@@ -91,12 +91,12 @@ def Conforms (env : Env) (s : State) : Op → Prop
 /-- A conforming execution `tr` from the empty state to `s`: every operation conforms to the
     environment, is accepted, and changes the state. The only accepted operation that leaves a state
     unchanged is a repeated `cancel` while stopping; counting it would make every bound false. -/
-inductive Conforming (p : Program) (env : Env) : List Op → State → Prop
+inductive Conforming (p : Definition) (env : Env) : List Op → State → Prop
   | nil : Conforming p env [] {}
   | snoc {tr : List Op} {s t : State} {op : Op} : Conforming p env tr s → Conforms env s op →
       step p s op = .ok t → t ≠ s → Conforming p env (tr ++ [op]) t
 
-theorem Conforming.reachable {p : Program} {env : Env} {tr : List Op} {s : State} (h : Conforming p env tr s) :
+theorem Conforming.reachable {p : Definition} {env : Env} {tr : List Op} {s : State} (h : Conforming p env tr s) :
     Reachable p s := by
   induction h with
   | nil => exact .empty
@@ -110,7 +110,7 @@ def Done (s : State) : Prop := (s.run? []).any (·.complete) = true
 def Unstopped (s : State) : Prop := s.status = .running ∨ Done s
 
 /-- No conforming operation changes `s`: the execution cannot be extended. -/
-def Stuck (p : Program) (env : Env) (s : State) : Prop :=
+def Stuck (p : Definition) (env : Env) (s : State) : Prop :=
   ∀ op t, Conforms env s op → step p s op = .ok t → t = s
 
 /-- Engine operations: decisions of the engine, including the application of transforms. The others
@@ -127,7 +127,7 @@ def Waiting (s : State) : Prop :=
   ∃ c ∈ s.calls, c.status = .fetching ∨ c.status = .cancelling ∨ (c.status = .running ∧ c.stream = false)
 
 /-- The arms of the branch whose judge `c` is. -/
-def judgeArms (p : Program) (s : State) (c : Call) : List String :=
+def judgeArms (p : Definition) (s : State) (c : Call) : List String :=
   match (s.invocation? c.owner).bind fun i => (s.workflow? p i.run).bind (·.placement? i.placement) with
   | some { control := .branch _ arms, .. } => arms
   | _ => []
@@ -147,11 +147,11 @@ def Script.Fits (sc : Script) (c : Call) (arms : List String) : Prop :=
 
 /-- The outside world answers every call an execution creates within the call's contract (§15.3).
     Semantic: it quantifies over the conforming executions of the same environment. -/
-def Env.Fits (p : Program) (env : Env) : Prop :=
+def Env.Fits (p : Definition) (env : Env) : Prop :=
   ∀ tr s, Conforming p env tr s → ∀ c ∈ s.calls, (env.behavior.script c.id).Fits c (judgeArms p s c)
 
 /-- The caller passes an input exactly when the main workflow declares one (§3.1). -/
-def Env.InputFits (p : Program) (env : Env) : Prop :=
+def Env.InputFits (p : Definition) (env : Env) : Prop :=
   ((p.workflow? p.main).bind (·.input)).isSome = env.input.isSome
 
 /-- Equality up to the order of every record list. -/
@@ -198,11 +198,11 @@ theorem listValue_perm {l₁ l₂ : List Value} (h : l₁.Perm l₂) : listValue
 
 /-- The call ranks of `callsAcyclic`: a workflow calls only workflows of higher rank, below the number
     of workflows. They bound the nesting of runs (fuel `p.depth`). -/
-theorem call_rank {p : Program} (valid : p.validate = .ok ()) :
+theorem call_rank {p : Definition} (valid : p.validate = .ok ()) :
     ∃ rank : String → Nat, (∀ w ∈ p.workflows, rank w.id < p.workflows.length) ∧
       ∀ w ∈ p.workflows, ∀ pl ∈ w.placements, ∀ wf ∈ pl.control.workflowRefs, ∀ w' ∈ p.workflows,
         w'.id = wf → rank w.id < rank w'.id := by
-  obtain ⟨rank, hlt, hedge⟩ := acyclic_rank (Program.validate_ok valid).callsAcyclic
+  obtain ⟨rank, hlt, hedge⟩ := acyclic_rank (Definition.validate_ok valid).callsAcyclic
   refine ⟨rank, fun w hw => by simpa using hlt w.id (List.mem_map.mpr ⟨w, hw, rfl⟩), ?_⟩
   intro w hw pl hpl wf hwf w' hw' hid
   subst hid
@@ -211,15 +211,15 @@ theorem call_rank {p : Program} (valid : p.validate = .ok ()) :
 
 /-- The placement ranks of `Workflow.acyclic`: connections go up in rank, below the number of
     placements. They order the placements of a run (progress) and bound `possibleResults`. -/
-theorem placement_rank {p : Program} (valid : p.validate = .ok ()) :
+theorem placement_rank {p : Definition} (valid : p.validate = .ok ()) :
     ∀ w ∈ p.workflows, ∃ rank : String → Nat, (∀ pl ∈ w.placements, rank pl.name < w.placements.length) ∧
       ∀ c ∈ w.connections, rank c.source < rank c.target := by
   intro w hw
-  have hwc := (Program.validate_ok valid).workflows w hw
+  have hwc := (Definition.validate_ok valid).workflows w hw
   obtain ⟨rank, hlt, hedge⟩ := acyclic_rank hwc.acyclic
   refine ⟨rank, fun pl hpl => by simpa using hlt pl.name (List.mem_map.mpr ⟨pl, hpl, rfl⟩), ?_⟩
   intro c hc
-  obtain ⟨src, dst, hsrc, hdst, -⟩ := Program.validateConnection_ok (hwc.connections c hc)
+  obtain ⟨src, dst, hsrc, hdst, -⟩ := Definition.validateConnection_ok (hwc.connections c hc)
   obtain ⟨hsm, hsn⟩ := Workflow.placement?_eq_some hsrc
   obtain ⟨hdm, hdn⟩ := Workflow.placement?_eq_some hdst
   exact hedge (c.source, c.target) (List.mem_map.mpr ⟨c, hc, rfl⟩)

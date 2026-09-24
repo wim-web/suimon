@@ -2,8 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://wim-web.github.io/suimon/schema/trace.schema.json",
   "title": "suimon execution record line",
-  "description": "One line of an execution record in JSON lines. Each accepted transition is an op line followed by a commit line, with consecutive seq numbers. Writers put the fields in the order seq, op, values and seq, commit; readers look fields up by name. `suimon check` replays the committed transitions against the program; an op without its commit, or a partial last line, is what a crash leaves and is discarded.",
+  "description": "One line of an execution record in JSON lines: a header, an op or a commit. The header is exactly the first line. After it, each accepted transition is an op line followed by a commit line, with consecutive seq numbers from 1. Writers put the fields in the order seq, op, values and seq, commit, and the definition of the header in its canonical form; readers look fields up by name. No object in a line, the definition of the header included, may repeat a key, which JSON Schema cannot express; readers reject a line with a repeated key. `suimon check` replays the committed transitions against the definition of the header; an op without its commit, or a partial last line, is what a crash leaves and is discarded.",
   "oneOf": [
+    {
+      "$ref": "#/$defs/header"
+    },
     {
       "$ref": "#/$defs/opRecord"
     },
@@ -32,6 +35,19 @@
       "items": {
         "type": "string"
       }
+    },
+    "header": {
+      "description": "The first line, and no other: the definition of the execution. Writers give it in its canonical form, with the fields in the order of definition.schema.json and absent optional fields left out. An execution is resumed only with a definition of the same canonical form.",
+      "type": "object",
+      "properties": {
+        "definition": {
+          "$ref": "definition.schema.json"
+        }
+      },
+      "required": [
+        "definition"
+      ],
+      "additionalProperties": false
     },
     "opRecord": {
       "type": "object",

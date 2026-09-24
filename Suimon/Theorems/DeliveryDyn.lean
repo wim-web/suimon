@@ -6,7 +6,7 @@ namespace Suimon.Delivery
 open State
 
 section
-variable {p : Program} {s t : State} {op : Op}
+variable {p : Definition} {s t : State} {op : Op}
 
 /-- Controls of different kinds. --/
 theorem control_ne_workflow {pl : Placement} {wf out : String}

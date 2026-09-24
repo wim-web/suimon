@@ -5,12 +5,12 @@ import Suimon.Theorems.DeliveryChange
 namespace Suimon.Delivery
 open State
 
-theorem runs_nil_or_started {p : Program} {s : State} (inv : Inv p s) : s.runs = [] ∨ s.started = true := by
+theorem runs_nil_or_started {p : Definition} {s : State} (inv : Inv p s) : s.runs = [] ∨ s.started = true := by
   cases h : s.started
   · rw [inv.fresh h]; exact Or.inl rfl
   · exact Or.inr rfl
 
-theorem Inv.kept {p : Program} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) : Kept s t :=
+theorem Inv.kept {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) : Kept s t :=
   step_kept inv.wk (runs_nil_or_started inv) hs
 
 /-- A delivered value on a Single connection stays its resolution. --/
@@ -34,7 +34,7 @@ theorem triggerOk_kept {s t : State} (g : s.Grows t) {path : Path} {i i' : Invoc
     exact ⟨src, d, htr.trans htrig, g.delivery?_eq_some hd, hout⟩
   | merge cs => exact h.elim
 
-theorem triggerOk_of_input {p : Program} {s : State} {r : Run} {w : Workflow} {name : String}
+theorem triggerOk_of_input {p : Definition} {s : State} {r : Run} {w : Workflow} {name : String}
     {trigger : Option ResultId} {input : Option Value} {i : Invocation} (hrun : r.path = i.run)
     (htr : i.trigger = trigger) (h : Step.invocationInput p s r w name trigger = .ok input) :
     ∃ sh, w.shape? p name = some sh ∧ TriggerOk s i.run i sh := by
@@ -59,7 +59,7 @@ theorem exists_task_withTask {e : Execution} {name : String} {ts : TaskState} (h
 
 open State in
 /-- Every step keeps the ownership invariant. --/
-theorem step_own {p : Program} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) : Own p t := by
+theorem step_own {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) : Own p t := by
   have K := inv.kept hs
   have wk' := step_wellKeyed inv.wk hs
   have wf : ∀ {path w}, s.workflow? p path = some w → t.workflow? p path = some w := fun h => K.workflow? wk' h

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Go implementations of the programs of Test/programs and testdata, for runtime tests. Every
+// Go implementations of the definitions of Test/definitions and testdata, for runtime tests. Every
 // function is a function of its input, so equal runs accept equal values; knobs make functions
 // fail, block, or report what happened.
 

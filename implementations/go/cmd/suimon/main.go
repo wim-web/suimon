@@ -1,4 +1,4 @@
-// Command suimon mirrors the Lean CLI (Main.lean at the repository root): it validates programs,
+// Command suimon mirrors the Lean CLI (Main.lean at the repository root): it validates definitions,
 // checks execution records, explores random walks and generates records, with the same arguments,
 // output and exit codes.
 package main
@@ -19,10 +19,10 @@ import (
 	suimon "github.com/wim-web/suimon/implementations/go/src"
 )
 
-const usage = "suimon validate <program.json>\n" +
-	"suimon check <trace.jsonl> --program <program.json> [--state]\n" +
-	"suimon explore <program.json> [--seeds N] [--steps N]\n" +
-	"suimon gen <program.json> [--seed N] [--steps N]\n"
+const usage = "suimon validate <definition.json>\n" +
+	"suimon check <trace.jsonl> [--state]\n" +
+	"suimon explore <definition.json> [--seeds N] [--steps N]\n" +
+	"suimon gen <definition.json> [--seed N] [--steps N]\n"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -53,7 +53,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case len(args) == 2 && args[0] == "validate":
 		return command(nil, nil, func([]option) error { return validate(out, args[1]) })
 	case len(args) >= 2 && args[0] == "check":
-		return command([]string{"--program"}, []string{"--state"}, func(opts []option) error { return check(out, args[1], opts) })
+		return command(nil, []string{"--state"}, func(opts []option) error { return check(out, args[1], opts) })
 	case len(args) >= 2 && args[0] == "explore":
 		return command([]string{"--seeds", "--steps"}, nil, func(opts []option) error { return explore(out, args[1], opts) })
 	case len(args) >= 2 && args[0] == "gen":
@@ -171,8 +171,8 @@ func nonUTF8(path string) error {
 	return fmt.Errorf("Tried to read file '%s' containing non UTF-8 data.", path)
 }
 
-// readProgram reads, decodes and validates a program.
-func readProgram(path string) (*suimon.Program, error) {
+// readDefinition reads, decodes and validates a definition.
+func readDefinition(path string) (*suimon.Definition, error) {
 	data, err := readFile(path)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,12 @@ func readProgram(path string) (*suimon.Program, error) {
 	if !utf8.Valid(data) {
 		return nil, nonUTF8(path)
 	}
-	p, err := suimon.ParseProgram(data)
+	return loadDefinition(data)
+}
+
+// loadDefinition decodes and validates a definition, from a file or from the header of a record.
+func loadDefinition(data []byte) (*suimon.Definition, error) {
+	p, err := suimon.ParseDefinition(data)
 	if err != nil {
 		return nil, err
 	}
@@ -191,24 +196,17 @@ func readProgram(path string) (*suimon.Program, error) {
 }
 
 func validate(out io.Writer, path string) error {
-	if _, err := readProgram(path); err != nil {
+	if _, err := readDefinition(path); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "ok")
 	return nil
 }
 
-// check replays a record. Like Lean, a file that is not UTF-8 is rejected, except that a partial
-// last line may end inside a character: a crash can cut the file there, and recovery discards it.
+// check replays a record against the definition of its header, which is read like a definition
+// file. Like Lean, a file that is not UTF-8 is rejected, except that a partial last line may end
+// inside a character: a crash can cut the file there, and recovery discards it.
 func check(out io.Writer, trace string, opts []option) error {
-	programPath, ok := lookup(opts, "--program")
-	if !ok {
-		return errors.New("--program is required")
-	}
-	p, err := readProgram(programPath)
-	if err != nil {
-		return err
-	}
 	data, err := readFile(trace)
 	if err != nil {
 		return err
@@ -217,7 +215,7 @@ func check(out io.Writer, trace string, opts []option) error {
 	if !utf8.ValidString(text[:strings.LastIndexByte(text, '\n')+1]) {
 		return nonUTF8(trace)
 	}
-	checked, err := suimon.Check(p, text)
+	checked, err := suimon.Check(text, loadDefinition)
 	if err != nil {
 		return err
 	}
@@ -236,7 +234,7 @@ func check(out io.Writer, trace string, opts []option) error {
 }
 
 func explore(out io.Writer, path string, opts []option) error {
-	p, err := readProgram(path)
+	p, err := readDefinition(path)
 	if err != nil {
 		return err
 	}
@@ -269,9 +267,10 @@ func explore(out io.Writer, path string, opts []option) error {
 	return nil
 }
 
-// gen writes a random walk as an execution record; payloads repeat the value identities.
+// gen writes a random walk as an execution record: the header with the definition, then the records.
+// Payloads repeat the value identities.
 func gen(out io.Writer, path string, opts []option) error {
-	p, err := readProgram(path)
+	p, err := readDefinition(path)
 	if err != nil {
 		return err
 	}
@@ -284,6 +283,9 @@ func gen(out io.Writer, path string, opts []option) error {
 		return err
 	}
 	_, ops := suimon.Walk(p, suimon.DefaultConfig(), seed, int(steps))
+	if _, err := io.WriteString(out, suimon.EncodeHeader(p)+"\n"); err != nil {
+		return err
+	}
 	recorder := suimon.NewRecorder(p)
 	for _, op := range ops {
 		needs, err := recorder.Needs(op)

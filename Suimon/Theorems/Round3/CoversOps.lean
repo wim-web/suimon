@@ -10,7 +10,7 @@ The containment step of every operation that neither reports a call nor closes s
 must also keep the frozen footprints of what `s` already closed (`step_frozen`). -/
 
 section CoversOps
-variable {p : Program} {env : Env} {s s' T : State}
+variable {p : Definition} {env : Env} {s s' T : State}
 
 theorem covers_start {input : Option Value} (h : StepCtx p env T s (.start input) s') : Covers p T s' := by
   obtain ⟨tr, hrun⟩ := h.run

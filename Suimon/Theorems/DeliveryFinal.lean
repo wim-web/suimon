@@ -6,7 +6,7 @@ import Suimon.Theorems.DeliverySett
 namespace Suimon.Delivery
 open State
 
-theorem Inv.empty (p : Program) : Inv p {} where
+theorem Inv.empty (p : Definition) : Inv p {} where
   wk := State.WellKeyed.empty
   fresh _ := rfl
   own := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h),
@@ -14,13 +14,13 @@ theorem Inv.empty (p : Program) : Inv p {} where
   dyn := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h)⟩
   sett := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h)⟩
 
-theorem Reachable.inv {p : Program} {s : State} (h : Reachable p s) : Inv p s := by
+theorem Reachable.inv {p : Definition} {s : State} (h : Reachable p s) : Inv p s := by
   induction h with
   | empty => exact Inv.empty p
   | step op _ hs ih => exact step_inv ih hs
 
 section Final
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- The run of an invocation exists. --/
 theorem run_of_invocation (inv : Inv p s) {i : Invocation} (hi : i ∈ s.invocations) :

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://wim-web.github.io/suimon/schema/program.schema.json",
-  "title": "suimon program",
-  "description": "Workflows and the type contracts of the functions, judges and transforms they reference. References, types and Single/Stream kinds are checked by `suimon validate`, not by this schema.",
+  "$id": "https://wim-web.github.io/suimon/schema/definition.schema.json",
+  "title": "suimon workflow definition",
+  "description": "Workflows and the type contracts of the functions, judges and transforms they reference. References, types and Single/Stream kinds are checked by `suimon validate`, not by this schema. No object may repeat a key, which JSON Schema cannot express; readers reject a repeated key.",
   "type": "object",
   "properties": {
     "main": {"$ref": "#/$defs/name"},

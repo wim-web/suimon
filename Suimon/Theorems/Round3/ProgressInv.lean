@@ -10,7 +10,7 @@ Structural invariants for progress. Each is an induction over `Reachable` by `St
 the Round 2 invariants (`Settle.reachable`, `Delivery.Reachable.inv`, `Limit.reachable_inv`). -/
 
 section ProgressInv
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- (N1) While running, the root run exists and is open: only `conclude` completes it. -/
 theorem root_open (h : Reachable p s) (started : s.started = true) (running : s.status = .running) :
@@ -23,7 +23,7 @@ theorem root_open (h : Reachable p s) (started : s.started = true) (running : s.
     rw [running] at this
     cases this
 
-/-- (N7) Every run's workflow exists in a valid program. -/
+/-- (N7) Every run's workflow exists in a valid definition. -/
 theorem run_workflow (valid : p.validate = .ok ()) (h : Reachable p s) :
     ∀ r ∈ s.runs, (p.workflow? r.workflow).isSome := by
   -- Runs name the main workflow or a workflow that some placement calls; validation declares both.
@@ -279,7 +279,7 @@ theorem pending_input (valid : p.validate = .ok ()) (h : Reachable p s) :
   have hin := ProgressInvAux.pending_core h e he tk htk hpend cc hcc
   obtain ⟨w, pl, hw, hpl, hctl⟩ := Delivery.concurrencyOf_iff.mp hcc
   obtain ⟨r, -, hwf⟩ := Delivery.workflow?_iff.mp hw
-  obtain ⟨at_, hv⟩ := ProgressInvAux.tasks_of_validate valid (Program.workflow?_eq_some hwf).1
+  obtain ⟨at_, hv⟩ := ProgressInvAux.tasks_of_validate valid (Definition.workflow?_eq_some hwf).1
     (Workflow.placement?_eq_some hpl).1 hctl spec (List.mem_of_find?_eq_some hfind)
   exact ProgressInvAux.input_of_validateTask hv hin
 

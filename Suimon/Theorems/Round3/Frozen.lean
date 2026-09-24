@@ -7,7 +7,7 @@ open State
 /-! ## [15] Round3/Frozen.lean — task E3 -/
 
 section Frozen
-variable {p : Program} {s t : State}
+variable {p : Definition} {s t : State}
 
 -- `valid` is not used: the tasks of an execution with the same name are equal in every reachable state
 -- (`Limit.Inv.coherent`), so no uniqueness of task names is needed.

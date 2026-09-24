@@ -8,12 +8,12 @@ open State
 Facts about conforming executions that do not mention the universe: every task result has an index
 below the length of its task call's script, or 0 (`conforming_taskIndex`); every result identity has
 the shape the universe predicts, built from a trigger available to its placement (`conforming_resultShape`);
-and every workflow a call or a task names exists in a valid program. -/
+and every workflow a call or a task names exists in a valid definition. -/
 
 namespace UniverseProof
 
 section UniverseInv
-variable {p : Program} {env : Env} {s t : State} {op : Op}
+variable {p : Definition} {env : Env} {s t : State} {op : Op}
 
 /-! ### Lists -/
 
@@ -202,7 +202,7 @@ def IdShape (B : Behavior) (ctrl : Control) (id : String) (rid : ResultId) : Pro
 
 /-- A result's identity comes from an invocation of its placement with an available trigger, or is the
     aggregate of a waitStream or Merge. -/
-def ResultShape (p : Program) (B : Behavior) (s : State) (r : Result) : Prop :=
+def ResultShape (p : Definition) (B : Behavior) (s : State) (r : Result) : Prop :=
   ∃ w pl, s.workflow? p r.run = some w ∧ w.placement? r.placement = some pl ∧
     ((∃ trig, TrigAvail s r.run w r.placement trig ∧
         IdShape B pl.control (Key.invocation r.run r.placement trig) r.id) ∨
@@ -479,17 +479,17 @@ local macro "validate_simp" " at " h:ident : tactic =>
     Validate.check_eq_ok, Validate.need_eq_ok, exists_const, and_true, true_and, Bool.false_eq_true,
     ↓reduceIte, false_and, and_false, exists_false] at $h:ident)
 
-theorem validateWorkflow_of_valid {p : Program} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
+theorem validateWorkflow_of_valid {p : Definition} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
     p.validateWorkflow w = .ok () := by
-  unfold Program.validate at valid
+  unfold Definition.validate at valid
   validate_simp at valid
   obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
   exact Static.forIn_yield_ok hloop w hw
 
-theorem validatePlacement_of_valid {p : Program} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
+theorem validatePlacement_of_valid {p : Definition} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) : p.validatePlacement w pl = .ok () := by
   have h := validateWorkflow_of_valid valid hw
-  unfold Program.validateWorkflow at h
+  unfold Definition.validateWorkflow at h
   validate_simp at h
   obtain ⟨-, -, -, -, u, -, -, h⟩ := h
   split at h <;> validate_simp at h
@@ -498,41 +498,41 @@ theorem validatePlacement_of_valid {p : Program} (valid : p.validate = .ok ()) {
     obtain ⟨u₁, h1, -⟩ := h
     exact Static.forIn_yield_ok h1 pl hpl
 
-theorem validateBody_workflow {p : Program} {at_ : String} {wf out : String}
-    (h : p.validateBody at_ (.workflow wf out) = .ok ()) : ∃ cw, p.workflow? wf = some cw := by
-  unfold Program.validateBody at h
+theorem validateBody_workflow {p : Definition} {at_ : String} {wf out : String} {input : Option ValueType}
+    (h : p.validateBody at_ (.workflow wf out) = .ok input) : ∃ cw, p.workflow? wf = some cw := by
+  unfold Definition.validateBody at h
   validate_simp at h
   obtain ⟨cw, hcw, -⟩ := h
   exact ⟨cw, hcw⟩
 
-/-- The workflow a sub-workflow call names exists in a valid program. -/
-theorem call_workflow_exists {p : Program} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
+/-- The workflow a sub-workflow call names exists in a valid definition. -/
+theorem call_workflow_exists {p : Definition} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) {wf out : String} (hctrl : pl.control = .call (.workflow wf out)) :
     ∃ cw, p.workflow? wf = some cw := by
   have h := validatePlacement_of_valid valid hw hpl
   rcases pl with ⟨name, control, policy, timeout⟩
   dsimp only at hctrl
   subst hctrl
-  unfold Program.validatePlacement at h
+  unfold Definition.validatePlacement at h
   validate_simp at h
-  obtain ⟨u, hbody, -⟩ := h
+  obtain ⟨_, hbody, -⟩ := h
   exact validateBody_workflow hbody
 
-theorem validateTask_body {p : Program} {at_ : String} {c : Concurrency} {task : TaskSpec}
-    (h : p.validateTask at_ c task = .ok ()) : ∃ at', p.validateBody at' task.body = .ok () := by
-  unfold Program.validateTask at h
+theorem validateTask_body {p : Definition} {at_ : String} {c : Concurrency} {task : TaskSpec}
+    (h : p.validateTask at_ c task = .ok ()) : ∃ at' input, p.validateBody at' task.body = .ok input := by
+  unfold Definition.validateTask at h
   validate_simp at h
-  obtain ⟨-, u, hbody, -⟩ := h
-  exact ⟨_, hbody⟩
+  obtain ⟨-, input, hbody, -⟩ := h
+  exact ⟨_, input, hbody⟩
 
-/-- The workflow a workflow task names exists in a valid program. -/
-theorem task_workflow_exists {p : Program} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
+/-- The workflow a workflow task names exists in a valid definition. -/
+theorem task_workflow_exists {p : Definition} (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) {cc : Concurrency} (hctrl : pl.control = .concurrency cc)
     {task : TaskSpec} (htask : task ∈ cc.tasks) {wf out : String} (hbody : task.body = .workflow wf out) :
     ∃ cw, p.workflow? wf = some cw := by
-  obtain ⟨-, -, -, hall⟩ := ((Program.validate_ok valid).workflows w hw).placements pl hpl |>.concurrency cc hctrl
+  obtain ⟨-, -, -, hall⟩ := ((Definition.validate_ok valid).workflows w hw).placements pl hpl |>.concurrency cc hctrl
   obtain ⟨at_, h⟩ := hall task htask
-  obtain ⟨at', hb⟩ := validateTask_body h
+  obtain ⟨at', _, hb⟩ := validateTask_body h
   rw [hbody] at hb
   exact validateBody_workflow hb
 

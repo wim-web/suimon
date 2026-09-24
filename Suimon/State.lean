@@ -222,7 +222,7 @@ inductive Shape where
   | stream (index : Nat) (connection : Connection)
   | merge (connections : List (Nat × Connection))
 
-def shape? (p : Program) (w : Workflow) (name : String) : Option Shape := do
+def shape? (p : Definition) (w : Workflow) (name : String) : Option Shape := do
   let placement ← w.placement? name
   if placement.control matches .merge _ then return .merge (w.inputs name)
   if w.isEntry name then return .entry
@@ -239,7 +239,7 @@ end Workflow
 namespace State
 
 def run? (s : State) (path : Path) : Option Run := s.runs.find? (·.path == path)
-def workflow? (p : Program) (s : State) (path : Path) : Option Workflow := do p.workflow? (← s.run? path).workflow
+def workflow? (p : Definition) (s : State) (path : Path) : Option Workflow := do p.workflow? (← s.run? path).workflow
 def invocation? (s : State) (id : String) : Option Invocation := s.invocations.find? (·.id == id)
 def call? (s : State) (id : String) : Option Call := s.calls.find? (·.id == id)
 def execution? (s : State) (id : String) : Option Execution := s.executions.find? (·.id == id)

@@ -8,10 +8,10 @@ open State
 /-! ## [26] Round3/Symmetry.lean — task G1 -/
 
 section Symmetry
-variable {p : Program}
+variable {p : Definition}
 
 /-- The status `conclude` gives from a running state (§11.4, §13.3), read off the records. -/
-def conclusionStatus (p : Program) (s : State) : Status :=
+def conclusionStatus (p : Definition) (s : State) : Status :=
   match (s.run? []).bind fun r => p.workflow? r.workflow with
   | none => .running
   | some w =>

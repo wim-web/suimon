@@ -9,7 +9,7 @@ open State
 /-! ## [17] Round3/Stable.lean — task E4 -/
 
 section StableSection
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- The tasks whose results a concurrency outputs, their results in a state, and whether they all
     skipped: what `closeExecution` reads. -/
@@ -43,7 +43,7 @@ def closedTaskStatus : Outcome → TaskStatus
 
 /-- What a settlement, a closed execution and a closed run recorded is what their rule computes on the
     current state, because everything the rule reads is frozen once it applied (§10.3). -/
-structure Stable (p : Program) (s : State) : Prop where
+structure Stable (p : Definition) (s : State) : Prop where
   settled : ∀ x ∈ s.settled, ∃ w pl shape kind agg, s.workflow? p x.run = some w ∧
     w.placement? x.placement = some pl ∧ w.shape? p x.placement = some shape ∧
     w.outputKind? p x.placement = some kind ∧ s.settleOutcome x.run pl shape kind = some (x, agg) ∧
@@ -353,9 +353,9 @@ theorem stable_run_step (valid : p.validate = .ok ()) (h : Reachable p s) {t : S
 
 end StableAux
 
-/-- Any reachable state of a valid program. Suggested proof: induction; at the recording step `Stable`
-    holds by construction, and every later step keeps the view of the rule (`step_frozen`, then
-    `settleOutcome_congr` for settlements). -/
+/-- Any reachable state of a valid definition. Suggested proof: induction; at the recording step
+    `Stable` holds by construction, and every later step keeps the view of the rule (`step_frozen`,
+    then `settleOutcome_congr` for settlements). -/
 theorem Reachable.stable (valid : p.validate = .ok ()) (h : Reachable p s) : Stable p s := by
   induction h with
   | empty => exact ⟨fun _ hx => (nomatch hx), fun _ he => (nomatch he), fun _ hr => (nomatch hr)⟩

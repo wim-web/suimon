@@ -10,7 +10,7 @@ open State
 
 namespace CallConformAux
 
-variable {p : Program} {env : Env} {s t u : State}
+variable {p : Definition} {env : Env} {s t u : State}
 
 /-! ### The invariant and the facts it relies on -/
 
@@ -23,7 +23,7 @@ theorem CallInv.empty : CallInv env {} :=
   ⟨fun _ h => (nomatch h), fun _ h => (nomatch h)⟩
 
 /-- Round 2 invariants of a reachable state that the proof uses. -/
-structure Facts (p : Program) (s : State) : Prop where
+structure Facts (p : Definition) (s : State) : Prop where
   wk : s.WellKeyed
   keys : Calls.Keys s
   dinv : Delivery.Inv p s

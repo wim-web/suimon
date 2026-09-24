@@ -13,7 +13,7 @@ delivery in `T` beyond those of `s` (the source's results are frozen, `Covers.fo
 
 namespace CoversViewAux
 
-variable {p : Program} {s T : State}
+variable {p : Definition} {s T : State}
 
 /-! ### Lookups carried by `Covers` -/
 

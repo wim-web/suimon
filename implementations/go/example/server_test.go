@@ -89,11 +89,11 @@ func TestServerScenarios(t *testing.T) {
 		t.Fatalf("%d %s", status, data)
 	}
 	list := decode[[]struct {
-		ID      string         `json:"id"`
-		Program map[string]any `json:"program"`
-		Input   any            `json:"input"`
+		ID         string         `json:"id"`
+		Definition map[string]any `json:"definition"`
+		Input      any            `json:"input"`
 	}](t, data)
-	if len(list) != 7 || list[0].ID != "stream" || list[0].Program["main"] != "stream" || list[0].Input == nil {
+	if len(list) != 7 || list[0].ID != "stream" || list[0].Definition["main"] != "stream" || list[0].Input == nil {
 		t.Errorf("unexpected scenarios: %s", data)
 	}
 	if status, data := call(t, "GET", srv.URL+"/", ""); status != http.StatusOK || !strings.Contains(string(data), "<title>ui</title>") {
@@ -108,8 +108,9 @@ func TestServerRun(t *testing.T) {
 	if p.Scenario != "branch" || p.Offset != 0 || len(p.Records) == 0 || len(p.Spans) != 2 {
 		t.Errorf("unexpected progress: %+v", p)
 	}
-	if !strings.HasPrefix(p.Records[0], `{"seq":1,"op":{"type":"start"`) {
-		t.Errorf("first record %s", p.Records[0])
+	// The record starts with the header, which holds the definition of the scenario.
+	if !strings.HasPrefix(p.Records[0], `{"definition":{"main":"branch",`) || !strings.HasPrefix(p.Records[1], `{"seq":1,"op":{"type":"start"`) {
+		t.Errorf("first records %s %s", p.Records[0], p.Records[1])
 	}
 	if state := decode[map[string]any](t, p.State); state["status"] != "succeeded" {
 		t.Errorf("state status %v", state["status"])

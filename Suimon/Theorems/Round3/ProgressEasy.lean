@@ -8,12 +8,12 @@ open State
 /-! ## [7] Round3/ProgressEasy.lean — task C1 -/
 
 section ProgressEasy
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-- Nothing is left for the engine outside the structure of runs: every eligible result reached its
     connection, every included task result went through its output transform, no task waits for its
     input transform, and every call ended. -/
-structure Calm (p : Program) (s : State) : Prop where
+structure Calm (p : Definition) (s : State) : Prop where
   delivered : ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → ∀ j c, w.connections[j]? = some c →
     c.source = r.placement → (c.arm = none ∨ c.arm = r.arm) → (s.delivery? r.run j r.id).isSome
   outputs : ∀ e ∈ s.executions, ∀ cc, s.concurrencyOf p e = .ok cc → ∀ r ∈ s.taskResults, r.execution = e.id →
@@ -54,11 +54,11 @@ theorem exists_deepestOpen (h : Reachable p s) (started : s.started = true) (run
   obtain ⟨hrm, hrc⟩ := List.mem_filter.mp hr
   exact ⟨r, hrm, by simpa using hrc, fun r' hr' hc' => hmax r' (List.mem_filter.mpr ⟨hr', by simp [hc']⟩)⟩
 
-/-- The workflow of a run is a workflow of the program. -/
+/-- The workflow of a run is a workflow of the definition. -/
 private theorem workflow_mem {path : Path} {w : Workflow} (hw : s.workflow? p path = some w) :
     w ∈ p.workflows := by
   obtain ⟨_, -, hwf⟩ := Routing.workflow?_eq_some.mp hw
-  exact (Program.workflow?_eq_some hwf).1
+  exact (Definition.workflow?_eq_some hwf).1
 
 /-- The concurrency of an execution has distinct task names (validity). -/
 private theorem concurrency_names (valid : p.validate = .ok ()) {e : Execution} {cc : Concurrency}
@@ -89,7 +89,7 @@ private theorem deliver_case (valid : p.validate = .ok ()) (wk : s.WellKeyed) (s
       obtain ⟨t, ht, hne⟩ := hval v
       exact ⟨.deliver r.run j r.id (some v), t, rfl, (fun v' hv' => Option.some.inj hv' ▸ hb), ht, hne⟩
     | none =>
-      -- A connection of a valid program targets a placement of its workflow.
+      -- A connection of a valid definition targets a placement of its workflow.
       have htgt : (w.placement? c.target).isSome := by
         obtain ⟨-, dst, -, hdst, -⟩ := typedConnections_of_validate valid w (workflow_mem hw) c
           (List.mem_of_getElem? hc)

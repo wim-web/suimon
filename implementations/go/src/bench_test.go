@@ -12,8 +12,8 @@ import (
 //
 //	go test -run '^$' -bench . -benchtime 1x ./src
 
-// streamProgram yields n numbers, doubles each in its own call, collects the doubles and sums them.
-const streamProgram = `{
+// streamDefinition yields n numbers, doubles each in its own call, collects the doubles and sums them.
+const streamDefinition = `{
   "main": "stream",
   "functions": [
     {"id": "numbers", "input": "Count", "output": {"stream": "Int"}},
@@ -43,9 +43,9 @@ const streamProgram = `{
   ]
 }`
 
-func streamEngine(tb testing.TB) (*Program, *Engine) {
+func streamEngine(tb testing.TB) (*Definition, *Engine) {
 	tb.Helper()
-	p, err := ParseProgram([]byte(streamProgram))
+	p, err := ParseDefinition([]byte(streamDefinition))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func streamEngine(tb testing.TB) (*Program, *Engine) {
 	return p, e
 }
 
-// runStream runs the stream program for n elements and returns the journal and the report.
+// runStream runs the stream definition for n elements and returns the journal and the report.
 func runStream(tb testing.TB, e *Engine, n int) (string, *Report) {
 	tb.Helper()
 	j := &memJournal{}
@@ -101,7 +101,7 @@ func runStream(tb testing.TB, e *Engine, n int) (string, *Report) {
 func TestLongStream(t *testing.T) {
 	p, e := streamEngine(t)
 	journal, r := runStream(t, e, 300)
-	c, err := Check(p, journal)
+	c, err := Check(journal, sameDefinition(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func BenchmarkCheckStream(b *testing.B) {
 			b.SetBytes(int64(len(journal)))
 			b.ResetTimer()
 			for range b.N {
-				c, err := Check(p, journal)
+				c, err := Check(journal, sameDefinition(p))
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -143,7 +143,7 @@ func BenchmarkCheckStream(b *testing.B) {
 	}
 }
 
-// The users program (Test/programs) runs a concurrency with a sub-workflow per user: executions,
+// The users definition (Test/definitions) runs a concurrency with a sub-workflow per user: executions,
 // tasks and child runs grow with the stream.
 func runUsers(tb testing.TB, e *Engine, n int) (string, *Report) {
 	tb.Helper()
@@ -169,7 +169,7 @@ func runUsers(tb testing.TB, e *Engine, n int) (string, *Report) {
 	return j.text(), r
 }
 
-func usersEngine(tb testing.TB) (*Program, *Engine) {
+func usersEngine(tb testing.TB) (*Definition, *Engine) {
 	tb.Helper()
 	p := load(tb, "users")
 	e, err := NewEngine(p, mustRegistry(tb, usersBindings(usersKnobs{})...))
@@ -200,7 +200,7 @@ func BenchmarkCheckUsers(b *testing.B) {
 			b.SetBytes(int64(len(journal)))
 			b.ResetTimer()
 			for range b.N {
-				c, err := Check(p, journal)
+				c, err := Check(journal, sameDefinition(p))
 				if err != nil {
 					b.Fatal(err)
 				}

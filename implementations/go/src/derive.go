@@ -5,7 +5,7 @@ package suimon
 
 // bodyInput is the input of one call: known is false for an unknown body, input is nil for a body
 // without input.
-func (p *Program) bodyInput(b Body) (input *ValueType, known bool) {
+func (p *Definition) bodyInput(b Body) (input *ValueType, known bool) {
 	if !b.Workflow {
 		f, ok := p.function(b.ID)
 		if !ok {
@@ -23,7 +23,7 @@ func (p *Program) bodyInput(b Body) (input *ValueType, known bool) {
 	return ptr(w.Input.Type), true
 }
 
-func (p *Program) bodyKind(b Body) (Kind, bool) {
+func (p *Definition) bodyKind(b Body) (Kind, bool) {
 	if !b.Workflow {
 		f, ok := p.function(b.ID)
 		if !ok {
@@ -38,7 +38,7 @@ func (p *Program) bodyKind(b Body) (Kind, bool) {
 }
 
 // localResult is the result element type of the controls other than calls.
-func (p *Program) localResult(c Control) (ValueType, bool) {
+func (p *Definition) localResult(c Control) (ValueType, bool) {
 	switch c := c.(type) {
 	case BranchControl:
 		j, ok := p.judge(c.Judge)
@@ -60,7 +60,7 @@ func (p *Program) localResult(c Control) (ValueType, bool) {
 }
 
 // bodyElement is the element type of a body's results. The fuel bounds nested workflow references.
-func (p *Program) bodyElement(fuel int, b Body) (ValueType, bool) {
+func (p *Definition) bodyElement(fuel int, b Body) (ValueType, bool) {
 	if fuel == 0 {
 		return ValueType{}, false
 	}
@@ -86,10 +86,10 @@ func (p *Program) bodyElement(fuel int, b Body) (ValueType, bool) {
 }
 
 // depth is enough fuel for an acyclic call graph, where each nested reference names another workflow.
-func (p *Program) depth() int { return len(p.Workflows) + 1 }
+func (p *Definition) depth() int { return len(p.Workflows) + 1 }
 
 // resultType is the element type of the results of one placement.
-func (p *Program) resultType(c Control) (ValueType, bool) {
+func (p *Definition) resultType(c Control) (ValueType, bool) {
 	if call, ok := c.(CallControl); ok {
 		return p.bodyElement(p.depth(), call.Body)
 	}
@@ -98,7 +98,7 @@ func (p *Program) resultType(c Control) (ValueType, bool) {
 
 // inputType is what an input connection's transform returns: input is nil when the control takes
 // no input, known is false for an unknown reference.
-func (p *Program) inputType(c Control) (input *ValueType, known bool) {
+func (p *Definition) inputType(c Control) (input *ValueType, known bool) {
 	switch c := c.(type) {
 	case CallControl:
 		return p.bodyInput(c.Body)
@@ -119,7 +119,7 @@ func (p *Program) inputType(c Control) (input *ValueType, known bool) {
 }
 
 // outputKind is the output kind of one placement from its input kind, nil for no input (§5.2, §8.4).
-func (p *Program) outputKind(control Control, input *Kind) (Kind, bool) {
+func (p *Definition) outputKind(control Control, input *Kind) (Kind, bool) {
 	switch c := control.(type) {
 	case CallControl:
 		if input == nil || *input == KindSingle {
@@ -170,7 +170,7 @@ func (w *Workflow) combineInput(name string, sources []Kind) (input *Kind, ok bo
 }
 
 // kind is the output kind of a placement; the fuel bounds the length of connection paths.
-func (w *Workflow) kind(p *Program, fuel int, name string) (Kind, bool) {
+func (w *Workflow) kind(p *Definition, fuel int, name string) (Kind, bool) {
 	if fuel == 0 {
 		return 0, false
 	}
@@ -190,7 +190,7 @@ func (w *Workflow) kind(p *Program, fuel int, name string) (Kind, bool) {
 }
 
 // sourceKinds is Lean's (w.incoming name).mapM fun c => w.kind? p fuel c.source.
-func (w *Workflow) sourceKinds(p *Program, fuel int, name string) ([]Kind, bool) {
+func (w *Workflow) sourceKinds(p *Definition, fuel int, name string) ([]Kind, bool) {
 	var sources []Kind
 	for _, c := range w.incoming(name) {
 		k, ok := w.kind(p, fuel, c.Source)
@@ -205,7 +205,7 @@ func (w *Workflow) sourceKinds(p *Program, fuel int, name string) ([]Kind, bool)
 func (w *Workflow) depth() int { return len(w.Placements) + 1 }
 
 // inputKind is the derived input kind of a placement, nil when it takes no input.
-func (w *Workflow) inputKind(p *Program, name string) (input *Kind, ok bool) {
+func (w *Workflow) inputKind(p *Definition, name string) (input *Kind, ok bool) {
 	sources, ok := w.sourceKinds(p, w.depth(), name)
 	if !ok {
 		return nil, false
@@ -214,13 +214,13 @@ func (w *Workflow) inputKind(p *Program, name string) (input *Kind, ok bool) {
 }
 
 // outputKind is the derived output kind of a placement.
-func (w *Workflow) outputKind(p *Program, name string) (Kind, bool) {
+func (w *Workflow) outputKind(p *Definition, name string) (Kind, bool) {
 	return w.kind(p, w.depth(), name)
 }
 
 // OutputKind is the derived Single/Stream kind of a placement of workflow; ok is false when it
 // cannot be derived.
-func (p *Program) OutputKind(workflow, placement string) (kind Kind, ok bool) {
+func (p *Definition) OutputKind(workflow, placement string) (kind Kind, ok bool) {
 	w, found := p.workflow(workflow)
 	if !found {
 		return 0, false

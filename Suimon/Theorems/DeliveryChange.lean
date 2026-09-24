@@ -34,7 +34,7 @@ theorem eq_or_update {s : State} {i₁ i' i₀ i : Invocation} (wk : s.WellKeyed
   · exact Or.inl (wk.invocation_eq_of_id hi hi₀ hid)
 
 /-- How a step can change a stored invocation. --/
-def InvChange (p : Program) (s t : State) (i₀ i : Invocation) : Prop :=
+def InvChange (p : Definition) (s t : State) (i₀ i : Invocation) : Prop :=
   i.id = i₀.id ∧ i.run = i₀.run ∧ i.placement = i₀.placement ∧ i.trigger = i₀.trigger ∧ i.input = i₀.input ∧
   ((∃ c ∈ s.calls, c.owner = i₀.id ∧ c.task = none ∧
       (∀ c' ∈ t.calls, c'.id = c.id → c'.status ≠ .running ∧ c'.status ≠ .fetching) ∧
@@ -49,7 +49,7 @@ def InvChange (p : Program) (s t : State) (i₀ i : Invocation) : Prop :=
 open State in
 /-- A step leaves a stored invocation unchanged, or changes it through its own call, execution or
     sub-run (§10.2). --/
-theorem step_invocation_change {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
+theorem step_invocation_change {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
     {i₀ i : Invocation} (hi₀ : i₀ ∈ s.invocations) (hi : i ∈ t.invocations) (hid : i.id = i₀.id) :
     i = i₀ ∨ InvChange p s t i₀ i := by
   have same : i ∈ s.invocations → i = i₀ ∨ InvChange p s t i₀ i := fun h =>
@@ -348,7 +348,7 @@ theorem find?_name_of_task {e : Execution} {name : String} {ts : TaskState} (h :
 
 open State in
 /-- The tasks of a stored execution after a step, with their counterparts before it. --/
-theorem step_task_change {p : Program} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
+theorem step_task_change {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
     {e₀ e : Execution} (he₀ : e₀ ∈ s.executions) (he : e ∈ t.executions) (hid : e.id = e₀.id) :
     TasksFrom s t e₀ e := by
   have same : e ∈ s.executions → TasksFrom s t e₀ e := fun h => tasksFrom_of_mem wk he₀ h hid

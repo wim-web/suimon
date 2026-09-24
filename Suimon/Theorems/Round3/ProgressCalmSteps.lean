@@ -11,13 +11,13 @@ import Suimon.Theorems.Round3.ProgressCalmTaskRun
 namespace Suimon.Round3.CalmAux
 open State
 
-variable {p : Program} {s : State}
+variable {p : Definition} {s : State}
 
 /-! ### Small facts -/
 
 theorem workflow_mem {path : Path} {w : Workflow} (hw : s.workflow? p path = some w) : w ∈ p.workflows := by
   obtain ⟨_, -, hwf⟩ := Routing.workflow?_eq_some.mp hw
-  exact (Program.workflow?_eq_some hwf).1
+  exact (Definition.workflow?_eq_some hwf).1
 
 /-- A run below the deepest open run is complete. -/
 theorem below_complete {r : Run} (hr : DeepestOpen s r) {r' : Run} (hr' : r' ∈ s.runs)
@@ -277,7 +277,7 @@ theorem exec_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : s
       rw [hnil]
       exact hlimit
     have hfresh := (Reachable.fresh h).taskBody e he t ht (Or.inr htr)
-    obtain ⟨at_, hbv⟩ := (body_valid valid hwm hplm).2 cc hctrl spec hspecm
+    obtain ⟨at_, _, hbv⟩ := (body_valid valid hwm hplm).2 cc hctrl spec hspecm
     have hfun : ∀ f, spec.body = .function f →
         (p.function? f).isSome ∧ s.call? (Key.task e.id t.name) = none := by
       intro f hf
@@ -400,8 +400,8 @@ theorem placement_step (valid : p.validate = .ok ()) (h : Reachable p s) (starte
   have wk := h.wellKeyed
   have hrr : s.run? r.path = some r := wk.run?_of_mem hr
   have hsw : s.workflow? p r.path = some w := Settle.workflow?_of_run hrr hw
-  have hwm : w ∈ p.workflows := (Program.workflow?_eq_some hw).1
-  have hwc := (Program.validate_ok valid).workflows w hwm
+  have hwm : w ∈ p.workflows := (Definition.workflow?_eq_some hw).1
+  have hwc := (Definition.validate_ok valid).workflows w hwm
   have hplw : w.placement? pl.name = some pl := Workflow.placement?_of_mem hwc.names hpl
   obtain ⟨sh, k, hsh, hk, hfit, hsingle, hstream, hmerge⟩ := shape_fits valid w hwm pl hpl
   have fresh := Reachable.fresh h
@@ -435,7 +435,7 @@ theorem placement_step (valid : p.validate = .ok ()) (h : Reachable p s) (starte
       · rw [hb]
         cases b with
         | function f =>
-          obtain ⟨at_, hbv⟩ := (body_valid valid hwm hpl).1 _ hb
+          obtain ⟨at_, _, hbv⟩ := (body_valid valid hwm hpl).1 _ hb
           exact ⟨function_of_validateBody hbv, hcall⟩
         | workflow wf out => exact hrun
       · rw [hb]
@@ -524,7 +524,7 @@ theorem close_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : 
     obtain ⟨t, hs, hne⟩ := conclude_running_enabled started running hrr hw hall
     exact ⟨_, t, Or.inl rfl, hs, hne⟩
   have hsw : s.workflow? p r.path = some w := Settle.workflow?_of_run hrr hw
-  have hwm : w ∈ p.workflows := (Program.workflow?_eq_some hw).1
+  have hwm : w ∈ p.workflows := (Definition.workflow?_eq_some hw).1
   have fresh := Reachable.fresh h
   -- What closing needs once the designated output is known to be an endpoint of `w`.
   have close : ∀ out, s.designatedOutput p r = .ok out → (w.placement? out).isSome = true →
@@ -562,7 +562,7 @@ theorem close_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : 
     have hout : s.designatedOutput p r' = .ok out :=
       State.designatedOutput_eq_ok.mpr ⟨i.id, ho, Or.inl ⟨htask, i, pl, wf, wk.invocation?_of_mem hi,
         State.placementOf_eq_ok.mpr ⟨w', hw', hpl⟩, hctrl⟩⟩
-    obtain ⟨at_, hbv⟩ := (body_valid valid (workflow_mem hw') (Workflow.placement?_eq_some hpl).1).1 _ hctrl
+    obtain ⟨at_, _, hbv⟩ := (body_valid valid (workflow_mem hw') (Workflow.placement?_eq_some hpl).1).1 _ hctrl
     obtain ⟨w'', hw'', hplo, hend⟩ := workflow_of_validateBody hbv
     rw [← hwf, hw] at hw''
     cases hw''
@@ -583,7 +583,7 @@ theorem close_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : 
     obtain ⟨cc, hcc, hfind⟩ := State.taskSpec_eq_ok.mp hspec'
     obtain ⟨plc, hplc, hctrl⟩ := State.concurrencyOf_eq_ok.mp hcc
     obtain ⟨we, hwe, hplce⟩ := State.placementOf_eq_ok.mp hplc
-    obtain ⟨at_, hbv⟩ := (body_valid valid (workflow_mem hwe) (Workflow.placement?_eq_some hplce).1).2 cc hctrl
+    obtain ⟨at_, _, hbv⟩ := (body_valid valid (workflow_mem hwe) (Workflow.placement?_eq_some hplce).1).2 cc hctrl
       spec' (List.mem_of_find?_eq_some hfind)
     rw [hbody] at hbv
     obtain ⟨w'', hw'', hplo, hend⟩ := workflow_of_validateBody hbv
