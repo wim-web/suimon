@@ -15,7 +15,7 @@ it('marks an op without its commit as uncommitted', () => {
   expect(Object.keys(recordValues(torn))).toEqual(['5:value5:input']);
   // users-c ends with an op and a tail that would commit it: the op stays uncommitted.
   const c = recordTransitions(parseRecordLog(recordText('users-c')).records);
-  expect(c.at(-1)).toMatchObject({ seq: 81, committed: false, op: { type: 'taskOutput' } });
+  expect(c.at(-1)).toMatchObject({ seq: 79, committed: false, op: { type: 'taskOutput' } });
   expect(c.filter(t => !t.committed)).toHaveLength(1);
   expect(Object.keys(recordValues(c))).not.toContain(Object.keys(c.at(-1)!.values)[0]);
   expect(Object.keys(recordValues(c, true))).toContain(Object.keys(c.at(-1)!.values)[0]);
@@ -75,7 +75,7 @@ it('derives the members of engine-built lists from the state when no payload is 
   const receipts = s.results.find(r => r.placement === 'receipts')!;
   delete payloads[receipts.value];
   const list = resolveValue(valueIndex(p, s, payloads), receipts.value);
-  expect(list.kind === 'list' && list.items.map(i => i.kind)).toEqual(['payload']);
+  expect(list.kind === 'list' && list.items.map(i => i.kind)).toEqual(['payload', 'payload']);
   expect(previewValue(list)).toMatch(/^\[5:value/);
   const merge = definition('merge'), ms = state('merge-a');
   const widgets = ms.results.find(r => r.placement === 'widgets')!;

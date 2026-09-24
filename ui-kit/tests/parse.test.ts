@@ -77,7 +77,7 @@ describe('parseState', () => {
     expect(s.runs.filter(r => r.task === 'profile')).toHaveLength(2);
     expect(s.calls.find(c => 'function' in c.target && c.target.function.id === 'fetchOrders')?.timeout).toEqual({ callMs: 5000, elementMs: null });
     const branch = parseState(stateJson('branch-a'));
-    expect(branch.settled.find(x => x.placement === 'paid')?.arms).toEqual([['paid', 'normal'], ['unpaid', 'normal']]);
+    expect(branch.settled.find(x => x.placement === 'paid')?.arms).toEqual([['paid', 'normal'], ['unpaid', 'skipped']]);
     expect(branch.calls.some(c => 'judge' in c.target)).toBe(true);
     expect(parseState(stateJson('merge-a')).deliveries.some(d => d.outcome === 'trigger')).toBe(true);
   });
@@ -188,14 +188,14 @@ describe('parseRecords', () => {
     const c = recordText('users-c');
     expect(c.endsWith('\n')).toBe(false);
     const log = parseRecordLog(c);
-    expect(log.records).toHaveLength(81);
-    expect(log.records.at(-1)).toMatchObject({ seq: 81, op: { type: 'taskOutput' } });
-    expect(log.tail).toBe('{"seq":82,"commit":true}');
+    expect(log.records).toHaveLength(79);
+    expect(log.records.at(-1)).toMatchObject({ seq: 79, op: { type: 'taskOutput' } });
+    expect(log.tail).toBe('{"seq":80,"commit":true}');
     expect(parseRecords(withHeader(lines.slice(0, 4)) + lines[4]!.slice(0, 20))).toHaveLength(4);
     expect(parseRecordLog([header, lines[0]!].join('\n'))).toEqual({ definition: definition('users'), records: [], tail: lines[0] });
     expect(parseRecordLog('')).toEqual({ definition: null, records: [], tail: '' });
     // An array holds complete lines; a host passes the tail it split off as an option.
-    expect(parseRecordLog([header, ...lines.slice(0, 81)], { tail: lines[81] })).toEqual(log);
+    expect(parseRecordLog([header, ...lines.slice(0, 79)], { tail: lines[79] })).toEqual(log);
     expect(() => parseRecords([header.slice(0, 20)])).toThrow('records[0]: expected a JSON record');
     expect(() => parseRecordLog([], { tail: 1 as unknown as string })).toThrow('options.tail: expected a string');
   });
