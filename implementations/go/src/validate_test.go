@@ -153,6 +153,16 @@ func TestValidateNamesAndReferences(t *testing.T) {
 			func(task *TaskSpec) { task.Body = WorkflowBody("profileFlow", "fetch") })))))
 }
 
+func TestValidateRepresentable(t *testing.T) {
+	// What a Go definition can hold but a Lean one cannot is rejected before any shared check.
+	merge := load(t, "merge")
+	merge.Main = "d\xffashboard"
+	rejected(t, "invalid UTF-8", `the name "d\xffashboard" is not valid UTF-8`, merge)
+	merge = load(t, "merge")
+	merge.Transforms[0].Output.Lists = -1
+	rejected(t, "negative list depth", "has a negative number of List wrappers", merge)
+}
+
 func TestValidateTypes(t *testing.T) {
 	rejected(t, "transform input", "takes Stock, but sales produces Sales", mapWorkflow(load(t, "merge"), "dashboard",
 		mapConnection("sales", "archive", func(c *Connection) { c.Transform = Declared("stockWidget") })))

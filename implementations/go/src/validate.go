@@ -4,12 +4,103 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"unicode/utf8"
 )
 
 // Validate performs the structural checks of §14, and those of what the definition file can express,
 // and returns the first failed check, with the message and in the order of Suimon/Validate.lean. run
 // executes only definitions accepted here.
-func (p *Definition) Validate() error { return p.validate(p.derive()) }
+func (p *Definition) Validate() error {
+	if err := p.representable(); err != nil {
+		return err
+	}
+	return p.validate(p.derive())
+}
+
+// representable rejects what a Go definition can hold but a Lean one cannot: a string that is not
+// UTF-8, or a negative number of List wrappers. A definition read from JSON never fails it, so it
+// runs first without changing the order of the checks Lean shares.
+func (p *Definition) representable() error {
+	var bad error
+	text := func(s string) {
+		if bad == nil && !utf8.ValidString(s) {
+			bad = fmt.Errorf("the name %q is not valid UTF-8", s)
+		}
+	}
+	typ := func(t ValueType) {
+		text(t.Name)
+		if bad == nil && t.Lists < 0 {
+			bad = fmt.Errorf("type %s has a negative number of List wrappers", t.Name)
+		}
+	}
+	optType := func(t *ValueType) {
+		if t != nil {
+			typ(*t)
+		}
+	}
+	body := func(b Body) { text(b.ID); text(b.Output) }
+	ref := func(r TransformRef) { text(r.ID) }
+	text(p.Main)
+	for _, f := range p.Functions {
+		text(f.ID)
+		optType(f.Input)
+		typ(f.Output.Type)
+	}
+	for _, j := range p.Judges {
+		text(j.ID)
+		typ(j.Input)
+	}
+	for _, t := range p.Transforms {
+		text(t.ID)
+		typ(t.Input)
+		typ(t.Output)
+	}
+	for _, w := range p.Workflows {
+		text(w.ID)
+		if w.Input != nil {
+			typ(w.Input.Type)
+			text(w.Input.Placement)
+		}
+		for _, pl := range w.Placements {
+			text(pl.Name)
+			switch c := pl.Control.(type) {
+			case CallControl:
+				body(c.Body)
+			case BranchControl:
+				text(c.Judge)
+				for _, arm := range c.Arms {
+					text(arm)
+				}
+			case WaitStreamControl:
+				typ(c.Element)
+			case MergeControl:
+				typ(c.Element)
+			case ConcurrencyControl:
+				optType(c.Spec.Input)
+				typ(c.Spec.Element)
+				for _, t := range c.Spec.Tasks {
+					text(t.Name)
+					body(t.Body)
+					if t.Input != nil {
+						ref(*t.Input)
+					}
+					if t.Output != nil {
+						text(*t.Output)
+					}
+				}
+			}
+		}
+		for _, c := range w.Connections {
+			text(c.Source)
+			text(c.Target)
+			if c.Arm != nil {
+				text(*c.Arm)
+			}
+			ref(c.Transform)
+		}
+	}
+	return bad
+}
 
 // validate is Validate with the kinds of d, a derivation of p.
 func (p *Definition) validate(d *derivation) error {
