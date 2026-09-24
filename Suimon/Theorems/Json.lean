@@ -119,11 +119,13 @@ end Suimon.Codec
 
 /-! ## The canonical form of a normal definition decodes back to it
 
-The header of a record holds `definitionWire p`, and a loader decodes its `Json` with `Codec.definition`
-(and then validates it). The decoder reads fields by key and rejects what the definition file cannot
-express: an empty string or type name, a number above `maxNat`. `Definition.Expressible` states what it
-can express; every normal definition is expressible (`Definition.Normal.expressible`), and the canonical
-form of an expressible definition decodes back to it (`Codec.definition_definitionWire_of_expressible`). -/
+The header of a record holds `definitionWire p`, and the loader `Codec.load` decodes its `Json` with
+`Codec.definition` and then validates it. The decoder reads fields by key and rejects what the definition
+file cannot express: an empty string or type name, a number above `maxNat`. `Definition.Expressible`
+states what it can express; every normal definition is expressible (`Definition.Normal.expressible`), and
+the canonical form of an expressible definition decodes back to it
+(`Codec.definition_definitionWire_of_expressible`), so it determines the definition
+(`Codec.definitionWire_inj_of_expressible`). -/
 
 namespace Suimon
 

@@ -3,7 +3,8 @@ import Suimon.Theorems.StaticLemmas
 
 /-! The validator decides `Definition.Normal`: a definition it accepts is normal (§15.2), and it accepts
     every normal definition. The canonical form that a record header holds for an accepted definition
-    decodes back to it. -/
+    loads back to it (`Codec.load_definitionWire`), and no other accepted definition has the same
+    canonical form (`Codec.definitionWire_inj`). -/
 
 namespace Suimon
 
