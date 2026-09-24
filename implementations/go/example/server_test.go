@@ -90,12 +90,19 @@ func TestServerScenarios(t *testing.T) {
 		t.Fatalf("%d %s", status, data)
 	}
 	list := decode[[]struct {
-		ID         string         `json:"id"`
-		Definition map[string]any `json:"definition"`
-		Input      any            `json:"input"`
+		ID         string          `json:"id"`
+		Definition map[string]any  `json:"definition"`
+		Input      json.RawMessage `json:"input"`
+		Compare    string          `json:"compare"`
 	}](t, data)
 	if len(list) != 7 || list[0].ID != "stream" || list[0].Definition["main"] != "stream" || list[0].Input == nil {
-		t.Errorf("unexpected scenarios: %s", data)
+		t.Fatalf("unexpected scenarios: %s", data)
+	}
+	// The UI compares stream and batch, which run the same default input.
+	if stream, batch := list[0], list[1]; batch.ID != "batch" || stream.Compare != "batch" || batch.Compare != "stream" ||
+		string(stream.Input) != string(batch.Input) {
+		t.Errorf("stream compares with %q and has the input %s; %s compares with %q and has the input %s",
+			stream.Compare, stream.Input, batch.ID, batch.Compare, batch.Input)
 	}
 	if status, data := call(t, "GET", srv.URL+"/", ""); status != http.StatusOK || !strings.Contains(string(data), "<title>ui</title>") {
 		t.Errorf("index: %d %s", status, data)

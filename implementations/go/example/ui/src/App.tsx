@@ -123,7 +123,7 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
           <select id="run-unit" className="app-select" value={shownUnit(current, unit)} disabled={running} onChange={event => setUnit(Number(event.target.value))}>
             {units.map(u => <option key={u.ms} value={u.ms}>{u.label}</option>)}
           </select></label>
-        <p className="app-description">Each simulated I/O call waits a multiple of this unit.</p>
+        <p className="app-description">How long one unit lasts: every simulated wait is counted in units.</p>
       </section>
       {scenario.input !== undefined && <section className="sui-sidebar-section">
         <label className="sui-sidebar-group" htmlFor="scenario-input"><span>Input</span></label>

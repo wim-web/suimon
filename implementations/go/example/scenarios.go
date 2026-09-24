@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"iter"
 	"strings"
 	"sync"
@@ -16,8 +17,8 @@ import (
 )
 
 // The scenarios: each is a definition in definitions/ run with the functions bound below. Durations
-// are multiples of one unit of simulated I/O, chosen for each run and taken from the context of the
-// execution, so that one registry and one engine per definition serve every run.
+// are counted in units of simulated I/O. The unit is chosen for each run and taken from the context
+// of the execution, so that one registry and one engine per definition serve every run.
 
 //go:embed definitions/*.json
 var definitionFiles embed.FS
@@ -35,11 +36,16 @@ type scenario struct {
 	engine *suimon.Engine
 }
 
+// compareInput is the default input of stream and batch. By processUnits, its first item takes the
+// longest to process (bravo, 2.8 units) and its last the shortest (lima, 0.5), so Stream, which
+// processes bravo while it fetches the rest, finishes after 5.5 units and Batch after 7.8.
+const compareInput = `{"names":["bravo","charlie","echo","hotel","lima"]}`
+
 var scenarioList = []struct {
 	id, title, description, input, compare string
 }{
-	{"stream", "Stream", "produce yields each item after one unit. process starts for an item as soon as it is yielded, while produce is still running.", `{"names":["alpha","bravo","charlie","delta","echo"]}`, "batch"},
-	{"batch", "Batch", "The same items and delays, but produceAll returns the whole list at once. process can only start after the last item has been generated.", `{"names":["alpha","bravo","charlie","delta","echo"]}`, "stream"},
+	{"stream", "Stream", "Fetching takes one unit per item, and produce yields each item as soon as it is fetched. Processing takes a random time per item, from 0.5 to 3 units; it depends only on the item's name, so it is the same in both scenarios. Stream starts processing each item as soon as it arrives, in parallel with fetching the rest.", compareInput, "batch"},
+	{"batch", "Batch", "Fetching takes one unit per item, and produceAll returns the whole list once every item is fetched; split then hands the items to process. Processing takes a random time per item, from 0.5 to 3 units; it depends only on the item's name, so it is the same in both scenarios. Batch processes in parallel, but only after fetching everything.", compareInput, "stream"},
 	{"branch", "Branch and Merge", "orderSize sends the order to review (amount of 1000 or more) or approve. The other arm is skipped, and decide merges whatever arrives without waiting for it.", `{"id":"A-100","amount":120}`, ""},
 	{"merge", "Merge", "Three lookups with different latencies run in parallel after load; summary waits for all of them and returns one list.", `{"id":"u-1"}`, ""},
 	{"limit", "Concurrency limit", "A concurrency with four lookup tasks and limit 2: at most two tasks run at a time, the others wait for a slot.", `{"id":"u-1"}`, ""},
@@ -158,8 +164,8 @@ func checkNames(r request) error {
 	return nil
 }
 
-// produce yields one item per unit: downstream work for an item can start while the rest are
-// still being generated.
+// produce fetches one item per unit and yields it at once: downstream work for an item can start
+// while the rest are still being fetched.
 func produce(ctx context.Context, r request) iter.Seq2[item, error] {
 	return func(yield func(item, error) bool) {
 		s := begin(ctx, "produce", fmt.Sprintf("%d items", len(r.Names)))
@@ -182,7 +188,7 @@ func produce(ctx context.Context, r request) iter.Seq2[item, error] {
 	}
 }
 
-// produceAll generates the same items with the same delays, and returns them together.
+// produceAll fetches the same items with the same delays, and returns them together.
 func produceAll(ctx context.Context, r request) (items []item, err error) {
 	s := begin(ctx, "produceAll", fmt.Sprintf("%d items", len(r.Names)))
 	defer func() { s.end(ctx, err) }()
@@ -214,13 +220,24 @@ func split(ctx context.Context, items []item) iter.Seq2[item, error] {
 	}
 }
 
+// process waits processUnits of the item's name, like a call to a service whose latency depends on
+// the item.
 func process(ctx context.Context, it item) (d done, err error) {
 	s := begin(ctx, "process", it.Name)
 	defer func() { s.end(ctx, err) }()
-	if err := pause(ctx, 2); err != nil {
+	if err := pause(ctx, processUnits(it.Name)); err != nil {
 		return done{}, err
 	}
 	return done{it.Index, strings.ToUpper(it.Name)}, nil
+}
+
+// processUnits is how long process takes for an item, in units: from 0.5 to 3 in steps of 0.1, drawn
+// from the FNV-1a hash of the item's name. It depends on nothing else, so an item takes the same time
+// in every run and in both stream and batch.
+func processUnits(name string) float64 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return 0.5 + float64(h.Sum32()%26)/10
 }
 
 // lookup hangs for the item named stuck, like a call to an unresponsive service; only the

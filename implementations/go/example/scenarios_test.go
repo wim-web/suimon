@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"slices"
 	"sort"
 	"testing"
@@ -32,7 +33,9 @@ func scenarioByID(t *testing.T, id string) *scenario {
 	return nil
 }
 
-func runScenario(t *testing.T, id string, input string, unit time.Duration) *run {
+// startScenario starts a run of the scenario with the input, or with its default input when input is
+// empty.
+func startScenario(t *testing.T, id string, input string, unit time.Duration) *run {
 	t.Helper()
 	s := scenarioByID(t, id)
 	in := s.Input
@@ -43,15 +46,26 @@ func runScenario(t *testing.T, id string, input string, unit time.Duration) *run
 	if err != nil {
 		t.Fatal(err)
 	}
+	return r
+}
+
+// finish waits for the run to end with a report.
+func finish(t *testing.T, r *run) *run {
+	t.Helper()
 	select {
 	case <-r.finished:
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("the run did not finish")
 	}
 	if r.raw == nil {
 		t.Fatalf("no report: %s", r.err)
 	}
 	return r
+}
+
+func runScenario(t *testing.T, id string, input string, unit time.Duration) *run {
+	t.Helper()
+	return finish(t, startScenario(t, id, input, unit))
 }
 
 func failureNames(r *suimon.Report) []string {
@@ -138,6 +152,7 @@ func TestScenariosLoad(t *testing.T) {
 }
 
 func TestScenarios(t *testing.T) {
+	t.Parallel()
 	// Each lookup but the stuck one ends in time, after one unit.
 	timeout := func(t *testing.T, r *run) {
 		for _, s := range spansOf(r, "lookup") {
@@ -265,4 +280,81 @@ func TestScenarios(t *testing.T) {
 			}
 		})
 	}
+}
+
+// offeredUnits are the units that the Unit select of the UI offers (ui/src/App.tsx).
+var offeredUnits = []time.Duration{200 * time.Millisecond, 600 * time.Millisecond, time.Second}
+
+func TestProcessUnits(t *testing.T) {
+	// process takes 0.5 to 3 units in steps of 0.1, drawn from the name of the item and nothing else.
+	for _, name := range []string{"", "alpha", "bravo", "lima", "stuck", "an item", "名前"} {
+		u := processUnits(name)
+		if tenths := u * 10; u < 0.5 || u > 3 || math.Abs(tenths-math.Round(tenths)) > 1e-9 {
+			t.Errorf("process of %q takes %v units", name, u)
+		}
+		if again := processUnits(name); again != u {
+			t.Errorf("process of %q takes %v units, then %v", name, u, again)
+		}
+	}
+}
+
+// Stream and Batch run the same default input with the same delays. Each item takes as long to
+// process in both, and Stream, which processes an item as soon as it is fetched, finishes at least a
+// unit before Batch at each unit the UI offers.
+func TestStreamFinishesBeforeBatch(t *testing.T) {
+	t.Parallel()
+	for _, unit := range offeredUnits {
+		t.Run(unit.String(), func(t *testing.T) {
+			t.Parallel()
+			stream, batch := startScenario(t, "stream", "", unit), startScenario(t, "batch", "", unit)
+			finish(t, stream)
+			finish(t, batch)
+			u := float64(unit.Milliseconds())
+			// Each item takes the time drawn from its name in both scenarios: at least that long, and as
+			// long in both up to the precision of the timers.
+			ps, pb := processTimes(stream), processTimes(batch)
+			if len(ps) != 5 || len(pb) != len(ps) {
+				t.Fatalf("process ran for %v in stream and %v in batch", ps, pb)
+			}
+			for name, s := range ps {
+				b, want := pb[name], processUnits(name)*u
+				if s < want-0.01 || b < want-0.01 || math.Abs(s-b) > 0.1*u {
+					t.Errorf("process %s took %.1fms in stream and %.1fms in batch, want %.0fms in both", name, s, b, want)
+				}
+			}
+			// Stream starts processing, returns its first result and finishes earlier: it finishes at
+			// least a unit earlier.
+			ss, sr := firstProcess(stream)
+			bs, br := firstProcess(batch)
+			t.Logf("stream: first process at %.0fms, first result at %.0fms, total %.0fms", ss, sr, stream.endMs)
+			t.Logf("batch:  first process at %.0fms, first result at %.0fms, total %.0fms", bs, br, batch.endMs)
+			if ss >= bs || sr >= br {
+				t.Errorf("stream started processing at %.0fms and had a result at %.0fms, batch at %.0fms and %.0fms", ss, sr, bs, br)
+			}
+			if stream.endMs+u > batch.endMs {
+				t.Errorf("stream took %.0fms in total, not a unit less than batch with %.0fms", stream.endMs, batch.endMs)
+			}
+		})
+	}
+}
+
+// processTimes returns how long process took for each item, by name.
+func processTimes(r *run) map[string]float64 {
+	out := map[string]float64{}
+	for _, s := range spansOf(r, "process") {
+		out[s.Detail] = *s.EndMs - s.StartMs
+	}
+	return out
+}
+
+// firstProcess returns when the first call of process started, and when the first one returned.
+func firstProcess(r *run) (start, result float64) {
+	start, result = math.Inf(1), math.Inf(1)
+	for _, s := range spansOf(r, "process") {
+		start = min(start, s.StartMs)
+		if s.Outcome == "ok" {
+			result = min(result, *s.EndMs)
+		}
+	}
+	return start, result
 }
