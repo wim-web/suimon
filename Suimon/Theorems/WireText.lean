@@ -506,4 +506,136 @@ theorem Wire.parse_render (w : Wire) (hw : w.DistinctKeys) : Wire.parse (Wire.re
   rw [List.append_nil] at h
   simp [Wire.parse, Wire.render_toList, h, skipWs]
 
+/-! ## No repeated key -/
+
+namespace WireText
+
+theorem literal_eq_ok {word : List Char} {value w : Wire} {cs rest : List Char}
+    (h : literal word value cs = .ok (w, rest)) : w = value := by
+  unfold literal at h
+  split at h
+  · cases h; rfl
+  · simp [fail] at h
+
+/-- Every value the parser reads repeats no key, since `parseFields` rejects a key it has read. --/
+theorem parsed_distinctKeys : ∀ fuel,
+    (∀ cs w rest, parseValue fuel cs = .ok (w, rest) → w.DistinctKeys) ∧
+    (∀ cs (acc : Array Wire) w rest, (∀ x ∈ acc.toList, x.DistinctKeys) →
+      parseItems fuel cs acc = .ok (w, rest) → w.DistinctKeys) ∧
+    (∀ cs (acc : Array (String × Wire)) w rest, (acc.toList.map (·.1)).Nodup →
+      (∀ f ∈ acc.toList, f.2.DistinctKeys) → parseFields fuel cs acc = .ok (w, rest) → w.DistinctKeys)
+  | 0 => ⟨fun _ _ _ h => by simp [parseValue, fail] at h, fun _ _ _ _ _ h => by simp [parseItems, fail] at h,
+      fun _ _ _ _ _ _ h => by simp [parseFields, fail] at h⟩
+  | fuel + 1 => by
+    obtain ⟨ihv, ihi, ihf⟩ := parsed_distinctKeys fuel
+    refine ⟨fun cs w rest h => ?_, fun cs acc w rest hacc h => ?_, fun cs acc w rest hkeys hacc h => ?_⟩
+    · simp only [parseValue] at h
+      split at h
+      · simp [fail] at h
+      · split at h
+        · split at h
+          · simp [fail] at h
+          · split at h
+            · cases h; exact .obj (by simp) (by simp)
+            · exact ihf _ _ _ _ (by simp) (by simp) h
+        · split at h
+          · split at h
+            · simp [fail] at h
+            · split at h
+              · cases h; exact .arr (by simp)
+              · exact ihi _ _ _ _ (by simp) h
+          · split at h
+            · split at h
+              · cases h; exact .str _
+              · simp at h
+            · split at h
+              · rw [literal_eq_ok h]; exact .bool _
+              · split at h
+                · rw [literal_eq_ok h]; exact .bool _
+                · split at h
+                  · rw [literal_eq_ok h]; exact .null
+                  · split at h
+                    · split at h
+                      · split at h
+                        · simp [fail] at h
+                        · cases h; exact .nat _
+                      · cases h; exact .nat _
+                    · split at h
+                      · cases h; exact .nat _
+                      · simp [fail] at h
+    · simp only [parseItems] at h
+      split at h
+      · simp at h
+      · rename_i x rest' hx
+        have hxd := ihv _ _ _ hx
+        have hacc' : ∀ y ∈ (acc.push x).toList, y.DistinctKeys := by
+          intro y hy
+          rw [Array.toList_push, List.mem_append, List.mem_singleton] at hy
+          rcases hy with hy | rfl
+          · exact hacc y hy
+          · exact hxd
+        split at h
+        · simp [fail] at h
+        · split at h
+          · exact ihi _ _ _ _ hacc' h
+          · split at h
+            · cases h; exact .arr hacc'
+            · simp [fail] at h
+    · simp only [parseFields] at h
+      split at h
+      · simp [fail] at h
+      · split at h
+        · split at h
+          · simp at h
+          · rename_i k rest' hk
+            split at h
+            · simp [fail] at h
+            · rename_i hnew
+              split at h
+              · simp [fail] at h
+              · split at h
+                · split at h
+                  · simp at h
+                  · rename_i v rest'' hv
+                    have hvd := ihv _ _ _ hv
+                    have hkeys' : ((acc.push (k, v)).toList.map (·.1)).Nodup := by
+                      rw [Array.toList_push, List.map_append, List.nodup_append]
+                      refine ⟨hkeys, by simp, ?_⟩
+                      intro a ha b hb heq
+                      simp only [List.map_cons, List.map_nil, List.mem_singleton] at hb
+                      subst hb heq
+                      obtain ⟨f, hf, rfl⟩ := List.mem_map.1 ha
+                      have : acc.any (·.1 == f.1) = true := by
+                        rw [← Array.any_toList, List.any_eq_true]
+                        exact ⟨f, hf, by simp⟩
+                      simp [this] at hnew
+                    have hacc' : ∀ f ∈ (acc.push (k, v)).toList, f.2.DistinctKeys := by
+                      intro f hf
+                      rw [Array.toList_push, List.mem_append, List.mem_singleton] at hf
+                      rcases hf with hf | rfl
+                      · exact hacc f hf
+                      · exact hvd
+                    split at h
+                    · simp [fail] at h
+                    · split at h
+                      · exact ihf _ _ _ _ hkeys' hacc' h
+                      · split at h
+                        · cases h; exact .obj hkeys' hacc'
+                        · simp [fail] at h
+                · simp [fail] at h
+        · simp [fail] at h
+
+end WireText
+
+/-- The parser rejects a repeated key: no object of a value it reads repeats one, at any depth. --/
+theorem Wire.distinctKeys_of_parse {s : String} {w : Wire} (h : Wire.parse s = .ok w) : w.DistinctKeys := by
+  simp only [Wire.parse] at h
+  split at h
+  · simp at h
+  · rename_i w' rest hw
+    split at h
+    · cases h
+      exact (parsed_distinctKeys _).1 _ _ _ hw
+    · simp at h
+
 end Suimon

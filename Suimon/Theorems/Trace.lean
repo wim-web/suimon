@@ -122,6 +122,89 @@ theorem Codec.ofWire_lawful {render : Wire → String} {parse : String → Excep
 theorem wireCodec_lawful : wireCodec.Lawful :=
   Codec.ofWire_lawful Wire.parse_render Wire.newline_not_mem_render
 
+/-- The payloads read from the fields of an object have the keys of the fields. --/
+theorem payloads_keys : ∀ {entries : Fields} {values : List (Value × String)},
+    payloads entries = .ok values → values.map (·.1) = entries.map (·.1)
+  | [], values, h => by
+    simp only [payloads, pure_ok, Except.ok.injEq] at h
+    subst h
+    rfl
+  | (key, w) :: rest, values, h => by
+    cases w with
+    | str payload =>
+      simp only [payloads] at h
+      cases hr : payloads rest with
+      | error e => simp only [hr, error_bind, reduceCtorEq] at h
+      | ok vs =>
+        simp only [hr, ok_bind, pure_ok, Except.ok.injEq] at h
+        subst h
+        simp [payloads_keys hr]
+    | _ => simp [payloads, throw_error] at h
+
+theorem mem_of_lookup {α : Type} : ∀ {fields : List (String × α)} {k : String} {v : α},
+    fields.lookup k = some v → (k, v) ∈ fields
+  | [], _, _, h => by simp at h
+  | (k', v') :: rest, k, v, h => by
+    simp only [List.lookup] at h
+    split at h
+    · rename_i heq
+      cases h
+      simp only [beq_iff_eq] at heq
+      simp [heq]
+    · exact List.mem_cons_of_mem _ (mem_of_lookup h)
+
+/-- A record read from a value without repeated keys has payloads with distinct keys. --/
+theorem recordOfWire_distinctKeys {w : Wire} {r : Record} (hw : w.DistinctKeys) (h : recordOfWire w = .ok r) :
+    r.DistinctKeys := by
+  cases r with
+  | commit seq => trivial
+  | op seq o values =>
+    simp only [Record.DistinctKeys]
+    unfold recordOfWire at h
+    split at h
+    · rename_i fields
+      obtain ⟨-, hfields⟩ := Wire.distinctKeys_obj_iff.1 hw
+      cases hseq : getNat fields "seq" "record" with
+      | error e => simp [hseq, error_bind] at h
+      | ok s =>
+        simp only [hseq, ok_bind] at h
+        split at h
+        · cases hs : strict fields ["seq", "commit"] "record" <;> simp [hs, error_bind, ok_bind, pure_ok] at h
+        · rename_i o' _ _
+          cases hs : strict fields ["seq", "op", "values"] "record" with
+          | error e => simp [hs, error_bind] at h
+          | ok u =>
+            simp only [hs, ok_bind] at h
+            split at h
+            · cases ho : opOfWire o' <;> simp [ho, pure_ok, ok_bind, error_bind] at h
+              obtain ⟨-, -, rfl⟩ := h
+              simp
+            · rename_i entries hvals
+              cases hp : payloads entries with
+              | error e => simp [hp, error_bind] at h
+              | ok vs =>
+                cases ho : opOfWire o' <;> simp [hp, ho, pure_ok, ok_bind, error_bind] at h
+                obtain ⟨-, -, rfl⟩ := h
+                rw [payloads_keys hp]
+                exact (Wire.distinctKeys_obj_iff.1 (hfields _ (mem_of_lookup hvals))).1
+            · simp [throw_error, error_bind] at h
+        · simp [throw_error] at h
+    · simp [throw_error] at h
+
+/-- The codec reads only records whose payloads have distinct keys. --/
+def Codec.DecodesDistinct (c : Codec) : Prop := ∀ line r, c.decode line = .ok r → r.DistinctKeys
+
+/-- The text form reads only records whose payloads have distinct keys, since no object of a line may
+    repeat a key (`Wire.distinctKeys_of_parse`). --/
+theorem wireCodec_decodesDistinct : wireCodec.DecodesDistinct := by
+  intro line r h
+  simp only [wireCodec, Codec.ofWire] at h
+  cases hp : Wire.parse line with
+  | error e => simp [hp, error_bind] at h
+  | ok w =>
+    simp only [hp, ok_bind] at h
+    exact recordOfWire_distinctKeys (Wire.distinctKeys_of_parse hp) h
+
 /-! ## Lines -/
 
 theorem splitLines_of_not_mem {xs : List Char} (h : '\n' ∉ xs) (current : List Char) :
