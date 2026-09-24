@@ -78,6 +78,12 @@ it('shows a record with its fields and payloads as text', () => {
   expect(html).toContain('ship');
 });
 
+it('shows a payload with its numbers as written', () => {
+  const html = renderToStaticMarkup(<RecordInspector transition={{ seq: 1, committed: true, op: { type: 'start', input: 'v' }, values: { v: '{"id":9007199254740993}' } }} />);
+  expect(html).toContain('&quot;id&quot;: 9007199254740993');
+  expect(html).not.toContain('9007199254740992');
+});
+
 it('renders the toolbar status and failure count', () => {
   const html = renderToStaticMarkup(<WorkflowToolbar title="users" status="failed" failures={2} />);
   expect(html).toContain('role="img" aria-label="suimon"');

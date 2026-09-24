@@ -1,5 +1,6 @@
 import type { Definition, RuntimeState } from '../types';
 import { findPlacement, findWorkflow, incoming } from './definition';
+import { jsonTokens } from './parse';
 import { findExecution, findRun, samePath, taskOutputValue } from './status';
 
 /**
@@ -47,11 +48,31 @@ export function resolveValue(index: ValueIndex | undefined, id: string, depth = 
   return { kind: 'missing', id };
 }
 
-/** A payload string as text: a JSON object or array is indented, anything else is shown as it is. */
+/**
+ * A payload string as text: a JSON object or array is indented by two spaces, anything else is shown
+ * as it is. The text is re-indented token by token, so every string and number stays as written and
+ * a repeated key stays; parsing it into values would round integers beyond 2^53 and merge such keys.
+ */
 export function formatPayload(payload: string): string {
   const text = payload.trim();
   if (!text.startsWith('{') && !text.startsWith('[')) return payload;
-  try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return payload; }
+  try {
+    JSON.parse(text);
+    const tokens = jsonTokens(text);
+    let formatted = '', depth = 0;
+    const newline = () => `\n${'  '.repeat(depth)}`;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i]!;
+      if (token === '{' || token === '[') {
+        const close = token === '{' ? '}' : ']';
+        if (tokens[i + 1] === close) { formatted += token + close; i++; } else { depth++; formatted += token + newline(); }
+      } else if (token === '}' || token === ']') { depth--; formatted += newline() + token; }
+      else if (token === ',') formatted += `,${newline()}`;
+      else if (token === ':') formatted += ': ';
+      else formatted += token;
+    }
+    return formatted;
+  } catch { return payload; }
 }
 
 export function previewValue(value: ResolvedValue, max = 60): string {

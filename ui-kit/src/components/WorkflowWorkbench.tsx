@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { ChevronRight, CircleDot, ListTree, PanelLeft, PanelRight, X } from 'lucide-react';
 import type { Definition, ExecutionRecord, Failure, Path, RuntimeState, Transition, WorkflowPresentations } from '../types';
 import { findWorkflow } from '../lib/definition';
+import { lookup } from '../lib/dictionary';
 import { recordTransitions, recordValues, filterTransitions } from '../lib/records';
 import type { RecordFilter, RecordRelation } from '../lib/records';
 import { childRuns, findRun, pathKey, runLabel, runOverlay, runOwner, runTree, samePath } from '../lib/status';
@@ -63,6 +64,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
   const runPath = currentRun?.path ?? null;
   const workflowId = currentRun?.workflow ?? ('workflow' in view ? view.workflow : definition.main);
   const workflow = findWorkflow(definition, workflowId) ?? findWorkflow(definition, definition.main)!;
+  const workflowPresentations = lookup(presentations, workflow.id);
   const overlay = useMemo(() => state && runPath ? runOverlay(definition, state, runPath) : null, [definition, state, runPath]);
 
   const selectRun = useCallback((path: Path) => {
@@ -124,7 +126,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
         <button className={recordsOpen ? 'is-active' : ''} aria-label="Execution records" title="Execution records" aria-pressed={recordsOpen} onClick={() => setRecordsOpen(!recordsOpen)}><ListTree size={18} /></button>
         <button className={inspector ? 'is-active' : ''} aria-label="Inspector" title="Inspector" aria-pressed={inspector} onClick={() => setInspector(!inspector)}><PanelRight size={18} /></button>
       </nav>
-      {sidebar && <WorkflowSidebar key={workflow.id} workflow={workflow} overlay={overlay} selectedPlacement={selectedPlacement} onSelectPlacement={selectPlacement} presentations={presentations?.[workflow.id]}
+      {sidebar && <WorkflowSidebar key={workflow.id} workflow={workflow} overlay={overlay} selectedPlacement={selectedPlacement} onSelectPlacement={selectPlacement} presentations={workflowPresentations}
         header={state && <section className="sui-sidebar-section"><div className="sui-sidebar-group"><span>Runs</span><span className="sui-muted">{state.runs.length}</span></div><RunSelector state={state} run={runPath} onSelectRun={selectRun} /></section>}>
         {state && state.failures.length > 0 && <section className="sui-sidebar-section"><div className="sui-sidebar-group"><span>Failures</span><span className="sui-muted">{state.failures.length}</span></div><FailureList state={state} onSelectFailure={selectFailure} /></section>}
         {sidebarContent}
@@ -138,7 +140,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
         </nav>
         <WorkflowCanvas key={workflow.id} definition={definition} workflow={workflow.id} overlay={overlay} selectedPlacement={selectedPlacement}
           highlightedPlacement={highlight?.placement ?? null} highlightedConnection={highlight?.connection ?? null}
-          onSelectPlacement={selectPlacement} onOpenWorkflow={openWorkflow} presentations={presentations?.[workflow.id]} theme={theme} />
+          onSelectPlacement={selectPlacement} onOpenWorkflow={openWorkflow} presentations={workflowPresentations} theme={theme} />
       </div>
       {recordsOpen && <RecordPanel transitions={transitions} tail={recordTail} definition={definition} state={state} relations={relations} selectedSeq={selectedSeq} filter={filter} onFilterChange={setFilter} onSelectRecord={selectRecord} onClose={() => setRecordsOpen(false)} />}
       <footer className="sui-statusbar"><span><CircleDot size={11} />{state ? `${state.status} · ${state.runs.length} runs` : 'No runtime state'}</span>
@@ -147,7 +149,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
       {inspector && <aside className="sui-inspector" aria-label="Inspector"><div className="sui-inspector-header"><span>{currentRecord ? 'Record' : 'Placement'}</span><button className="sui-icon-button" aria-label="Close inspector" onClick={() => setInspector(false)}><X size={15} /></button></div>
         {currentRecord ? <RecordInspector transition={currentRecord} relation={relations.get(currentRecord.seq)} values={values} runLabel={labelOf}
           onPrevious={position > 0 ? () => selectRecord(visible[position - 1]!) : undefined} onNext={position >= 0 && position < visible.length - 1 ? () => selectRecord(visible[position + 1]!) : undefined} />
-          : selectedPlacement ? <PlacementInspector definition={definition} workflow={workflow} placement={selectedPlacement} state={state} run={runPath} values={values} presentation={presentations?.[workflow.id]?.[selectedPlacement]}
+          : selectedPlacement ? <PlacementInspector definition={definition} workflow={workflow} placement={selectedPlacement} state={state} run={runPath} values={values} presentation={lookup(workflowPresentations, selectedPlacement)}
             onOpenWorkflow={openWorkflow} onSelectRun={selectRun} onShowRecords={transitions.length ? () => { setFilter({ run: runPath, placement: selectedPlacement }); setRecordsOpen(true); } : undefined} recordCount={placementRecords} />
             : <div className="sui-empty-inspector"><PanelRight size={28} /><p>Select a placement or a record to see its details.</p></div>}
       </aside>}

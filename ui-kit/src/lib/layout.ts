@@ -1,6 +1,7 @@
 import type { Connection, Definition, Placement, ValueType, Workflow } from '../types';
 import { deriveKinds, findWorkflow, isEndpoint, isEntry } from './definition';
 import type { Kind } from './definition';
+import { lookup } from './dictionary';
 
 export interface Point { x: number; y: number }
 export interface LayoutNode { name: string; placement: Placement; kind: Kind | null; entry: boolean; endpoint: boolean; position: Point; height: number }
@@ -68,7 +69,7 @@ export function layoutWorkflow(definition: Definition, workflow: Workflow | stri
   const kinds = deriveKinds(definition, w);
   const nodes: LayoutNode[] = w.placements.map(p => ({
     name: p.name, placement: p, kind: kinds[p.name] ?? null, entry: isEntry(w, p.name), endpoint: isEndpoint(w, p.name), height: placementHeight(p),
-    position: positions[p.name] ?? { x: column.get(p.name)! * COLUMN, y: offset.get(rank.get(p.name)!)! },
+    position: lookup(positions, p.name) ?? { x: column.get(p.name)! * COLUMN, y: offset.get(rank.get(p.name)!)! },
   }));
   const edges = w.connections.map((connection, index) => ({ index, connection, kind: kinds[connection.source] ?? null }));
   const layout: WorkflowLayout = { workflow: w, nodes, edges };

@@ -3,6 +3,7 @@ import { Background, BackgroundVariant, MarkerType, Panel, ReactFlow, ReactFlowP
 import type { Edge } from '@xyflow/react';
 import { Maximize, Minus, Plus } from 'lucide-react';
 import type { Definition, PlacementPresentations } from '../types';
+import { lookup } from '../lib/dictionary';
 import { layoutWorkflow } from '../lib/layout';
 import type { RunOverlay } from '../lib/status';
 import { equalData } from '../lib/equal';
@@ -64,7 +65,7 @@ function Canvas({ definition, workflow, overlay, selectedPlacement, highlightedP
   const decorated = useMemo(() => nodes.map((node): CanvasNode => {
     if (node.type !== 'placement') return node;
     const name = node.data.placement.name, prior = previous.current.get(node.id);
-    const data = { ...node.data, presentation: presentations[name], status: overlay?.placements[name], highlighted: highlightedPlacement === name, onOpenWorkflow };
+    const data = { ...node.data, presentation: lookup(presentations, name), status: lookup(overlay?.placements, name), highlighted: highlightedPlacement === name, onOpenWorkflow };
     const selected = selectedPlacement === name;
     // Keep an unchanged node object so a new state snapshot re-renders only the placements it changed.
     if (prior?.type === 'placement' && prior.selected === selected && prior.position === node.position && prior.measured === node.measured && prior.dragging === node.dragging

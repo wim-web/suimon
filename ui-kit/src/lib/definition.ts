@@ -1,4 +1,5 @@
 import type { Body, Connection, Control, Definition, Placement, ValueType, Workflow } from '../types';
+import { dictionary } from './dictionary';
 
 export type Kind = 'single' | 'stream';
 export interface IndexedConnection extends Connection { index: number }
@@ -54,10 +55,11 @@ function outputKind(definition: Definition, control: Control, input: Kind | unde
 
 /**
  * Single/Stream of each placement's output, derived as in Suimon/Derive.lean. A placement whose
- * kind cannot be derived (an invalid or unchecked definition) gets null.
+ * kind cannot be derived (an invalid or unchecked definition) gets null. The result, by placement
+ * name, has no prototype, so any name is only a key.
  */
 export function deriveKinds(definition: Definition, workflow: Workflow): Record<string, Kind | null> {
-  const kinds: Record<string, Kind | null> = {};
+  const kinds = dictionary<Kind | null>();
   const visiting = new Set<string>();
   const kindOf = (name: string): Kind | null => {
     if (Object.hasOwn(kinds, name)) return kinds[name]!;

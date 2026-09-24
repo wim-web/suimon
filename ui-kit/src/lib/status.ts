@@ -1,5 +1,6 @@
 import type { Call, CallStatus, Definition, Execution, Failure, Invocation, InvocationStatus, Path, Result, Run, RuntimeState, Settled, TaskOutput, TaskStatus } from '../types';
 import { findWorkflow } from './definition';
+import { dictionary } from './dictionary';
 
 export function samePath(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((segment, i) => segment === b[i]);
@@ -124,6 +125,7 @@ export interface PlacementStatus {
 export interface ConnectionStatus { values: number; triggers: number; failed: number }
 export interface RunOverlay {
   run: Run;
+  /** The status of each placement of the run's workflow, by name; runOverlay builds it without a prototype. */
   placements: Record<string, PlacementStatus>;
   /** Deliveries on each connection of the run, by connection index. */
   connections: Record<number, ConnectionStatus>;
@@ -144,7 +146,7 @@ export function runOverlay(definition: Definition, state: RuntimeState, path: re
   const inRun = <T extends { run: Path }>(items: T[]) => items.filter(item => samePath(item.run, path));
   const invocations = inRun(state.invocations), executions = inRun(state.executions), results = inRun(state.results);
   const settled = inRun(state.settled), failures = inRun(state.failures);
-  const placements: Record<string, PlacementStatus> = {};
+  const placements = dictionary<PlacementStatus>();
   for (const p of workflow.placements) {
     const own = invocations.filter(i => i.placement === p.name);
     const ids = new Set(own.map(i => i.id));

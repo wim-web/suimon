@@ -23,12 +23,19 @@ describe('parseDefinition', () => {
     ['unknown arm', p => { p.workflows[0].connections[1].arm = 'later'; }, 'connections[1].arm: unknown arm later'],
     ['target', p => { p.workflows[0].connections[0].target = 'gone'; }, 'connections[0].target: unknown placement gone'],
     ['timeout', p => { p.workflows[0].placements[0].timeout.callMs = 0; }, 'timeout.callMs: expected a positive integer'],
+    ['large timeout', p => { p.workflows[0].placements[0].timeout.callMs = 2 ** 65; }, 'timeout.callMs: must be at most 18446744073709551615'],
     ['type', p => { p.functions[0].output = { stream: '' }; }, 'definition.functions[0].output.stream: empty string'],
   ])('rejects a broken definition: %s', (_, edit, message) => {
     const json = clone(definitionJson('branch')) as Json;
     edit(json);
     expect(() => parseDefinition(json)).toThrow(TypeError);
     expect(() => parseDefinition(json)).toThrow(message);
+  });
+
+  it('accepts a timeout up to 2^64 - 1, as Lean and Go do', () => {
+    const json = clone(definitionJson('branch')) as Json;
+    json.workflows[0].placements[0].timeout.callMs = 2 ** 60;
+    expect(parseDefinition(json).workflows[0]!.placements[0]!.timeout?.callMs).toBe(2 ** 60);
   });
 
   it('reads the text of a definition file, in which no object may repeat a key', () => {

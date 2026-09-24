@@ -3,6 +3,7 @@ import type {
   Failure, FunctionDecl, Invocation, JudgeDecl, Op, OpType, Path, Placement, Policy, RecordLog, Result, Run,
   RuntimeState, Settled, Task, TaskOutput, TaskResult, TaskState, Timeout, TransformDecl, ValueType, Workflow,
 } from '../types';
+import { dictionary } from './dictionary';
 
 type Obj = Record<string, unknown>;
 
@@ -34,6 +35,13 @@ function positive(value: unknown, at: string): number {
   if (nat(value, at) < 1) fail(at, 'expected a positive integer');
   return value as number;
 }
+/** A limit or timeout of a definition: Lean and Go accept up to 2^64 - 1, which a JavaScript number
+    cannot tell apart from 2^64, so both pass here. */
+function bounded(value: unknown, at: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) fail(at, 'expected a positive integer');
+  if (value > 2 ** 64) fail(at, 'must be at most 18446744073709551615');
+  return value;
+}
 function bool(value: unknown, at: string): boolean {
   if (typeof value !== 'boolean') fail(at, 'expected a boolean');
   return value;
@@ -54,30 +62,36 @@ function unique(values: string[], at: string, what: string): void {
   for (const value of values) { if (seen.has(value)) fail(at, `duplicate ${what} ${value}`); seen.add(value); }
 }
 
+/** A string with its escapes, a structural character, or a number or literal. */
+const jsonToken = /"(?:[^"\\]|\\[\s\S])*"|[{}[\]:,]|[^{}[\]:,"\s]+/g;
+/**
+ * The tokens of JSON text that JSON.parse accepted, each exactly as written: `{`, `}`, `[`, `]`,
+ * `:`, `,`, strings with their quotes and escapes, and numbers and literals. Whitespace between
+ * tokens is left out.
+ */
+export function jsonTokens(text: string): string[] {
+  return text.match(jsonToken) ?? [];
+}
+
 /**
  * The first key that repeats within one object of JSON text that JSON.parse accepted, compared after
  * its escapes are decoded. JSON.parse keeps the last field of such a key, where suimon rejects the
- * text, so the text itself is scanned: each open object keeps the keys read so far.
+ * text, so the tokens of the text are read: each open object keeps the keys read so far.
  */
 function repeatedKey(text: string): string | undefined {
   const open: (Set<string> | null)[] = []; // the keys of each open object, null for an array
   let atKey = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === '"') {
-      let end = i + 1;
-      while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
-      if (atKey) {
-        const key = JSON.parse(text.slice(i, end + 1)) as string, keys = open.at(-1)!;
-        if (keys.has(key)) return key;
-        keys.add(key);
-        atKey = false;
-      }
-      i = end;
-    } else if (c === '{') { open.push(new Set()); atKey = true; }
-    else if (c === '[') { open.push(null); atKey = false; }
-    else if (c === '}' || c === ']') { open.pop(); atKey = false; }
-    else if (c === ',') atKey = open.at(-1) instanceof Set;
+  for (const token of jsonTokens(text)) {
+    if (token === '{') { open.push(new Set()); atKey = true; }
+    else if (token === '[') { open.push(null); atKey = false; }
+    else if (token === '}' || token === ']') { open.pop(); atKey = false; }
+    else if (token === ',') atKey = open.at(-1) instanceof Set;
+    else if (atKey) {
+      const key = JSON.parse(token) as string, keys = open.at(-1)!;
+      if (keys.has(key)) return key;
+      keys.add(key);
+      atKey = false;
+    }
   }
   return undefined;
 }
@@ -107,8 +121,8 @@ const policy = (value: unknown, at: string): Policy => oneOf(value, at, ['stop',
 function timeout(o: Obj, at: string): Timeout | undefined {
   if (!Object.hasOwn(o, 'timeout')) return undefined;
   const t = object(o.timeout, `${at}.timeout`, ['callMs', 'elementMs']), result: Timeout = {};
-  if (Object.hasOwn(t, 'callMs')) result.callMs = positive(t.callMs, `${at}.timeout.callMs`);
-  if (Object.hasOwn(t, 'elementMs')) result.elementMs = positive(t.elementMs, `${at}.timeout.elementMs`);
+  if (Object.hasOwn(t, 'callMs')) result.callMs = bounded(t.callMs, `${at}.timeout.callMs`);
+  if (Object.hasOwn(t, 'elementMs')) result.elementMs = bounded(t.elementMs, `${at}.timeout.elementMs`);
   return result;
 }
 function body(value: unknown, at: string): Body {
@@ -151,7 +165,7 @@ function control(value: unknown, at: string): Control {
       if (!tasks.length) fail(`${at}.tasks`, 'expected at least one task');
       unique(tasks.map(t => t.name), `${at}.tasks`, 'task');
       const result: Control = {
-        type, limit: positive(field(o, 'limit', at), `${at}.limit`), tasks,
+        type, limit: bounded(field(o, 'limit', at), `${at}.limit`), tasks,
         output: oneOf(field(o, 'output', at), `${at}.output`, ['list', 'stream'] as const),
         element: valueType(field(o, 'element', at), `${at}.element`),
       };
@@ -394,8 +408,9 @@ function op(value: unknown, at: string): Op {
   }
   return result as Op;
 }
+/** Payloads by value identity, without a prototype: an identity such as `__proto__` stays a key. */
 function payloads(value: unknown, at: string): Record<string, string> {
-  const o = object(value, at), result: Record<string, string> = {};
+  const o = object(value, at), result = dictionary<string>();
   for (const [id, payload] of Object.entries(o)) result[id] = string(payload, `${at}.${id}`);
   return result;
 }

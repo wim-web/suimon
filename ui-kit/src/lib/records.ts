@@ -1,5 +1,6 @@
 import type { Definition, ExecutionRecord, Op, Path, RuntimeState, Transition } from '../types';
 import { findWorkflow } from './definition';
+import { dictionary } from './dictionary';
 import { findExecution, findInvocation, findRun, runOwner, samePath } from './status';
 
 /** Op records with whether their commit followed; an op without its commit is uncommitted. */
@@ -8,14 +9,17 @@ export function recordTransitions(records: readonly ExecutionRecord[]): Transiti
   records.forEach((record, i) => {
     if ('commit' in record) return;
     const next = records[i + 1];
-    transitions.push({ seq: record.seq, op: record.op, values: record.values ?? {}, committed: !!next && 'commit' in next && next.seq === record.seq + 1 });
+    transitions.push({ seq: record.seq, op: record.op, values: record.values ?? dictionary(), committed: !!next && 'commit' in next && next.seq === record.seq + 1 });
   });
   return transitions;
 }
 
-/** Payloads by value identity from the committed transitions (or all, for inspecting a torn tail). */
+/**
+ * Payloads by value identity from the committed transitions (or all, for inspecting a torn tail).
+ * The result has no prototype, so a value identity such as `__proto__` is kept as a key.
+ */
 export function recordValues(transitions: readonly Transition[], includeUncommitted = false): Record<string, string> {
-  const values: Record<string, string> = {};
+  const values = dictionary<string>();
   for (const t of transitions) if (t.committed || includeUncommitted) Object.assign(values, t.values);
   return values;
 }
