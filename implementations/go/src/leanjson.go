@@ -2,7 +2,6 @@ package suimon
 
 import (
 	"fmt"
-	"math"
 	"math/big"
 	"sort"
 	"unicode/utf8"
@@ -50,27 +49,28 @@ type ljNumber struct {
 
 // nat is Codec.nat? of Suimon/Json.lean: the value of a number that is a natural number in any
 // notation, so 2.0 and 20e-1 are 2. Trailing zeros are stripped rather than computing
-// 10^exponent, which takes at most one step per digit of the mantissa whatever the exponent.
-// Values above 2^64-1 are clamped (see Timeout).
-func (n ljNumber) nat() (uint64, bool) {
+// 10^exponent, which takes at most one step per digit of the mantissa whatever the exponent. ok is
+// false for a number that is not a natural number; large is true for a natural number above
+// 2^64-1 (Codec.maxNat), which a definition rejects.
+func (n ljNumber) nat() (value uint64, ok, large bool) {
 	if n.mantissa.Sign() == 0 {
-		return 0, true
+		return 0, true, false
 	}
 	if n.neg {
-		return 0, false
+		return 0, false, false
 	}
 	m, e := n.mantissa, n.exponent
 	for e.Sign() > 0 {
 		q, r := new(big.Int).QuoRem(m, bigTen, new(big.Int))
 		if r.Sign() != 0 {
-			return 0, false
+			return 0, false, false
 		}
 		m, e = q, new(big.Int).Sub(e, bigOne)
 	}
 	if !m.IsUint64() {
-		return math.MaxUint64, true
+		return 0, true, true
 	}
-	return m.Uint64(), true
+	return m.Uint64(), true, false
 }
 
 func (v ljValue) field(key string) (ljValue, bool) {

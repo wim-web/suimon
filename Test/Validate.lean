@@ -272,6 +272,15 @@ def run : IO Unit := do
   for text in ["2.5", "-1", "1e-1", "1e-1000000000"] do
     decodeRejected s!"limit {text}" "node.limit: expected a natural number" (concurrency text)
   rejected "limit 0.0" "limit must be positive" (← decoded "limit 0.0" (concurrency "0.0"))
+  -- A number above `Codec.maxNat` is rejected, and a huge exponent is not expanded.
+  let largest ← decoded "limit 2^64-1" (concurrency "18446744073709551615")
+  ensure (limits largest == [Codec.maxNat]) s!"limit 2^64-1: got {limits largest}"
+  for text in ["18446744073709551616", "1.8446744073709551616e19", "1e20", "7e100", "1e1000000000"] do
+    decodeRejected s!"limit {text}" "node.limit: must be at most 18446744073709551615" (concurrency text)
+  rejected "limit 0e1000000000" "limit must be positive"
+    (← decoded "limit 0e1000000000" (concurrency "0e1000000000"))
+  for text in ["1e64", "12.5e65", "-3e64"] do
+    parsesLikeLean text text
   let timed ← decoded "timeout" (base ++ ",\"policy\":\"stop\",\"timeout\":{\"callMs\":1.5e3,\"elementMs\":2.50e1}}]}]}")
   ensure ((timed.workflows.flatMap (·.placements)).map (·.timeout) == [{ callMs := some 1500, elementMs := some 25 }])
     "timeout: numbers in any notation"

@@ -79,8 +79,8 @@
       "description": "Milliseconds. elementMs limits the wait for the next element of a Stream function.",
       "type": "object",
       "properties": {
-        "callMs": {"type": "integer", "minimum": 1},
-        "elementMs": {"type": "integer", "minimum": 1}
+        "callMs": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "elementMs": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
       },
       "additionalProperties": false
     },
@@ -151,7 +151,7 @@
       "properties": {
         "type": {"const": "concurrency"},
         "input": {"$ref": "#/$defs/valueType"},
-        "limit": {"type": "integer", "minimum": 1},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
         "tasks": {"type": "array", "items": {"$ref": "#/$defs/task"}, "minItems": 1},
         "output": {"enum": ["list", "stream"]},
         "element": {"$ref": "#/$defs/valueType"}

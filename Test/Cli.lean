@@ -66,6 +66,16 @@ def run : IO Unit := do
     handle.flush
     let result ← cli ["check", path.toString] 1
     Validate.ensure (result.stderr == "line 1: unknown main workflow w\n") s!"invalid header: {result.stderr}"
+  -- A number in the header's definition is bounded as in a definition file.
+  IO.FS.withTempFile fun handle path => do
+    handle.putStr ("{\"definition\":{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[{\"name\":\"c\"," ++
+      "\"node\":{\"type\":\"concurrency\",\"limit\":18446744073709551616,\"tasks\":[],\"output\":\"list\"," ++
+      "\"element\":\"T\"},\"policy\":\"stop\"}]}]}}\n")
+    handle.flush
+    let result ← cli ["check", path.toString] 1
+    Validate.ensure (result.stderr ==
+        "line 1: workflows.w.placements.c.node.limit: must be at most 18446744073709551615\n")
+      s!"large header number: {result.stderr}"
   -- No object may repeat a key, in a definition file or in any line of a record.
   IO.FS.withTempFile fun handle path => do
     handle.putStr "{\"main\":\"w\",\"main\":\"w\",\"workflows\":[]}"

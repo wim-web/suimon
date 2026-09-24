@@ -3,6 +3,7 @@ package suimon
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"unicode/utf8"
 )
@@ -80,7 +81,11 @@ func optionalNatField(json ljValue, key, at string) (*uint64, error) {
 		return nil, nil
 	}
 	if v.kind == ljNum {
-		if n, ok := v.num.nat(); ok {
+		n, ok, large := v.num.nat()
+		if large {
+			return nil, fmt.Errorf("%s.%s: must be at most %d", at, key, uint64(math.MaxUint64))
+		}
+		if ok {
 			return &n, nil
 		}
 	}

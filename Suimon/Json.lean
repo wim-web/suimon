@@ -13,13 +13,42 @@ open Lean
 A definition file is read as Lean's `Json.parse` reads JSON text, except that an object may not
 repeat a key, where `Json.parse` keeps the last field. The parser is `Lean.Json.Parser`'s, with one
 check added to `objectCore`, and uses its lexers: text without a repeated key gives the same `Json`,
-and any error the same message at the same offset. Keys are compared after their escapes are decoded,
+and any error the same message at the same offset. The one exception is a number whose exponent pads
+its mantissa with more than 64 zeros: it keeps 64, because the exact power of ten can be
+astronomically large (`1e1000000000`) and a non-zero mantissa exceeds `maxNat` either way. Keys are compared after their escapes are decoded,
 and a repeated key fails right after its closing quote, as `duplicate key "k"` with the key quoted
 by `String.quote`. -/
 
 namespace Codec.Parser
 open Std.Internal.Parsec Std.Internal.Parsec.String
-open Lean.Json.Parser (str num lookahead)
+open Lean.Json.Parser (str lookahead numWithDecimals natMaybeZero)
+
+/-- `JsonNumber.shiftl`, padding the mantissa with at most 64 zeros. --/
+def shiftl (n : JsonNumber) (s : Nat) : JsonNumber :=
+  if n.mantissa = 0 then ⟨0, n.exponent - s⟩
+  else ⟨n.mantissa * (10 ^ min (s - n.exponent) 64 : Nat), n.exponent - s⟩
+
+/-- `Lean.Json.Parser.num`, with `shiftl` above. --/
+def num : Parser JsonNumber := do
+  let value ← numWithDecimals
+  if ← isEof then
+    return value
+  else
+    let c ← peek!
+    if c == 'e' || c == 'E' then
+      skip
+      let c ← peek!
+      if c == '-' then
+        skip
+        let n ← natMaybeZero
+        return value.shiftr n
+      else
+        if c = '+' then skip
+        let n ← natMaybeZero
+        if n > USize.size then fail "exp too large"
+        return shiftl value n
+    else
+      return value
 
 mutual
 
@@ -165,9 +194,13 @@ where
     | 0 => some m
     | e + 1 => if m % 10 = 0 then strip (m / 10) e else none
 
+/-- The largest number a definition may contain: implementations hold limits and timeouts in 64 bits,
+    and a larger value would change when an implementation reads it. --/
+def maxNat : Nat := 18446744073709551615
+
 def natField? (json : Json) (key : String) (at_ : String) : Except String (Option Nat) :=
   (field? json key).mapM fun value => match nat? value with
-    | some n => pure n
+    | some n => if n ≤ maxNat then pure n else throw s!"{at_}.{key}: must be at most {maxNat}"
     | none => throw s!"{at_}.{key}: expected a natural number"
 
 def list (json : Json) (key : String) (at_ : String) : Except String (List Json) :=

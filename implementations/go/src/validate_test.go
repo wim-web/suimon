@@ -382,18 +382,28 @@ func TestDecodeMessages(t *testing.T) {
 }
 
 func TestDecodeNumbers(t *testing.T) {
-	// A natural number is read by its value, whatever the notation; values above 2^64-1 are clamped
-	// after the trailing zeros are stripped.
-	cases := map[string]uint64{"2": 2, "2e0": 2, "-0": 0, "0.2e1": 2, "1E+1": 10, "1e20": ^uint64(0), "0e999": 0,
+	// A natural number is read by its value, whatever the notation. Above 2^64-1 it is large, also
+	// when the value is only reached after the trailing zeros are stripped.
+	cases := map[string]uint64{"2": 2, "2e0": 2, "-0": 0, "0.2e1": 2, "1E+1": 10, "0e999": 0,
 		"2.0": 2, "20e-1": 2, "1.50e1": 15, "100e-2": 1, "0.0": 0, "-0.0": 0, "0e-99999999999999999999": 0,
-		"1.00000000000000000000e1": 10, "20000000000000000000000e-20": 200, "18446744073709551616.0": ^uint64(0)}
+		"1.00000000000000000000e1": 10, "20000000000000000000000e-20": 200,
+		"18446744073709551615": ^uint64(0), "1.8446744073709551615e19": ^uint64(0)}
 	for text, want := range cases {
 		v, err := parseLeanJSON(text)
 		if err != nil {
 			t.Fatalf("%s: %v", text, err)
 		}
-		if n, ok := v.num.nat(); !ok || n != want {
-			t.Errorf("%s: got %d %v, want %d", text, n, ok, want)
+		if n, ok, large := v.num.nat(); !ok || large || n != want {
+			t.Errorf("%s: got %d %v %v, want %d", text, n, ok, large, want)
+		}
+	}
+	for _, text := range []string{"1e20", "18446744073709551616", "18446744073709551616.0", "7e100", "1e1000000000"} {
+		v, err := parseLeanJSON(text)
+		if err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+		if _, ok, large := v.num.nat(); !ok || !large {
+			t.Errorf("%s: got ok %v large %v, want a large natural number", text, ok, large)
 		}
 	}
 	for _, text := range []string{"2.5", "-1", "-10e-1", "1e-1", "0.5", "1e-1000000000", "1e-99999999999999999999"} {
@@ -401,7 +411,7 @@ func TestDecodeNumbers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", text, err)
 		}
-		if _, ok := v.num.nat(); ok {
+		if _, ok, _ := v.num.nat(); ok {
 			t.Errorf("%s: accepted as a natural number", text)
 		}
 	}

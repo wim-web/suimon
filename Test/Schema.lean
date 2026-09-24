@@ -55,7 +55,7 @@ private def checkSchema (documents : List (String × Json)) (root : Json) : Nat 
         for child in children do checkSchema documents root fuel child
       | "uniqueItems" => let _ ← value.getBool?; pure ()
       | "minLength" | "minItems" | "maxItems" => let _ ← value.getNat?; pure ()
-      | "minimum" => let _ ← value.getNum?; pure ()
+      | "minimum" | "maximum" => let _ ← value.getNum?; pure ()
       | "const" => pure ()
       | "enum" =>
         let values := (← value.getArr?).toList
@@ -166,6 +166,8 @@ private def checkValue (documents : List (String × Json)) (root : Json) : Nat �
     | .num number =>
       if let some minimum := field rule "minimum" then
         require (!numberLt number (← minimum.getNum?)) "number is below minimum"
+      if let some maximum := field rule "maximum" then
+        require (!numberLt (← maximum.getNum?) number) "number is above maximum"
     | _ => pure ()
 
 /-- Keep compilation and per-value checking separate to inspect every schema branch once. The

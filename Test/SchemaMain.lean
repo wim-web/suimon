@@ -45,6 +45,10 @@ def main : IO Unit := do
   -- Below the minimum; the rest of the example is valid, so the minimum is what rejects it.
   for text in ["0", "-0", "0.0", "0e-1000000000", "-1", "-10e-1"] do
     rejected schema s!"limit {text}" (limit text)
+  -- Up to the maximum, 2^64 - 1, which implementations hold in 64 bits.
+  liftError "limit 2^64-1" (Codec.parse (limit "18446744073709551615") >>= schema.validate)
+  for text in ["18446744073709551616", "1e20", "1e1000000000"] do
+    rejected schema s!"limit {text}" (limit text)
   let timed := merge ++ ",\"policy\":\"stop\",\"timeout\":{\"callMs\":1.5e3,\"elementMs\":2.50e1}"
   liftError "timeout" (Codec.parse (placement timed) >>= schema.validate)
   -- Numbers compare by value, whatever their exponents, and zero is above every negative number. A
