@@ -105,4 +105,10 @@ def main : IO Unit := do
   for value in ["\"true\"", "null", "1"] do
     rejected trace s!"header with validated {value}" ("{\"definition\":" ++ definition ++ s!",\"validated\":{value}}")
   rejected trace "header with an invalid definition" "{\"definition\":{\"main\":\"w\"},\"validated\":true}"
+  -- Only a record marked validated holds a definition that definition.schema.json accepts; an unchecked
+  -- one may hold any definition, such as one without placements, which the decoder still reads.
+  let noPlacements := "{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[]}]}"
+  liftError "unchecked header without placements"
+    (Codec.parse ("{\"definition\":" ++ noPlacements ++ ",\"validated\":false}") >>= trace.validate)
+  rejected trace "validated header without placements" ("{\"definition\":" ++ noPlacements ++ ",\"validated\":true}")
   IO.println "schema: ok"

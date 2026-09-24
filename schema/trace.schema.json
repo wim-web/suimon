@@ -37,22 +37,42 @@
       }
     },
     "header": {
-      "description": "The first line, and no other: the definition of the execution, and whether the execution was started with validation of it. Writers give the definition in its canonical form, with the fields in the order of definition.schema.json and absent optional fields left out. An execution is resumed only with a definition of the same canonical form.",
-      "type": "object",
-      "properties": {
-        "definition": {
-          "$ref": "definition.schema.json"
+      "description": "The first line, and no other: the definition of the execution, and whether the execution was started with validation of it. Writers give the definition in its canonical form, with the fields in the order of definition.schema.json and absent optional fields left out. An execution is resumed only with a definition of the same canonical form. validated is true when the execution was started with validation of the definition (run), false when it was started without (runUnchecked). Resuming and checking a record marked true validate the definition and refuse the record when it fails; a record marked false is resumed and replayed with the definition only decoded. Resuming keeps the header as it was written.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "definition": {
+              "$ref": "definition.schema.json"
+            },
+            "validated": {
+              "const": true
+            }
+          },
+          "required": [
+            "definition",
+            "validated"
+          ],
+          "additionalProperties": false
         },
-        "validated": {
-          "description": "true when the execution was started with validation of the definition (run), false when it was started without (runUnchecked). Resuming and checking a record marked true validate the definition and refuse the record when it fails; a record marked false is resumed and replayed with the definition only decoded. Resuming keeps the header as it was written.",
-          "type": "boolean"
+        {
+          "type": "object",
+          "properties": {
+            "definition": {
+              "description": "The definition of a runUnchecked execution: the format of definition.schema.json, but validation (§14) may reject it, for example with an empty placement list or a zero limit. Readers decode it with the rules of the definition decoder.",
+              "type": "object"
+            },
+            "validated": {
+              "const": false
+            }
+          },
+          "required": [
+            "definition",
+            "validated"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "definition",
-        "validated"
-      ],
-      "additionalProperties": false
+      ]
     },
     "opRecord": {
       "type": "object",
