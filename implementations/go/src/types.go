@@ -74,8 +74,8 @@ func (p Policy) String() string {
 }
 
 // Timeout holds the optional durations in milliseconds. The model only uses whether a timeout
-// exists and that it is positive. JSON numbers above 2^64-1 are clamped to 2^64-1, which the
-// model cannot tell apart from the exact value.
+// exists and that it is positive. A definition cannot hold a duration above 2^64-1: the decoder
+// rejects a larger JSON number, and Lean's validation a larger value.
 type Timeout struct {
 	CallMs    *uint64
 	ElementMs *uint64

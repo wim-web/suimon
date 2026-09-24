@@ -99,6 +99,7 @@ structure Entry.Normal (p : Definition) (w : Workflow) (e : Entry) : Prop where
     p.inputType pl.control = some (some e.valueType)
   alone : w.incoming e.placement = []
 
+/-- One workflow of the definition (§13). --/
 structure Workflow.Normal (p : Definition) (w : Workflow) : Prop where
   id : w.id ≠ ""
   nonempty : w.placements ≠ []
