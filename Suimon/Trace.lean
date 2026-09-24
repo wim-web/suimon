@@ -17,7 +17,8 @@ def introduced (before after : State) : List Value :=
 
 /-- Payloads of an op record for values its transition does not introduce. An op record may carry a
     payload only for a value its transition introduces, which the state before does not mention, so a
-    committed payload is never repeated or contradicted by a later one (§12.1). --/
+    committed payload is never repeated or contradicted by a later one (§12.1,
+    `check_values_nodup`). --/
 def unexpected (before after : State) (values : List (Value × String)) : List Value :=
   (values.map (·.1)).filter fun v => !(introduced before after).contains v
 
