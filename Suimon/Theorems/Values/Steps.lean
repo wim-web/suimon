@@ -257,18 +257,18 @@ theorem Typed.accept (h : Typed τ p s) {c : Call} {index : Nat} {value : Value}
 
 theorem Typed.settleOwner (h : Typed τ p s) (wk : s.WellKeyed) {c : Call} {inv : InvocationStatus}
     {task : TaskStatus} {t : State} (ho : s.settleOwner c inv task = .ok t) (htask : task ≠ .ready) : Typed τ p t := by
-  rcases State.settleOwner_eq_ok.mp ho with ⟨-, i, hi, rfl⟩ | ⟨name, e, ts, -, he, -, rfl⟩
+  rcases State.settleOwner_eq_ok.mp ho with ⟨-, i, hi, rfl⟩ | ⟨name, e, ts, -, he, hts, rfl⟩
   · exact h.setInvocation (State.invocation?_eq_some hi).1 rfl rfl rfl
-  · exact h.setTask wk (State.execution?_eq_some he).1 fun hst => absurd hst htask
+  · exact h.setTaskStatus wk (State.execution?_eq_some he).1 (find?_key_eq_some hts).1 htask
 
 theorem Typed.cancelOwner (h : Typed τ p s) (wk : s.WellKeyed) {c : Call} {t : State}
     (ho : s.cancelOwner c = .ok t) : Typed τ p t := by
-  rcases State.cancelOwner_eq_ok.mp ho with ⟨-, i, hi, rfl⟩ | ⟨name, e, ts, -, he, -, rfl⟩
+  rcases State.cancelOwner_eq_ok.mp ho with ⟨-, i, hi, rfl⟩ | ⟨name, e, ts, -, he, hts, rfl⟩
   · split
     · exact h.setInvocation (State.invocation?_eq_some hi).1 rfl rfl rfl
     · exact h
   · split
-    · exact h.setTask wk (State.execution?_eq_some he).1 fun hst => by cases hst
+    · exact h.setTaskStatus wk (State.execution?_eq_some he).1 (find?_key_eq_some hts).1 (by decide)
     · exact h
 
 theorem Typed.failCall (h : Typed τ p s) (wk : s.WellKeyed) {c : Call} {status : CallStatus} {cause : Cause}

@@ -4,7 +4,7 @@ import Suimon.Theorems.Values.Steps
 
 Each operation of a conforming execution of a valid definition keeps `Typed` (`step_typed`), so every
 state of such an execution holds only values of the types their places declare
-(`Conforming.typed`). -/
+(`Conforming.typed`), and every value it holds has a type (`Conforming.values_typed`). -/
 
 namespace Suimon.Values
 open Round3 State
@@ -66,18 +66,22 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
       rw [hctl] at hx
       simp only [Definition.inputType, Option.some.injEq] at hx
       subst hx
-      refine ⟨c, Delivery.concurrencyOf_iff.mpr ⟨w, pl, hws, hpl, hctl⟩, hfits, fun tk htk hst spec hspec => ?_⟩
-      obtain ⟨ts, -, rfl⟩ := List.mem_map.mp htk
-      have hci : c.input = none := by
-        cases hc' : c.input with
-        | none => rfl
-        | some _ => simp [hc'] at hst
-      have hwm := (Definition.workflow?_eq_some hw).1
-      have hplm := (Workflow.placement?_eq_some hpl).1
-      obtain ⟨-, -, -, -, -, -, htasks⟩ := ((normal.workflows w hwm).placements pl hplm).concurrency c hctl
-      obtain ⟨input', hb, hmatch⟩ := (htasks spec (List.mem_of_find?_eq_some hspec)).input
-      simp only [hci] at hmatch
-      exact ⟨input', hb, by rw [hmatch.1]; trivial⟩
+      refine ⟨c, Delivery.concurrencyOf_iff.mpr ⟨w, pl, hws, hpl, hctl⟩, hfits, fun tk htk hst spec hspec => ?_,
+        fun tk htk v hv => ?_⟩
+      · obtain ⟨ts, -, rfl⟩ := List.mem_map.mp htk
+        have hci : c.input = none := by
+          cases hc' : c.input with
+          | none => rfl
+          | some _ => simp [hc'] at hst
+        have hwm := (Definition.workflow?_eq_some hw).1
+        have hplm := (Workflow.placement?_eq_some hpl).1
+        obtain ⟨-, -, -, -, -, -, htasks⟩ := ((normal.workflows w hwm).placements pl hplm).concurrency c hctl
+        obtain ⟨input', hb, hmatch⟩ := (htasks spec (List.mem_of_find?_eq_some hspec)).input
+        simp only [hci] at hmatch
+        exact ⟨input', hb, by rw [hmatch.1]; trivial⟩
+      · -- A new task holds no input yet.
+        obtain ⟨ts, -, rfl⟩ := List.mem_map.mp htk
+        cases hv
   | fetch id =>
     obtain ⟨-, -, c, hc, -, -, rfl⟩ := Step.fetch_inv hs
     exact h.setCall (State.call?_eq_some hc).1 rfl rfl
@@ -216,19 +220,27 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
     obtain ⟨-, -, e, ts, spec, he, hts, -, hspec, hcases, rfl⟩ := Step.taskInput_inv hs
     obtain ⟨hem, heid⟩ := State.execution?_eq_some he
     have htsn : ts.name = name := (find?_key_eq_some hts).2
-    refine h.setTask wk hem fun _ cc spec' hcc hspec' => ?_
     obtain ⟨cc₀, hcc₀, hfind⟩ := State.taskSpec_eq_ok.mp hspec
-    obtain rfl : cc₀ = cc := by rw [hcc₀] at hcc; exact Except.ok.inj hcc
-    obtain rfl : spec' = spec := by
-      have : cc₀.tasks.find? (·.name == name) = some spec' := by rw [← htsn]; exact hspec'
-      rw [hfind] at this
-      exact (Option.some.inj this).symm
+    -- The task becomes ready with the value it takes, and keeps that value whatever its status later.
+    suffices key : ∃ input, p.bodyInput spec.body = some input ∧ τ.Fits value input by
+      have hfind' : cc₀.tasks.find? (·.name == ts.name) = some spec := by rw [htsn]; exact hfind
+      refine h.setTask wk hem (fun _ cc spec' hcc hspec' => ?_) (fun v hv cc hcc => ?_)
+      · obtain rfl : cc₀ = cc := by rw [hcc₀] at hcc; exact Except.ok.inj hcc
+        obtain rfl : spec' = spec := Option.some.inj (hspec'.symm.trans hfind')
+        exact key
+      · obtain rfl : cc₀ = cc := by rw [hcc₀] at hcc; exact Except.ok.inj hcc
+        obtain ⟨input, hb, hfits⟩ := key
+        have hv' : value = some v := hv
+        subst hv'
+        obtain ⟨T, rfl, hT⟩ := ValueTyping.fits_some.mp hfits
+        exact ⟨spec, T, hfind', hb, hT⟩
+    -- The value fits the input of the task's body.
     obtain ⟨w, pl, hw, hpl, hctl⟩ := Delivery.concurrencyOf_iff.mp hcc₀
     obtain ⟨run, -, hwf⟩ := Delivery.workflow?_iff.mp hw
     have hwm := (Definition.workflow?_eq_some hwf).1
     have hplm := (Workflow.placement?_eq_some hpl).1
     obtain ⟨-, -, -, -, -, -, htasks⟩ := ((normal.workflows w hwm).placements pl hplm).concurrency cc₀ hctl
-    obtain ⟨input, hb, hmatch⟩ := (htasks spec' (List.mem_of_find?_eq_some hfind)).input
+    obtain ⟨input, hb, hmatch⟩ := (htasks spec (List.mem_of_find?_eq_some hfind)).input
     refine ⟨input, hb, ?_⟩
     cases hci : cc₀.input with
     | none =>
@@ -256,7 +268,7 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
             | some u =>
               rw [hein] at hfitsE
               exact ⟨u, rfl, hfitsE⟩
-          have hvt := typed.taskInput tr s hconf e hem name spec' tid t u hspec hin ht heu (htin ▸ hu) v
+          have hvt := typed.taskInput tr s hconf e hem name spec tid t u hspec hin ht heu (htin ▸ hu) v
             (by rw [heid]; exact hop v rfl)
           show τ.HasType v T
           rw [← htout]
@@ -267,19 +279,19 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
         | none => trivial
         | some T => exact hfitsT.elim
   | taskInputFailed eid name =>
-    obtain ⟨-, -, e, ts, spec, tid, he, -, -, -, -, rfl⟩ := Step.taskInputFailed_inv hs
-    exact (h.setTask wk (State.execution?_eq_some he).1 fun hst => by cases hst).fail _ _
+    obtain ⟨-, -, e, ts, spec, tid, he, hts, -, -, -, rfl⟩ := Step.taskInputFailed_inv hs
+    exact (h.setTaskStatus wk (State.execution?_eq_some he).1 (find?_key_eq_some hts).1 (by decide)).fail _ _
   | beginTask eid name =>
     obtain ⟨-, -, e, c, ts, spec, he, -, hc, hts, hready, -, hspec, hcases⟩ := Step.beginTask_inv hs
     have hem := (State.execution?_eq_some he).1
     obtain ⟨htsm, htsn⟩ := find?_key_eq_some hts
-    obtain ⟨cc, hcc, -, htasks⟩ := h.executions e hem
+    obtain ⟨cc, hcc, -, htasks, -⟩ := h.executions e hem
     obtain rfl : cc = c := by rw [hc] at hcc; exact (Except.ok.inj hcc).symm
     obtain ⟨cc₀, hcc₀, hfind⟩ := State.taskSpec_eq_ok.mp hspec
     obtain rfl : cc₀ = cc := by rw [hcc₀] at hc; exact Except.ok.inj hc
     -- A task begins with the input it holds while ready (§8.1).
     obtain ⟨input, hb, hfits⟩ := htasks ts htsm hready spec (by rw [htsn]; exact hfind)
-    have h1 := h.setTask wk hem (ts := { ts with status := .active }) fun hst => by cases hst
+    have h1 := h.setTaskStatus wk hem htsm (status := .active) (by decide)
     rcases hcases with ⟨f, decl, hbody, hdecl, -, rfl⟩ | ⟨wf, out, hbody, -, rfl⟩
     · refine h1.appendCall ?_
       rw [hbody] at hb
@@ -395,7 +407,7 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
     obtain ⟨owner', howner', hdcase⟩ := State.designatedOutput_eq_ok.mp hdes
     rw [howner] at howner'
     cases howner'
-    rcases hcases with ⟨htask, i, hi, hcases⟩ | ⟨name, e, ts, htask, he, -, hcases⟩
+    rcases hcases with ⟨htask, i, hi, hcases⟩ | ⟨name, e, ts, htask, he, hts, hcases⟩
     · obtain ⟨him, hiid⟩ := State.invocation?_eq_some hi
       rcases hcases with ⟨-, v, hv, -, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩
       · refine (h1.setInvocation (i' := { i with status := .succeeded }) him rfl rfl rfl).appendResult ?_
@@ -423,9 +435,10 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
       · exact h1.setInvocation (i' := { i with status := .upstreamFailed }) him rfl rfl rfl
     · obtain ⟨hem, heid⟩ := State.execution?_eq_some he
       have hem1 : e ∈ (s.setRun { r with complete := true }).executions := hem
+      have htsm := (find?_key_eq_some hts).1
       rcases hcases with ⟨-, v, hv, -, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩
       · have K2 := K1.trans (Keeps.setExecution wk1 hem1 (e' := withTask e { ts with status := .succeeded }) rfl rfl rfl)
-        refine (h1.setTask wk1 hem1 (ts := { ts with status := .succeeded }) fun hst => by cases hst).appendTaskResult ?_
+        refine (h1.setTaskStatus wk1 hem1 htsm (status := .succeeded) (by decide)).appendTaskResult ?_
         rcases hdcase with ⟨htask', -⟩ | ⟨name', e', spec, wf, htask', he', hspec, hbody⟩
         · rw [htask] at htask'
           cases htask'
@@ -449,9 +462,9 @@ theorem step_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : Typ
           have hres : TaskResultTyped τ p s { execution := e.id, task := name', index := 0, value := v } :=
             ⟨e, hem, rfl, cc, spec, T, hcc, hfind, by rw [hbody]; exact hT, hTT ▸ hvc, fun _ h => by cases h⟩
           exact hres.keep K2 rfl rfl rfl fun _ h => h
-      · exact h1.setTask wk1 hem1 (ts := { ts with status := .skipped }) fun hst => by cases hst
-      · exact h1.setTask wk1 hem1 (ts := { ts with status := .failed }) fun hst => by cases hst
-      · exact h1.setTask wk1 hem1 (ts := { ts with status := .upstreamFailed }) fun hst => by cases hst
+      · exact h1.setTaskStatus wk1 hem1 htsm (by decide)
+      · exact h1.setTaskStatus wk1 hem1 htsm (by decide)
+      · exact h1.setTaskStatus wk1 hem1 htsm (by decide)
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs
     · exact h.stop.of_records rfl rfl rfl rfl rfl rfl rfl
@@ -469,5 +482,12 @@ theorem Conforming.typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed
   induction h with
   | nil => exact Typed.empty
   | snoc hc hop hs _ ih => exact step_typed valid lists typed hc ih hop hs
+
+/-- Every value that a state of such an execution holds has a type, whatever the status of the record
+    that holds it: a task that a stop left not started still holds an input of its body's input
+    type. -/
+theorem Conforming.values_typed (valid : p.validate = .ok ()) (lists : τ.Lists) (typed : TypedEnv p env τ)
+    {tr : List Op} {s : State} (h : Conforming p env tr s) : ∀ v ∈ s.values, ∃ T, τ.HasType v T :=
+  (Conforming.typed valid lists typed h).values_typed
 
 end Suimon.Values

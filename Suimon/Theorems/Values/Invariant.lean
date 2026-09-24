@@ -4,10 +4,11 @@ import Suimon.Theorems.Values.Typing
 
 Every record of a state holds values of the types that its place declares. A run and an invocation
 take an input of the declared input type, a call one of its function's or judge's input type, an
-execution one of its concurrency's input type, and a task ready to begin one of its body's input type.
-A result has the result type of its placement; a task result has the element type of its body and,
-after the output transform, the concurrency's element type; a delivered value has the input type of
-its connection's target.
+execution one of its concurrency's input type, and a task ready to begin one of its body's input type;
+an input that a task holds has its body's input type whatever the task's status. A result has the
+result type of its placement; a task result has the element type of its body and, after the output
+transform, the concurrency's element type; a delivered value has the input type of its connection's
+target. So every value the state holds has a type (`Typed.values_typed`).
 
 The typings read a state only through the workflow of each run path and the place of each execution
 (`Keeps`), which no step changes. This file holds the invariant and how the elementary updates of
@@ -32,11 +33,15 @@ def CallTyped (τ : ValueTyping) (p : Definition) (c : Call) : Prop :=
   | .judge j => ∃ decl, p.judge? j = some decl ∧ τ.Fits c.input (some decl.input)
 
 /-- An execution takes an input that fits its concurrency's input, and a task ready to begin holds an
-    input that fits its body's input (§8.1). -/
+    input that fits its body's input (§8.1). An input that a task holds has its body's input type
+    whatever the task's status: a stop, and the conclusion after it, leave a task that never began
+    not started with the input it took, and no call or run holds that input (§8.1, §10.1, §11.3). -/
 def ExecutionTyped (τ : ValueTyping) (p : Definition) (s : State) (e : Execution) : Prop :=
   ∃ c, s.concurrencyOf p e = .ok c ∧ τ.Fits e.input c.input ∧
-    ∀ tk ∈ e.tasks, tk.status = .ready → ∀ spec, c.tasks.find? (·.name == tk.name) = some spec →
-      ∃ input, p.bodyInput spec.body = some input ∧ τ.Fits tk.input input
+    (∀ tk ∈ e.tasks, tk.status = .ready → ∀ spec, c.tasks.find? (·.name == tk.name) = some spec →
+      ∃ input, p.bodyInput spec.body = some input ∧ τ.Fits tk.input input) ∧
+    ∀ tk ∈ e.tasks, ∀ v, tk.input = some v → ∃ spec T, c.tasks.find? (·.name == tk.name) = some spec ∧
+      p.bodyInput spec.body = some (some T) ∧ τ.HasType v T
 
 /-- A result has the result type of the placement that produced it (§4.1, §5.2, §8.3, §9). -/
 def ResultTyped (τ : ValueTyping) (p : Definition) (s : State) (r : Result) : Prop :=
@@ -64,6 +69,57 @@ structure Typed (τ : ValueTyping) (p : Definition) (s : State) : Prop where
   results : ∀ r ∈ s.results, ResultTyped τ p s r
   taskResults : ∀ x ∈ s.taskResults, TaskResultTyped τ p s x
   deliveries : ∀ d ∈ s.deliveries, DeliveryTyped τ p s d
+
+/-- The invariant leaves no value of the state unconstrained, whatever the status of the record that
+    holds it: every value that `State.values` lists has a type. -/
+theorem Typed.values_typed {τ : ValueTyping} {p : Definition} {s : State} (h : Typed τ p s) :
+    ∀ v ∈ s.values, ∃ T, τ.HasType v T := by
+  have fits : ∀ {v : Value} {x : Option ValueType}, τ.Fits (some v) x → ∃ T, τ.HasType v T := fun hf =>
+    let ⟨T, _, hT⟩ := ValueTyping.fits_some.mp hf
+    ⟨T, hT⟩
+  intro v hv
+  simp only [State.values, List.mem_append, List.mem_filterMap, List.mem_flatMap, List.mem_map,
+    List.mem_cons, Option.mem_toList] at hv
+  rcases hv with ((((((⟨r, hr, hv⟩ | ⟨i, hi, hv⟩) | ⟨c, hc, hv⟩) | ⟨e, he, hv | ⟨tk, htk, hv⟩⟩) | ⟨r, hr, rfl⟩) |
+      ⟨d, hd, hv⟩) | ⟨x, hx, rfl | hv⟩)
+  · obtain ⟨w, -, hf⟩ := h.runs r hr
+    rw [hv] at hf
+    exact fits hf
+  · obtain ⟨w, pl, input, -, -, -, hf⟩ := h.invocations i hi
+    rw [hv] at hf
+    exact fits hf
+  · have hct := h.calls c hc
+    unfold CallTyped at hct
+    split at hct <;> obtain ⟨decl, -, hf⟩ := hct <;> rw [hv] at hf <;> exact fits hf
+  · obtain ⟨c, -, hf, -⟩ := h.executions e he
+    rw [hv] at hf
+    exact fits hf
+  · -- The input of a task, in any status.
+    obtain ⟨c, -, -, -, hinputs⟩ := h.executions e he
+    obtain ⟨spec, T, -, -, hT⟩ := hinputs tk htk v hv
+    exact ⟨T, hT⟩
+  · obtain ⟨w, pl, T, -, -, -, hT⟩ := h.results r hr
+    exact ⟨T, hT⟩
+  · obtain ⟨w, c, pl, input, -, -, -, -, hf⟩ := h.deliveries d hd
+    cases hout : d.outcome with
+    | value u =>
+      rw [hout] at hv hf
+      simp only [Option.some.injEq] at hv
+      subst hv
+      exact fits hf
+    | trigger => rw [hout] at hv; cases hv
+    | failed => rw [hout] at hv; cases hv
+  · obtain ⟨-, -, -, -, -, T, -, -, -, hT, -⟩ := h.taskResults x hx
+    exact ⟨T, hT⟩
+  · obtain ⟨-, -, -, c, -, -, -, -, -, -, hout⟩ := h.taskResults x hx
+    cases hxo : x.output with
+    | value u =>
+      rw [hxo] at hv
+      simp only [TaskOutput.value?, Option.some.injEq] at hv
+      subst hv
+      exact ⟨c.element, hout u hxo⟩
+    | pending => rw [hxo] at hv; cases hv
+    | failed => rw [hxo] at hv; cases hv
 
 /-- What the typings read from a state is kept from `s` to `t`: the workflow of each run path, and the
     run and placement of each execution. -/
@@ -131,13 +187,18 @@ theorem TaskResultTyped.keep {x x' : TaskResult} (h : TaskResultTyped τ p s x) 
 theorem ExecutionTyped.keep {e e' : Execution} (h : ExecutionTyped τ p s e) (K : Keeps p s t)
     (hrun : e'.run = e.run) (hpl : e'.placement = e.placement) (hin : e.input = e'.input)
     (htasks : ∀ tk ∈ e'.tasks, tk.status = .ready →
-      ∃ tk₀ ∈ e.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready) :
+      ∃ tk₀ ∈ e.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready)
+    (hinputs : ∀ tk ∈ e'.tasks, ∀ v, tk.input = some v →
+      ∃ tk₀ ∈ e.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input) :
     ExecutionTyped τ p t e' := by
-  obtain ⟨c, hc, hfits, hready⟩ := h
-  refine ⟨c, K.concurrencyOf hrun hpl hc, hin ▸ hfits, fun tk htk hst spec hspec => ?_⟩
-  obtain ⟨tk₀, htk₀, hname, hinput, hst₀⟩ := htasks tk htk hst
-  obtain ⟨input, hb, hf⟩ := hready tk₀ htk₀ hst₀ spec (hname ▸ hspec)
-  exact ⟨input, hb, hinput ▸ hf⟩
+  obtain ⟨c, hc, hfits, hready, htyped⟩ := h
+  refine ⟨c, K.concurrencyOf hrun hpl hc, hin ▸ hfits, fun tk htk hst spec hspec => ?_, fun tk htk v hv => ?_⟩
+  · obtain ⟨tk₀, htk₀, hname, hinput, hst₀⟩ := htasks tk htk hst
+    obtain ⟨input, hb, hf⟩ := hready tk₀ htk₀ hst₀ spec (hname ▸ hspec)
+    exact ⟨input, hb, hinput ▸ hf⟩
+  · obtain ⟨tk₀, htk₀, hname, hinput⟩ := hinputs tk htk v hv
+    obtain ⟨spec, T, hspec, hb, hT⟩ := htyped tk₀ htk₀ v (hinput.trans hv)
+    exact ⟨spec, T, hname ▸ hspec, hb, hT⟩
 
 /-- The invariant carries over to a state that keeps what the typings read, when every record of the
     new state is typed or is a record from before with the same values. -/
@@ -149,8 +210,9 @@ theorem Typed.of_frame (h : Typed τ p s) (K : Keeps p s t)
         InvocationTyped τ p t i)
     (executions : ∀ e ∈ t.executions,
       (∃ e₀ ∈ s.executions, e.run = e₀.run ∧ e.placement = e₀.placement ∧ e₀.input = e.input ∧
-        ∀ tk ∈ e.tasks, tk.status = .ready →
-          ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready) ∨
+        (∀ tk ∈ e.tasks, tk.status = .ready →
+          ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready) ∧
+        ∀ tk ∈ e.tasks, ∀ v, tk.input = some v → ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input) ∨
         ExecutionTyped τ p t e)
     (results : ∀ r ∈ t.results, r ∈ s.results ∨ ResultTyped τ p t r)
     (taskResults : ∀ x ∈ t.taskResults,
@@ -165,8 +227,8 @@ theorem Typed.of_frame (h : Typed τ p s) (K : Keeps p s t)
     · exact (h.invocations i₀ hi₀).keep K a1 a2 a3
     · exact h'
   executions e he := by
-    rcases executions e he with ⟨e₀, he₀, a1, a2, a3, a4⟩ | h'
-    · exact (h.executions e₀ he₀).keep K a1 a2 a3 a4
+    rcases executions e he with ⟨e₀, he₀, a1, a2, a3, a4, a5⟩ | h'
+    · exact (h.executions e₀ he₀).keep K a1 a2 a3 a4 a5
     · exact h'
   results r hr := by
     rcases results r hr with hr | h'
@@ -196,10 +258,12 @@ theorem same_invocations {t : State} (h : t.invocations = s.invocations) : ∀ i
 
 theorem same_executions {t : State} (h : t.executions = s.executions) : ∀ e ∈ t.executions,
     (∃ e₀ ∈ s.executions, e.run = e₀.run ∧ e.placement = e₀.placement ∧ e₀.input = e.input ∧
-      ∀ tk ∈ e.tasks, tk.status = .ready →
-        ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready) ∨
+      (∀ tk ∈ e.tasks, tk.status = .ready →
+        ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input ∧ tk₀.status = .ready) ∧
+      ∀ tk ∈ e.tasks, ∀ v, tk.input = some v → ∃ tk₀ ∈ e₀.tasks, tk₀.name = tk.name ∧ tk₀.input = tk.input) ∨
       ExecutionTyped τ p t e :=
-  fun e he => Or.inl ⟨e, h ▸ he, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩⟩
+  fun e he => Or.inl ⟨e, h ▸ he, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩,
+    fun tk htk _ _ => ⟨tk, htk, rfl, rfl⟩⟩
 
 theorem same_taskResults {t : State} (h : t.taskResults = s.taskResults) : ∀ x ∈ t.taskResults,
     (∃ x₀ ∈ s.taskResults, x₀.execution = x.execution ∧ x₀.task = x.task ∧ x₀.value = x.value ∧
@@ -307,12 +371,15 @@ theorem Typed.stop (h : Typed τ p s) : Typed τ p s.stop := by
   · obtain ⟨c₀, hc₀, rfl⟩ := mem_stop_calls.mp hc
     exact (h.calls c₀ hc₀).congr (stopCall_target c₀).symm (stopCall_input c₀).symm
   · obtain ⟨e₀, he₀, rfl⟩ := mem_stop_executions.mp he
-    refine Or.inl ⟨e₀, he₀, rfl, rfl, rfl, fun tk htk hst => ?_⟩
-    obtain ⟨tk₀, htk₀, rfl⟩ := List.mem_map.mp htk
-    by_cases hw : (tk₀.status == .pending || tk₀.status == .ready) = true
-    · simp [hw] at hst
-    · simp only [hw, Bool.false_eq_true, ↓reduceIte] at hst ⊢
-      exact ⟨tk₀, htk₀, rfl, rfl, hst⟩
+    refine Or.inl ⟨e₀, he₀, rfl, rfl, rfl, fun tk htk hst => ?_, fun tk htk _ _ => ?_⟩
+    · obtain ⟨tk₀, htk₀, rfl⟩ := List.mem_map.mp htk
+      by_cases hw : (tk₀.status == .pending || tk₀.status == .ready) = true
+      · simp [hw] at hst
+      · simp only [hw, Bool.false_eq_true, ↓reduceIte] at hst ⊢
+        exact ⟨tk₀, htk₀, rfl, rfl, hst⟩
+    · -- A task that the stop leaves unstarted keeps its input.
+      obtain ⟨tk₀, htk₀, rfl⟩ := List.mem_map.mp htk
+      exact ⟨tk₀, htk₀, by split <;> rfl, by split <;> rfl⟩
 
 theorem Typed.fail (h : Typed τ p s) (f : Failure) (policy : Policy) : Typed τ p (s.fail f policy) := by
   have h' : Typed τ p { s with failures := s.failures ++ [f] } :=
@@ -331,16 +398,20 @@ theorem Typed.endUnfinished (h : Typed τ p s) : Typed τ p s.endUnfinished := b
   · obtain ⟨i₀, hi₀, rfl⟩ := mem_endUnfinished_invocations.mp hi
     exact Or.inl ⟨i₀, hi₀, by simp, by simp, by simp⟩
   · obtain ⟨e₀, he₀, rfl⟩ := mem_endUnfinished_executions.mp he
-    refine Or.inl ⟨e₀, he₀, rfl, rfl, rfl, fun tk htk hst => ?_⟩
-    rw [endExecution_tasks] at htk
-    obtain ⟨tk₀, -, rfl⟩ := List.mem_map.mp htk
-    rw [endTask_status] at hst
-    split at hst
-    · cases hst
-    · split at hst
+    refine Or.inl ⟨e₀, he₀, rfl, rfl, rfl, fun tk htk hst => ?_, fun tk htk _ _ => ?_⟩
+    · rw [endExecution_tasks] at htk
+      obtain ⟨tk₀, -, rfl⟩ := List.mem_map.mp htk
+      rw [endTask_status] at hst
+      split at hst
       · cases hst
-      · rename_i h1 h2
-        exact absurd (Or.inr hst) h2
+      · split at hst
+        · cases hst
+        · rename_i h1 h2
+          exact absurd (Or.inr hst) h2
+    · -- An ended task keeps its input.
+      rw [endExecution_tasks] at htk
+      obtain ⟨tk₀, htk₀, rfl⟩ := List.mem_map.mp htk
+      exact ⟨tk₀, htk₀, endTask_name.symm, endTask_input.symm⟩
 
 /-- Updating a run keeps what the typings read when it keeps the run's path and workflow. -/
 theorem Keeps.setRun (wk : s.WellKeyed) {r r' : Run} (hr : r ∈ s.runs) (hpath : r'.path = r.path)
@@ -387,26 +458,45 @@ theorem Typed.setExecution (h : Typed τ p s) (wk : s.WellKeyed) {e e' : Executi
   refine h.of_frame (Keeps.setExecution wk he hid hrun hpl) h.runs h.calls (same_invocations rfl)
     (fun x hx => ?_) (fun r hr => Or.inl hr) (same_taskResults rfl) (fun d hd => Or.inl hd)
   rcases mem_setExecution_executions hx with rfl | hx
-  · exact Or.inl ⟨e, he, hrun, hpl, hin, fun tk htk hst => ⟨tk, htasks ▸ htk, rfl, rfl, hst⟩⟩
-  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩⟩
+  · exact Or.inl ⟨e, he, hrun, hpl, hin, fun tk htk hst => ⟨tk, htasks ▸ htk, rfl, rfl, hst⟩,
+      fun tk htk _ _ => ⟨tk, htasks ▸ htk, rfl, rfl⟩⟩
+  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩,
+      fun tk htk _ _ => ⟨tk, htk, rfl, rfl⟩⟩
 
 /-- Updating a task keeps the invariant when a task that becomes ready holds an input of its body's
-    input type. -/
+    input type, and an input the task holds has its body's input type. -/
 theorem Typed.setTask (h : Typed τ p s) (wk : s.WellKeyed) {e : Execution} (he : e ∈ s.executions)
     {ts : TaskState}
     (hready : ts.status = .ready → ∀ c spec, s.concurrencyOf p e = .ok c →
       c.tasks.find? (·.name == ts.name) = some spec →
-      ∃ input, p.bodyInput spec.body = some input ∧ τ.Fits ts.input input) :
+      ∃ input, p.bodyInput spec.body = some input ∧ τ.Fits ts.input input)
+    (hinput : ∀ v, ts.input = some v → ∀ c, s.concurrencyOf p e = .ok c →
+      ∃ spec T, c.tasks.find? (·.name == ts.name) = some spec ∧ p.bodyInput spec.body = some (some T) ∧
+        τ.HasType v T) :
     Typed τ p (s.setTask e ts) := by
   refine h.of_frame (Keeps.setExecution wk he rfl rfl rfl) h.runs h.calls (same_invocations rfl)
     (fun x hx => ?_) (fun r hr => Or.inl hr) (same_taskResults rfl) (fun d hd => Or.inl hd)
   rcases mem_setTask_executions hx with rfl | hx
-  · obtain ⟨c, hc, hfits, htasks⟩ := h.executions e he
-    refine Or.inr ⟨c, hc, hfits, fun tk htk hst spec hspec => ?_⟩
-    rcases mem_map_replace htk with rfl | htk
-    · exact hready hst c spec hc hspec
-    · exact htasks tk htk hst spec hspec
-  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩⟩
+  · obtain ⟨c, hc, hfits, htasks, hinputs⟩ := h.executions e he
+    refine Or.inr ⟨c, hc, hfits, fun tk htk hst spec hspec => ?_, fun tk htk v hv => ?_⟩
+    · rcases mem_map_replace htk with rfl | htk
+      · exact hready hst c spec hc hspec
+      · exact htasks tk htk hst spec hspec
+    · rcases mem_map_replace htk with rfl | htk
+      · exact hinput v hv c hc
+      · exact hinputs tk htk v hv
+  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩,
+      fun tk htk _ _ => ⟨tk, htk, rfl, rfl⟩⟩
+
+/-- Setting the status of a task, to anything but ready, keeps the invariant: the task keeps its
+    input. -/
+theorem Typed.setTaskStatus (h : Typed τ p s) (wk : s.WellKeyed) {e : Execution} (he : e ∈ s.executions)
+    {ts : TaskState} (hts : ts ∈ e.tasks) {status : TaskStatus} (hst : status ≠ .ready) :
+    Typed τ p (s.setTask e { ts with status }) :=
+  h.setTask wk he (fun hr => absurd hr hst) fun v hv c hc => by
+    obtain ⟨c', hc', -, -, hinputs⟩ := h.executions e he
+    obtain rfl : c' = c := Except.ok.inj (hc'.symm.trans hc)
+    exact hinputs ts hts v hv
 
 theorem Keeps.appendRun {r : Run} : Keeps p s { s with runs := s.runs ++ [r] } where
   workflow {path w} h := by
@@ -462,9 +552,11 @@ theorem Typed.appendExecution (h : Typed τ p s) {e : Execution} (he : Execution
   refine h.of_frame Keeps.appendExecution h.runs h.calls (same_invocations rfl) (fun x hx => ?_)
     (fun r hr => Or.inl hr) (same_taskResults rfl) (fun d hd => Or.inl hd)
   rcases List.mem_append.mp hx with hx | hx
-  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩⟩
+  · exact Or.inl ⟨x, hx, rfl, rfl, rfl, fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩,
+      fun tk htk _ _ => ⟨tk, htk, rfl, rfl⟩⟩
   · rw [List.mem_singleton.mp hx]
-    exact Or.inr (he.keep Keeps.appendExecution rfl rfl rfl fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩)
+    exact Or.inr (he.keep Keeps.appendExecution rfl rfl rfl (fun tk htk hst => ⟨tk, htk, rfl, rfl, hst⟩)
+      fun tk htk _ _ => ⟨tk, htk, rfl, rfl⟩)
 
 end Updates
 
