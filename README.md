@@ -2,7 +2,7 @@
 
 ワークフローの制御を Lean 4 で定義・検証し、各言語の実装で利用するためのプロジェクトです。
 
-[仕様](docs/suimon-spec.md) / [設計理由](docs/suimon-design.md) / [定義と証明](Suimon/) / [各言語の実装](implementations/) / [UI kit](ui-kit/README.md) / [データ形式](schema/)
+[仕様](docs/suimon-spec.md) / [設計理由](docs/suimon-spec.md#設計理由) / [定義と証明](Suimon/) / [各言語の実装](implementations/) / [UI kit](ui-kit/README.md) / [データ形式](schema/)
 
 ## 実行
 

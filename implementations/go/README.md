@@ -13,6 +13,6 @@ bin/test-go unit
 bin/test-go conformance
 ```
 
-`conformance` は Lean CLI と比べますが、Lean CLI をビルドしません。先に `lake build suimon` を実行するか、`SUIMON_LEAN_CLI` で Lean CLI を指定してください。記録で確かめる範囲は[設計理由](../../docs/suimon-design.md#他言語の実装を記録で確かめる理由)を参照してください。
+`conformance` は Lean CLI と比べますが、Lean CLI をビルドしません。先に `lake build suimon` を実行するか、`SUIMON_LEAN_CLI` で Lean CLI を指定してください。記録で確かめる範囲は[設計理由](../../docs/suimon-spec.md#他言語の実装を記録で確かめる理由)を参照してください。
 
 CLI のオプションは `go -C implementations/go run ./cmd/suimon --help` で確認できます。
