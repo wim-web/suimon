@@ -153,6 +153,16 @@ func checkTransition(t *testing.T, p *Definition, label string, before, after *S
 			t.Fatalf("%s: accepted result withdrawn by %s", label, EncodeOp(op))
 		}
 	}
+	// A value stays mentioned once it is, so a value a transition introduces is new (§12.1).
+	mentioned := map[string]bool{}
+	for _, v := range after.Values() {
+		mentioned[v] = true
+	}
+	for _, v := range before.Values() {
+		if !mentioned[v] {
+			t.Fatalf("%s: value %s withdrawn by %s", label, v, EncodeOp(op))
+		}
+	}
 	// A new result names its producer: the reporting call, the closed execution, the sub-workflow
 	// invocation, or the aggregating placement.
 	var producer *string

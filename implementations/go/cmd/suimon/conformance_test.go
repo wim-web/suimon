@@ -656,6 +656,12 @@ func TestConformanceRecords(t *testing.T) {
 		"payload":         "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n",
 	}
 	users["huge connection"] = users["payload"] + "{\"seq\":3,\"op\":{\"type\":\"deliver\",\"run\":[],\"connection\":99999999999999999999,\"source\":\"s\"}}\n"
+	// An op record carries payloads only for values its transition introduces: not again for a value
+	// that is already known, and not for one the state does not mention.
+	users["known payload"] = users["payload"] + "{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"fetchAllUsers\"}," +
+		"\"values\":{\"t\":\"y\"}}\n{\"seq\":4,\"commit\":true}\n"
+	users["stray payload"] = "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\",\"z\":\"w\",\"y\":\"v\"}}\n" +
+		"{\"seq\":2,\"commit\":true}\n"
 	for label, text := range users {
 		texts["users "+label] = headers["users"] + text
 		// The records replay against the definition of the header, not the one they were meant for.

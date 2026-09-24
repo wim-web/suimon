@@ -144,8 +144,8 @@ func TestTraceReplay(t *testing.T) {
 				}
 			}
 			// A commit needs the payload of each value its transition introduces, lists the engine
-			// builds included; an earlier committed record may hold it, a later one may not. The
-			// header is line 1.
+			// builds included, and an op record carries payloads only for the values its transition
+			// introduces: neither an earlier record nor a later one may hold it. The header is line 1.
 			for i, step := range steps {
 				kept, lists := splitPayloads(step.Values, func(v Payload) bool { return !isList(v.Value) })
 				if len(lists) == 0 {
@@ -162,11 +162,16 @@ func TestTraceReplay(t *testing.T) {
 				if _, _, err := RecordTransitions(p, &State{}, stripped, nil, 1); err == nil || !hasFragment(err.Error(), "missing payloads") {
 					t.Fatalf("%s: recorder without a list payload: %v", label, err)
 				}
-				early := with(0, lists)
-				if c := checked(t, label+" early payload", p, written(early)); !c.State.Equal(final) || c.Uncommitted {
-					t.Fatalf("%s: early payload", label)
+				var listValues []string
+				for _, v := range lists {
+					listValues = append(listValues, v.Value)
 				}
-				if got, _, err := RecordTransitions(p, &State{}, early, nil, 1); err != nil || !got.Equal(final) {
+				early := with(0, lists)
+				rejectedTrace(t, label+" early payload",
+					fmt.Sprintf("line 3: payloads for %s, which the transition does not introduce", leanList(listValues)),
+					p, written(early))
+				if _, _, err := RecordTransitions(p, &State{}, early, nil, 1); err == nil ||
+					!hasFragment(err.Error(), "which the transition does not introduce") {
 					t.Fatalf("%s: recorder with an early payload: %v", label, err)
 				}
 				if i+1 < len(steps) {
@@ -320,6 +325,16 @@ func TestTraceRejections(t *testing.T) {
 			`line 2: duplicate key "type" at offset 36`},
 		{"repeated payload key", startInput + ",\"values\":{\"t\":\"x\",\"t\":\"y\"}}\n{\"seq\":2,\"commit\":true}\n",
 			`line 2: duplicate key "t" at offset 64`},
+		// An op record carries payloads only for values its transition introduces, so a committed
+		// payload is never given again, the same or another.
+		{"known payload", startInput + ",\"values\":{\"t\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n" +
+			"{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"fetchAllUsers\"},\"values\":{\"t\":\"y\"}}\n" +
+			"{\"seq\":4,\"commit\":true}\n",
+			"line 5: payloads for [t], which the transition does not introduce"},
+		{"stray payloads", startInput + ",\"values\":{\"z\":\"w\",\"t\":\"x\",\"y\":\"v\"}}\n{\"seq\":2,\"commit\":true}\n",
+			"line 3: payloads for [z, y], which the transition does not introduce"},
+		{"stray and missing payloads", startInput + ",\"values\":{\"u\":\"x\"}}\n{\"seq\":2,\"commit\":true}\n",
+			"line 3: payloads for [u], which the transition does not introduce"},
 	}
 	for _, c := range exact {
 		p := users
@@ -485,9 +500,31 @@ func TestRecorder(t *testing.T) {
 		err.Error() != "duplicate payloads for [t]" {
 		t.Errorf("repeated payload in a transaction: %v", err)
 	}
+	// An op record carries payloads only for values its transition introduces.
+	if _, err := recorder.Record(OpStart{Input: ptr("t")}, []Payload{{"t", "x"}, {"z", "w"}}); err == nil ||
+		err.Error() != "payloads for [z], which the transition does not introduce" {
+		t.Errorf("stray payload: %v", err)
+	}
+	if _, _, err := Transaction(users, &State{}, OpStart{Input: ptr("t")}, []Payload{{"z", "w"}, {"t", "x"}}, nil, 1); err == nil ||
+		err.Error() != "payloads for [z], which the transition does not introduce" {
+		t.Errorf("stray payload in a transaction: %v", err)
+	}
 	records, err := recorder.Record(OpStart{Input: ptr("t")}, []Payload{{"t", `{"tenant":1}`}})
 	if err != nil || len(records) != 2 || records[0].Seq != 1 || !records[1].Commit || records[1].Seq != 2 {
 		t.Fatalf("start: %+v %v", records, err)
+	}
+	// A value already known gets no second payload, the same or another.
+	for _, payload := range []string{`{"tenant":1}`, `{"tenant":2}`} {
+		if _, err := recorder.Record(OpInvoke{Run: Path{}, Placement: "fetchAllUsers"}, []Payload{{"t", payload}}); err == nil ||
+			err.Error() != "payloads for [t], which the transition does not introduce" {
+			t.Errorf("payload for a known value: %v", err)
+		}
+	}
+	if _, _, err := RecordTransitions(users, &State{}, []Transition{
+		{OpStart{Input: ptr("t")}, []Payload{{"t", "before"}}},
+		{OpInvoke{Run: Path{}, Placement: "fetchAllUsers"}, []Payload{{"t", "after"}}},
+	}, nil, 1); err == nil || err.Error() != "payloads for [t], which the transition does not introduce" {
+		t.Errorf("a later payload for a known value: %v", err)
 	}
 	if _, err := recorder.Record(OpStart{}, nil); err == nil || err.Error() != "ALREADY_STARTED" {
 		t.Errorf("rejected op: %v", err)

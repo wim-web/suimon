@@ -59,7 +59,7 @@
           "$ref": "#/$defs/op"
         },
         "values": {
-          "description": "Payloads stored by this transition: each key is a value identity and each value is the payload string the runtime serialized. When the transition commits, every value its new state mentions and the previous state did not, lists the engine builds included, needs a payload here or in an earlier committed op line. Left out when empty.",
+          "description": "Payloads stored by this transition: each key is the identity of a value the transition introduces, one its new state mentions and the previous state did not (lists the engine builds included), and each value is the payload string the runtime serialized. When the transition commits, a payload for any other value is rejected, and every value the transition introduces needs its payload here; a value stays mentioned once it is, so it gets exactly one payload. Left out when empty.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/text"

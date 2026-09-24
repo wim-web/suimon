@@ -53,6 +53,8 @@ def checkTransition (p : Definition) (label : String) (before after : State) (op
       after.invocations.length == before.invocations.length) s!"{label}: work accepted after the stop: {repr op}"
   ensure (after.failures.take before.failures.length == before.failures) s!"{label}: failure record removed"
   ensure (before.results.all after.results.contains) s!"{label}: accepted result withdrawn by {repr op}"
+  -- A value stays mentioned once it is, so a value a transition introduces is new (§12.1).
+  ensure (before.values.all after.values.contains) s!"{label}: a value withdrawn by {repr op}"
   -- A new result names its producer: the reporting call, the closed execution, the sub-workflow
   -- invocation, or the aggregating placement.
   let producer : Option String := match op with

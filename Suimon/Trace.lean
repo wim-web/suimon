@@ -14,8 +14,15 @@ namespace Suimon.Trace
 def introduced (before after : State) : List Value :=
   (after.values.filter fun v => !before.values.contains v).eraseDups
 
+/-- Payloads of an op record for values its transition does not introduce. An op record may carry a
+    payload only for a value its transition introduces, which the state before does not mention, so a
+    committed payload is never repeated or contradicted by a later one (§12.1). --/
+def unexpected (before after : State) (values : List (Value × String)) : List Value :=
+  (values.map (·.1)).filter fun v => !(introduced before after).contains v
+
 inductive Record where
-  /-- `values` maps value identities to the payloads the runtime serialized. --/
+  /-- `values` maps the identities of values the transition introduces to the payloads the runtime
+      serialized. --/
   | op (seq : Nat) (op : Op) (values : List (Value × String))
   | commit (seq : Nat)
   deriving DecidableEq, Repr
@@ -292,7 +299,8 @@ def missing (before after : State) (values known : List (Value × String)) : Lis
   (introduced before after).filter fun v => !(values.any (·.1 == v) || known.any (·.1 == v))
 
 /-- Replay one complete line; the op of a transition is applied at its commit, which also checks
-    the payloads of the values it introduces. --/
+    the payloads: the op record carries payloads only for values the transition introduces, and each
+    of them has one. --/
 def replayLine (c : Codec) (p : Definition) (r : Replay) (index : Nat) (line : String) :
     Except String Replay :=
   let at_ := s!"line {index + 1}"
@@ -305,8 +313,10 @@ def replayLine (c : Codec) (p : Definition) (r : Replay) (index : Nat) (line : S
       | .commit _, some (o, values) =>
         match step p r.state o with
         | .ok next =>
+          let extra := unexpected r.state next values
           let absent := missing r.state next values r.values
-          if absent.isEmpty then
+          if !extra.isEmpty then throw s!"{at_}: payloads for {extra}, which the transition does not introduce"
+          else if absent.isEmpty then
             pure { state := next, committed := r.committed + 1, values := r.values ++ values,
                    pending := none, next := r.next + 1 }
           else throw s!"{at_}: missing payloads for {absent}"
@@ -344,13 +354,16 @@ def duplicates (keys : List String) : List String :=
   (keys.filter fun k => keys.count k > 1).eraseDups
 
 /-- The records of one accepted transition, starting at `seq`, under the rules `check` applies: the
-    payloads of the op record have distinct keys, and each value the transition introduces has its
-    payload in the op record or in `known`, the payloads of the transitions recorded before. --/
+    payloads of the op record have distinct keys and are only for values the transition introduces,
+    and each value the transition introduces has its payload in the op record or in `known`, the
+    payloads of the transitions recorded before. --/
 def transaction (p : Definition) (s : State) (o : Op) (values known : List (Value × String)) (seq : Nat) :
     Except String (State × List Record) := do
   let keys := values.map (·.1)
   unless keys.Nodup do throw s!"duplicate payloads for {duplicates keys}"
   let next ← step p s o
+  let extra := unexpected s next values
+  unless extra.isEmpty do throw s!"payloads for {extra}, which the transition does not introduce"
   let absent := missing s next values known
   unless absent.isEmpty do throw s!"missing payloads for {absent}"
   return (next, [.op seq o values, .commit (seq + 1)])

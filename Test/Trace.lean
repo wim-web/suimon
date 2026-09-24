@@ -54,6 +54,11 @@ def rejectedText (label fragment : String) (text : String) : IO Unit :=
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{fragment}'")
   | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got {e}"
 
+def rejectedExactly (label expected : String) (text : String) : IO Unit :=
+  match Suimon.Trace.check Suimon.Trace.wireCodec loadHeader text with
+  | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{expected}'")
+  | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
+
 /-- Checks a record of `p` whose lines after the header are `text`. --/
 def checked (label : String) (p : Definition) (text : String) : IO Suimon.Trace.Checked :=
   checkedText label (header p ++ text)
@@ -127,18 +132,17 @@ def run : IO Unit := do
         ensure (decodesTo (Suimon.Trace.wireCodec.decode line) record) s!"{label}: text codec changed {line}"
         ensure (!line.contains '\n') s!"{label}: a newline in {line}"
       -- A commit needs the payload of each value its transition introduces, lists the engine builds
-      -- included; an earlier committed record may hold it, a later one may not. The header is line 1.
+      -- included, and an op record carries payloads only for the values its transition introduces:
+      -- neither an earlier record nor a later one may hold it. The header is line 1.
       if let some ((o, values), i) := r.steps.zipIdx.find? (·.1.2.any (isList ·.1)) then
         let lists := values.filter (isList ·.1)
         let stripped := r.steps.set i (o, values.filter (!isList ·.1))
         rejectedTrace s!"{label} list payload" s!"line {2 * i + 3}: missing payloads" p (written stripped)
         rejectedSteps s!"{label} recorder list payload" "missing payloads" p stripped
         let early := stripped.modify 0 fun (first, payloads) => (first, payloads ++ lists)
-        let c ← checked s!"{label} early payload" p (written early)
-        ensure (c.state == r.states.getLast! && !c.uncommitted) s!"{label}: early payload"
-        match Suimon.Trace.record p {} early [] 1 with
-        | .ok (final, _) => ensure (final == r.states.getLast!) s!"{label}: recorder with an early payload"
-        | .error e => throw (IO.userError s!"{label}: recorder with an early payload: {e}")
+        let extra := s!"payloads for {lists.map (·.1)}, which the transition does not introduce"
+        rejectedTrace s!"{label} early payload" s!"line 3: {extra}" p (written early)
+        rejectedSteps s!"{label} recorder early payload" extra p early
         let later := stripped.modify (i + 1) fun (next, payloads) => (next, payloads ++ lists)
         rejectedTrace s!"{label} later payload" s!"line {2 * i + 3}: missing payloads" p (written later)
       -- A crash may cut the record anywhere, the header included; recovery keeps exactly the
@@ -236,6 +240,19 @@ def run : IO Unit := do
     "{\"definition\":{\"main\":\"x\",\"main\":\"w\",\"workflows\":[]}}\n"
   rejectedSteps "recorder repeated payload" "duplicate payloads for [t]" users
     [(.start (some "t"), [("t", "x"), ("t", "y")])]
+  -- An op record carries payloads only for values its transition introduces, so a committed payload is
+  -- never given again, the same or another, and the state names no value it has no payload for.
+  let invoke := "{\"seq\":3,\"op\":{\"type\":\"invoke\",\"run\":[],\"placement\":\"fetchAllUsers\"}"
+  for payload in ["x", "y"] do
+    rejectedExactly s!"known payload {payload}" "line 5: payloads for [t], which the transition does not introduce"
+      (header users ++ startInput ++ ",\"values\":{\"t\":\"x\"}}\n" ++ commit ++ invoke ++
+        s!",\"values\":\{\"t\":\"{payload}\"}}\n" ++ "{\"seq\":4,\"commit\":true}\n")
+  rejectedExactly "stray payloads" "line 3: payloads for [z, y], which the transition does not introduce"
+    (header users ++ startInput ++ ",\"values\":{\"z\":\"w\",\"t\":\"x\",\"y\":\"v\"}}\n" ++ commit)
+  rejectedSteps "recorder stray payload" "payloads for [z], which the transition does not introduce" users
+    [(.start (some "t"), [("t", "x"), ("z", "w")])]
+  rejectedSteps "recorder known payload" "payloads for [t], which the transition does not introduce" users
+    [(.start (some "t"), [("t", "before")]), (.invoke [] "fetchAllUsers" none, [("t", "after")])]
   ensure (Suimon.Trace.duplicates ["a", "b", "a", "c", "b", "a"] == ["a", "b"]) "duplicates"
   -- A record replays against the definition of its header: users records are rejected under merge.
   rejectedText "another definition" "line 3: rejected"

@@ -175,48 +175,68 @@ theorem newline_not_mem_lines {c : Codec} (hc : c.Lawful) (header : Wire) (rs : 
 theorem transaction_eq_ok {p : Definition} {s : State} {o : Op} {values known : List (Value × String)} {seq : Nat}
     {next : State} {records : List Record} :
     transaction p s o values known seq = .ok (next, records) ↔
-      (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ missing s next values known = [] ∧
-        records = [.op seq o values, .commit (seq + 1)] := by
+      (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ unexpected s next values = [] ∧
+        missing s next values known = [] ∧ records = [.op seq o values, .commit (seq + 1)] := by
   unfold transaction
   by_cases hk : (values.map (·.1)).Nodup
   · simp only [hk, ↓reduceIte, pure_ok, true_and]
     cases hs : step p s o with
     | error e => simp [error_bind]
     | ok n =>
-      cases hm : (missing s n values known).isEmpty <;> simp_all [ok_bind, error_bind, throw_error] <;>
-        rintro rfl
-      · exact fun h => absurd h hm
-      · simp only [hm, true_and]
-        exact eq_comm
+      by_cases hu : unexpected s n values = []
+      · by_cases hm : missing s n values known = []
+        · simp only [hu, hm, List.isEmpty_nil, ok_bind]
+          constructor
+          · intro h
+            obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj h)
+            exact ⟨rfl, hu, hm, rfl⟩
+          · rintro ⟨h1, -, -, rfl⟩
+            rw [Except.ok.inj h1]
+            rfl
+        · have hm' : (missing s n values known).isEmpty = false := by simpa using hm
+          simp only [hu, List.isEmpty_nil, ok_bind, hm', throw_error]
+          constructor
+          · intro h; cases h
+          · rintro ⟨h1, -, hm'', -⟩
+            rw [← Except.ok.inj h1] at hm''
+            exact absurd hm'' hm
+      · have hu' : (unexpected s n values).isEmpty = false := by simpa using hu
+        simp only [ok_bind, hu', throw_error]
+        constructor
+        · intro h; cases h
+        · rintro ⟨h1, hu'', -⟩
+          rw [← Except.ok.inj h1] at hu''
+          exact absurd hu'' hu
   · simp [hk, throw_error, error_bind]
 
 theorem record_cons_ok {p : Definition} {s t : State} {o : Op} {values known : List (Value × String)}
     {rest : List (Op × List (Value × String))} {seq : Nat} {rs : List Record}
     (h : record p s ((o, values) :: rest) known seq = .ok (t, rs)) :
-    ∃ next later, (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ missing s next values known = [] ∧
-      record p next rest (known ++ values) (seq + 2) = .ok (t, later) ∧
+    ∃ next later, (values.map (·.1)).Nodup ∧ step p s o = .ok next ∧ unexpected s next values = [] ∧
+      missing s next values known = [] ∧ record p next rest (known ++ values) (seq + 2) = .ok (t, later) ∧
       rs = .op seq o values :: .commit (seq + 1) :: later := by
   simp only [record] at h
   cases ht : transaction p s o values known seq with
   | error e => simp [ht, error_bind] at h
   | ok x =>
     obtain ⟨next, records⟩ := x
-    obtain ⟨hk, hs, hm, rfl⟩ := transaction_eq_ok.1 ht
+    obtain ⟨hk, hs, hu, hm, rfl⟩ := transaction_eq_ok.1 ht
     cases hr : record p next rest (known ++ values) (seq + 2) with
     | error e => simp [ht, hr, ok_bind, map_error] at h
     | ok y =>
       obtain ⟨final, later⟩ := y
       simp [ht, hr, ok_bind, pure_ok] at h
       obtain ⟨rfl, rfl⟩ := h
-      exact ⟨next, later, hk, hs, hm, hr, rfl⟩
+      exact ⟨next, later, hk, hs, hu, hm, hr, rfl⟩
 
 theorem record_cons_of {p : Definition} {s next t : State} {o : Op} {values known : List (Value × String)}
     {rest : List (Op × List (Value × String))} {seq : Nat} {later : List Record}
-    (hk : (values.map (·.1)).Nodup) (hs : step p s o = .ok next) (hm : missing s next values known = [])
+    (hk : (values.map (·.1)).Nodup) (hs : step p s o = .ok next) (hu : unexpected s next values = [])
+    (hm : missing s next values known = [])
     (hr : record p next rest (known ++ values) (seq + 2) = .ok (t, later)) :
     record p s ((o, values) :: rest) known seq = .ok (t, .op seq o values :: .commit (seq + 1) :: later) := by
   have ht : transaction p s o values known seq = .ok (next, [.op seq o values, .commit (seq + 1)]) :=
-    transaction_eq_ok.2 ⟨hk, hs, hm, rfl⟩
+    transaction_eq_ok.2 ⟨hk, hs, hu, hm, rfl⟩
   simp [record, ht, hr, ok_bind, pure_ok]
 
 theorem record_length {p : Definition} :
@@ -232,7 +252,7 @@ theorem record_length {p : Definition} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro s t known seq rs h
-    obtain ⟨next, later, -, -, -, hr, rfl⟩ := record_cons_ok h
+    obtain ⟨next, later, -, -, -, -, hr, rfl⟩ := record_cons_ok h
     simp [ih hr]
     omega
 
@@ -250,7 +270,7 @@ theorem record_distinctKeys {p : Definition} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro s t known seq rs h r hr
-    obtain ⟨next, later, hk, -, -, hlater, rfl⟩ := record_cons_ok h
+    obtain ⟨next, later, hk, -, -, -, hlater, rfl⟩ := record_cons_ok h
     rcases List.mem_cons.1 hr with rfl | hr
     · exact hk
     rcases List.mem_cons.1 hr with rfl | hr
@@ -275,12 +295,12 @@ theorem record_append {p : Definition} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro ys s u t known seq rs₁ rs₂ h₁ h₂
-    obtain ⟨next, later, hk, hs, hm, hr, rfl⟩ := record_cons_ok h₁
+    obtain ⟨next, later, hk, hs, hu, hm, hr, rfl⟩ := record_cons_ok h₁
     have h₂' : record p u ys (known ++ values ++ rest.flatMap (·.2)) (seq + 2 + 2 * rest.length) =
         .ok (t, rs₂) := by
       rw [show seq + 2 + 2 * rest.length = seq + 2 * (rest.length + 1) by omega]
       simpa using h₂
-    exact record_cons_of hk hs hm (ih hr h₂')
+    exact record_cons_of hk hs hu hm (ih hr h₂')
 
 theorem text_append (c : Codec) (rs₁ rs₂ : List Record) : text c (rs₁ ++ rs₂) = text c rs₁ ++ text c rs₂ := by
   simp [text, String.join_append]
@@ -316,15 +336,16 @@ theorem replayLine_op {c : Codec} (hc : c.Lawful) (p : Definition) (r : Replay) 
 
 theorem replayLine_commit {c : Codec} (hc : c.Lawful) (p : Definition) (r : Replay) (index seq : Nat) (o : Op)
     (values : List (Value × String)) (next : State) (hpending : r.pending = some (o, values))
-    (hnext : r.next = seq) (hs : step p r.state o = .ok next) (hm : missing r.state next values r.values = []) :
+    (hnext : r.next = seq) (hs : step p r.state o = .ok next) (hu : unexpected r.state next values = [])
+    (hm : missing r.state next values r.values = []) :
     replayLine c p r index (String.ofList (c.encode (.commit seq)).toList) =
       .ok { state := next, committed := r.committed + 1, values := r.values ++ values, pending := none,
             next := seq + 1 } := by
   have hdecode := hc.decode_encode (.commit seq) trivial
   obtain ⟨state, committed, known, pending, n⟩ := r
-  simp only at hpending hnext hs hm
+  simp only at hpending hnext hs hu hm
   subst hpending hnext
-  simp [replayLine, hdecode, Record.seq, hs, hm, pure_ok]
+  simp [replayLine, hdecode, Record.seq, hs, hu, hm, pure_ok]
 
 theorem replayLines_append (c : Codec) (p : Definition) (xs ys : List (List Char)) :
     ∀ (r : Replay) (index : Nat), replayLines c p r index (xs ++ ys) =
@@ -369,7 +390,7 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Definition} :
   | cons step rest ih =>
     obtain ⟨o, values⟩ := step
     intro s t known seq rs h r index k hstate hvalues hpending hnext hk
-    obtain ⟨next, later, hkeys, hs, hm, hr, rfl⟩ := record_cons_ok h
+    obtain ⟨next, later, hkeys, hs, hu, hm, hr, rfl⟩ := record_cons_ok h
     have hop := replayLine_op hc p r index seq o values hkeys hpending hnext
     match k with
     | 0 =>
@@ -389,16 +410,16 @@ theorem replayLines_take {c : Codec} (hc : c.Lawful) {p : Definition} :
     | k + 2 =>
       have hk' : k ≤ later.length := by simp at hk; omega
       have hcommit := replayLine_commit hc p { r with pending := some (o, values), next := seq + 1 }
-        (index + 1) (seq + 1) o values next rfl rfl (by simpa [hstate] using hs)
+        (index + 1) (seq + 1) o values next rfl rfl (by simpa [hstate] using hs) (by simpa [hstate] using hu)
         (by simpa [hstate, hvalues] using hm)
-      obtain ⟨u, hu, hreplay⟩ := ih hr
+      obtain ⟨u, hu', hreplay⟩ := ih hr
         { state := next, committed := r.committed + 1, values := r.values ++ values, pending := none,
           next := seq + 1 + 1 } (index + 1 + 1) k rfl (by simp [hvalues]) rfl rfl hk'
       refine ⟨u, ?_, ?_⟩
       · have hhalf : (k + 2) / 2 = k / 2 + 1 := by omega
         have htwice : 2 * (k / 2 + 1) = 2 * (k / 2) + 1 + 1 := by omega
         rw [hhalf, List.take_succ_cons, htwice, List.take_succ_cons, List.take_succ_cons]
-        exact record_cons_of hkeys hs hm hu
+        exact record_cons_of hkeys hs hu hm hu'
       · simp only [List.take_succ_cons, List.map_cons, replayLines]
         rw [hop]
         simp only [ok_bind]
@@ -552,11 +573,13 @@ theorem replayLine_covered {c : Codec} {p : Definition} {r r' : Replay} {index :
         exact hr
       · split at h
         · split at h
-          · rename_i hm
-            simp only [pure_ok, Except.ok.injEq] at h
-            subst h
-            exact covered_of_missing (by simpa using hm) hr
           · simp [throw_error] at h
+          · split at h
+            · rename_i hm
+              simp only [pure_ok, Except.ok.injEq] at h
+              subst h
+              exact covered_of_missing (by simpa using hm) hr
+            · simp [throw_error] at h
         · simp [throw_error] at h
       · simp [throw_error] at h
       · simp [throw_error] at h

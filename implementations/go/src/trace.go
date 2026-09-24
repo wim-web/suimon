@@ -562,6 +562,25 @@ func missing(before, after *State, values, known []Payload) []string {
 	return absent
 }
 
+// unexpected are the values of the payloads that the transition does not introduce, in the order of
+// the payloads. An op record may carry a payload only for a value its transition introduces, which the
+// state before does not mention, so a committed payload is never repeated or contradicted by a later
+// one (§12.1).
+func unexpected(introduced []string, values []Payload) []string {
+	var extra []string
+	for _, v := range values {
+		if !slices.Contains(introduced, v.Value) {
+			extra = append(extra, v.Value)
+		}
+	}
+	return extra
+}
+
+// errUnexpected is the error for payloads of values the transition does not introduce.
+func errUnexpected(extra []string) error {
+	return fmt.Errorf("payloads for %s, which the transition does not introduce", leanList(extra))
+}
+
 // unknown are the introduced values whose payloads are neither in values nor known.
 func unknown(introduced []string, values []Payload, known map[string]bool) []string {
 	var absent []string
@@ -586,7 +605,8 @@ func hasPayload(values []Payload, v string) bool {
 func leanList(xs []string) string { return "[" + strings.Join(xs, ", ") + "]" }
 
 // replayLine replays one complete line; the op of a transition is applied at its commit, which
-// also checks the payloads of the values it introduces.
+// also checks the payloads: the op record carries payloads only for values the transition
+// introduces, and each of them has one.
 func replayLine(r *replay, index int, line string) error {
 	if err := replayRecord(r, line); err != nil {
 		return fmt.Errorf("line %d: %w", index+1, err)
@@ -614,6 +634,9 @@ func replayRecord(r *replay, line string) error {
 		introduced, err := r.machine.apply(r.pending)
 		if err != nil {
 			return fmt.Errorf("rejected %s: %w", EncodeOp(r.pending), err)
+		}
+		if extra := unexpected(introduced, r.pendingValues); len(extra) > 0 {
+			return errUnexpected(extra)
 		}
 		if absent := unknown(introduced, r.pendingValues, r.known); len(absent) > 0 {
 			return fmt.Errorf("missing payloads for %s", leanList(absent))
@@ -679,9 +702,10 @@ func Recover(text string, load func(definition []byte) (*Definition, error)) (*S
 }
 
 // Transaction is the records of one accepted transition, starting at seq, under the rules Check
-// applies: the op record holds at most one payload per value, and each value the transition
-// introduces has its payload in values, the payloads of the op record, or in known, the payloads of
-// the transitions recorded before. Payloads must be UTF-8.
+// applies: the op record holds at most one payload per value and only payloads of values the
+// transition introduces, and each value the transition introduces has its payload in values, the
+// payloads of the op record, or in known, the payloads of the transitions recorded before. Payloads
+// must be UTF-8.
 func Transaction(p *Definition, s *State, op Op, values, known []Payload, seq int) (*State, []Record, error) {
 	if err := checkPayloads(values); err != nil {
 		return nil, nil, err
@@ -689,6 +713,9 @@ func Transaction(p *Definition, s *State, op Op, values, known []Payload, seq in
 	next, err := Step(p, s, op)
 	if err != nil {
 		return nil, nil, err
+	}
+	if extra := unexpected(Introduced(s, next), values); len(extra) > 0 {
+		return nil, nil, errUnexpected(extra)
 	}
 	if absent := missing(s, next, values, known); len(absent) > 0 {
 		return nil, nil, fmt.Errorf("missing payloads for %s", leanList(absent))
@@ -802,7 +829,7 @@ func (r *Recorder) Needs(op Op) ([]string, error) {
 }
 
 // Record applies op and returns its records; a rejected op records nothing. values holds at most
-// one payload per value.
+// one payload per value, and only payloads of values op introduces.
 func (r *Recorder) Record(op Op, values []Payload) ([]Record, error) {
 	if err := checkPayloads(values); err != nil {
 		return nil, err
@@ -810,6 +837,9 @@ func (r *Recorder) Record(op Op, values []Payload) ([]Record, error) {
 	next, introduced, err := r.step(op)
 	if err != nil {
 		return nil, err
+	}
+	if extra := unexpected(introduced, values); len(extra) > 0 {
+		return nil, errUnexpected(extra)
 	}
 	if absent := unknown(introduced, values, r.known); len(absent) > 0 {
 		return nil, fmt.Errorf("missing payloads for %s", leanList(absent))
