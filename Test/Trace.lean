@@ -84,6 +84,23 @@ def keys : Wire → List String
   | .obj fields => fields.map (·.1)
   | _ => []
 
+/-- The longest line in bytes, the header aside, of the record of a walk of `p` without failures or
+    cancellation, which runs every level of a chain `depth` runs deep and succeeds. The record is the
+    one `suimon gen` writes for the walk. --/
+def longestLine (label : String) (p : Definition) (depth : Nat) : IO Nat := do
+  accepted label p
+  let (final, ops) := Explore.walk p { failures := false, cancel := false } 1 100000
+  ensure (final.status == .succeeded && final.runs.any (·.path.length == depth))
+    s!"{label}: the walk did not run all {depth} levels"
+  let mut s : State := {}
+  let mut steps := #[]
+  for o in ops do
+    let next ← IO.ofExcept (step p s o)
+    steps := steps.push (o, withPayloads s next)
+    s := next
+  let (_, records) ← IO.ofExcept (Suimon.Trace.record p {} steps.toList [] 1)
+  return (records.map fun r => (Suimon.Trace.wireCodec.encode r).utf8ByteSize).foldl max 0
+
 def run : IO Unit := do
   for name in ["users", "branch", "merge"] do
     let p ← load name
@@ -226,6 +243,18 @@ def run : IO Unit := do
   -- The recorder refuses a transition without the payloads it introduces, and an op the rules reject.
   rejectedSteps "recorder missing payload" "missing payloads" users [(.start (some "t"), [])]
   rejectedSteps "recorder rejected op" "ALREADY_STARTED" p [(.start none, []), (.start none, [])]
+  -- Identities grow linearly with the nesting of runs: a run path holds one label per level, and an
+  -- identity holds its run path once. Each chain nests 16 runs, sub-workflow calls or concurrency tasks
+  -- and sub-workflow calls in turn, and each level starts from the result of a call; started at w8, it
+  -- nests 8. Doubling the depth at most doubles the longest line, give or take the parts every line
+  -- has, and keeps it under 8 KiB; identities that embed their run path at every level grow
+  -- exponentially instead.
+  for name in ["nested", "alternating"] do
+    let deep ← load s!"chains/{name}"
+    let longest16 ← longestLine s!"{name} 16" deep 16
+    let longest8 ← longestLine s!"{name} 8" { deep with main := "w8" } 8
+    ensure (2 * longest16 ≤ 5 * longest8 && longest16 ≤ 8192)
+      s!"{name}: the longest line has {longest16} bytes at depth 16 and {longest8} at depth 8"
   IO.println "trace: ok"
 
 end Suimon.Test.Trace

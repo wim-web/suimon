@@ -1,0 +1,194 @@
+{
+  "main": "w0",
+  "functions": [
+    {"id": "source", "output": {"single": "T"}},
+    {"id": "work", "input": "T", "output": {"single": "T"}}
+  ],
+  "transforms": [
+    {"id": "pass", "input": "T", "output": "T"}
+  ],
+  "workflows": [
+    {
+      "id": "w0",
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "source"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w1", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w1",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w2", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w2",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w3", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w3",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w4", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w4",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w5", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w5",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w6", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w6",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w7", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w7",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w8", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w8",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w9", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w9",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w10", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w10",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w11", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w11",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w12", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w12",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w13", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w13",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w14", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w14",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w15", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w15",
+      "input": {"type": "T", "placement": "a"},
+      "placements": [
+        {"name": "a", "node": {"type": "function", "function": "work"}, "policy": "stop"},
+        {"name": "p", "node": {"type": "subworkflow", "workflow": "w16", "output": "p"}, "policy": "stop"}
+      ],
+      "connections": [
+        {"source": "a", "target": "p", "transform": "pass"}
+      ]
+    },
+    {
+      "id": "w16",
+      "input": {"type": "T", "placement": "p"},
+      "placements": [
+        {"name": "p", "node": {"type": "function", "function": "work"}, "policy": "stop"}
+      ]
+    }
+  ]
+}

@@ -96,6 +96,19 @@ func TestConformanceRuntime(t *testing.T) {
 	}
 }
 
+// The journals of the chains of Test/definitions/chains, 16 runs deep, conform too.
+func TestConformanceChains(t *testing.T) {
+	cli := leanCLI(t)
+	for _, name := range chainNames {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := loadChain(t, name, "w0")
+			journal, r := runChain(t, p, nil)
+			leanAgrees(t, cli, t.TempDir(), p, journal, r.State)
+		})
+	}
+}
+
 // Recovered executions conform too: Lean summarizes a cut journal as Go does, and accepts the
 // journal of the resumed execution, lost calls included, with the same final state.
 func TestConformanceRecovery(t *testing.T) {

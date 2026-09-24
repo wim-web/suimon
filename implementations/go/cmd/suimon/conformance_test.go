@@ -714,6 +714,23 @@ func TestConformanceGen(t *testing.T) {
 	}
 }
 
+// Go gen and Lean gen write the same records for the chains of Test/definitions/chains, 16 and 8 runs
+// deep, including a walk that runs every level.
+func TestConformanceChains(t *testing.T) {
+	cli := leanCLI(t)
+	for _, name := range chainNames {
+		for _, start := range []string{"w0", "w8"} {
+			path := chainPath(t, name, start)
+			_, succeeded := succeededGen(t, path)
+			for _, seed := range append([]string{succeeded}, conformanceSeeds...) {
+				args := []string{"gen", path, "--seed", seed}
+				sameResult(t, fmt.Sprintf("gen %s from %s seed %s", name, start, seed), runLean(t, cli, args...),
+					runGo(args...))
+			}
+		}
+	}
+}
+
 func parseLines(t *testing.T, text string) []any {
 	t.Helper()
 	var records []any
