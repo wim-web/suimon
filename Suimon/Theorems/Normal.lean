@@ -604,4 +604,29 @@ theorem definition_definitionWire_of_validate {p : Definition} (h : p.validate =
 theorem load_definitionWire {p : Definition} (h : p.validate = .ok ()) : load (definitionWire p) = .ok p := by
   simp [load, loadJson, definition_definitionWire_of_validate h, h, bind, Except.bind, pure, Except.pure]
 
+/-- The canonical form is injective on the definitions that validation accepts, so the header of a
+    record holds the canonical form of at most one of them (§12.1). --/
+theorem definitionWire_inj {p q : Definition} (hp : p.validate = .ok ()) (hq : q.validate = .ok ()) :
+    definitionWire p = definitionWire q ↔ p = q :=
+  definitionWire_inj_of_expressible (Definition.normal_of_validate hp).expressible
+    (Definition.normal_of_validate hq).expressible
+
+/-- Every definition `load` reads passes validation. --/
+theorem validate_of_load {w : Wire} {q : Definition} (h : load w = .ok q) : q.validate = .ok () := by
+  simp only [load, loadJson] at h
+  cases hd : definition w.toJson with
+  | error e => simp [hd, bind, Except.bind] at h
+  | ok q' =>
+    cases hv : q'.validate with
+    | error e => simp [hd, hv, bind, Except.bind] at h
+    | ok u =>
+      simp only [hd, hv, bind, Except.bind, pure, Except.pure, Except.ok.injEq] at h
+      exact h ▸ hv
+
+/-- A header whose definition `load` reads with the canonical form of a definition `p` that validation
+    accepts holds `p` itself. --/
+theorem load_eq_of_definitionWire {p q : Definition} (hp : p.validate = .ok ()) {w : Wire} (h : load w = .ok q)
+    (hw : definitionWire q = definitionWire p) : q = p :=
+  (definitionWire_inj (validate_of_load h) hp).1 hw
+
 end Suimon.Codec

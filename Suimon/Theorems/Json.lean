@@ -742,4 +742,13 @@ theorem definition_definitionWire_of_expressible {p : Definition} (h : p.Express
 theorem definition_definitionWire {p : Definition} (h : p.Normal) : definition (definitionWire p).toJson = .ok p :=
   definition_definitionWire_of_expressible h.expressible
 
+/-- The canonical form determines a definition the definition file can express, since both
+    definitions decode from it. --/
+theorem definitionWire_inj_of_expressible {p q : Definition} (hp : p.Expressible) (hq : q.Expressible) :
+    definitionWire p = definitionWire q ↔ p = q := by
+  refine ⟨fun h => ?_, congrArg _⟩
+  have hdecode := definition_definitionWire_of_expressible hp
+  rw [h, definition_definitionWire_of_expressible hq] at hdecode
+  exact (Except.ok.inj hdecode).symm
+
 end Suimon.Codec
