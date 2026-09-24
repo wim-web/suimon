@@ -188,7 +188,7 @@ def validateTransform (t : TransformDecl) : Except String Unit := do
 
 /-- Structural checks of §14, and what the definition file can express: identifiers and type names
     are not empty, and numbers are at most `maxNat`. `run` executes only definitions accepted here,
-    which satisfy `Definition.Normal` (`Definition.normal_of_validate`). --/
+    which are exactly those that satisfy `Definition.Normal` (`Definition.validate_eq_ok_iff`). --/
 def validate (p : Definition) : Except String Unit := do
   check (unique (p.functions.map (·.id))) "duplicate function id"
   check (unique (p.judges.map (·.id))) "duplicate judge id"

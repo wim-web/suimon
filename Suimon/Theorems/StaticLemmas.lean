@@ -87,6 +87,38 @@ theorem find?_key_of_nodup {α β} [BEq β] [LawfulBEq β] {f : α → β} :
       simp only [hne]
       exact find?_key_of_nodup hu.2 hx
 
+theorem eraseDups_of_nodup {α} [BEq α] [LawfulBEq α] : ∀ {xs : List α}, xs.Nodup → xs.eraseDups = xs
+  | [], _ => rfl
+  | a :: as, h => by
+    rw [List.nodup_cons] at h
+    have hfilter : as.filter (fun b => !b == a) = as := List.filter_eq_self.2 fun b hb => by
+      simp only [Bool.not_eq_true', beq_eq_false_iff_ne]
+      exact fun he => h.1 (he ▸ hb)
+    rw [List.eraseDups_cons, hfilter, eraseDups_of_nodup h.2]
+
+/-- A list with an element that `p` rejects is longer than its filter. --/
+theorem length_filter_lt {α} {p : α → Bool} {l : List α} {x : α} (hx : x ∈ l) (hp : p x = false) :
+    (l.filter p).length < l.length := by
+  refine Nat.lt_of_le_of_ne (List.length_filter_le p l) fun heq => ?_
+  have := List.filter_eq_self.1 (List.filter_sublist.eq_of_length heq) x hx
+  simp [hp] at this
+
+/-- A non-empty list has an element of least rank. --/
+theorem exists_min_rank {α} (rank : α → Nat) : ∀ {l : List α}, l ≠ [] → ∃ v ∈ l, ∀ u ∈ l, rank v ≤ rank u
+  | [], h => absurd rfl h
+  | [a], _ => ⟨a, by simp, by simp⟩
+  | a :: b :: l, _ => by
+    obtain ⟨v, hv, hmin⟩ := exists_min_rank rank (l := b :: l) (by simp)
+    by_cases hav : rank a ≤ rank v
+    · refine ⟨a, by simp, fun u hu => ?_⟩
+      rcases List.mem_cons.1 hu with rfl | hu
+      · exact Nat.le_refl _
+      · exact Nat.le_trans hav (hmin u hu)
+    · refine ⟨v, List.mem_cons_of_mem a hv, fun u hu => ?_⟩
+      rcases List.mem_cons.1 hu with rfl | hu
+      · omega
+      · exact hmin u hu
+
 end Static
 
 namespace Validate
@@ -117,6 +149,9 @@ theorem nodup_of_unique {α} [BEq α] [LawfulBEq α] : ∀ {xs : List α}, uniqu
     have := List.filter_eq_self.1 hf a ha
     simp at this
 termination_by xs => xs.length
+
+theorem unique_of_nodup {α} [BEq α] [LawfulBEq α] {xs : List α} (h : xs.Nodup) : unique xs = true := by
+  simp [unique, Static.eraseDups_of_nodup h]
 
 theorem Workflow.placement?_of_mem {w : Workflow} (hu : (w.placements.map (·.name)).Nodup) {pl : Placement}
     (h : pl ∈ w.placements) : w.placement? pl.name = some pl :=
@@ -174,6 +209,36 @@ theorem acyclic_rank {edges : List (String × String)} :
         · simp only [hr1, Bool.false_eq_true, ↓reduceIte]
           have := hedge e he (hrest _ h1 (by simpa using hr1)) hin2
           omega
+
+/-- Conversely, Kahn elimination with enough fuel succeeds on a graph with a rank that increases along
+    every edge: a vertex of least rank is a root in each round. --/
+theorem acyclic_of_rank {edges : List (String × String)} {rank : String → Nat}
+    (hrank : ∀ e ∈ edges, rank e.1 < rank e.2) :
+    ∀ {fuel : Nat} {vertices : List String}, vertices.length ≤ fuel → acyclic edges fuel vertices = true
+  | 0, vertices, h => by simp_all [acyclic]
+  | fuel + 1, vertices, h => by
+    unfold acyclic
+    split
+    · rfl
+    · rename_i hne
+      simp only [List.isEmpty_iff] at hne
+      obtain ⟨v, hv, hmin⟩ := Static.exists_min_rank rank hne
+      generalize hroots : vertices.filter _ = roots
+      have hvroots : v ∈ roots := by
+        rw [← hroots]
+        refine List.mem_filter.2 ⟨hv, ?_⟩
+        simp only [Bool.not_eq_true', List.any_eq_false, Bool.and_eq_true, beq_iff_eq, List.contains_iff_mem,
+          not_and]
+        rintro ⟨src, dst⟩ he hdst hsrc
+        have h1 := hrank _ he
+        have h2 := hmin src hsrc
+        simp only at h1 hdst
+        subst hdst
+        omega
+      simp only [Bool.and_eq_true, Bool.not_eq_true']
+      refine ⟨by simpa using List.ne_nil_of_mem hvroots, acyclic_of_rank hrank ?_⟩
+      have := Static.length_filter_lt (p := fun x => !roots.contains x) hv (by simpa using hvroots)
+      omega
 
 theorem Workflow.kind?_of_not_mem {p : Definition} {w : Workflow} {v : String}
     (h : v ∉ w.placements.map (·.name)) : ∀ fuel, w.kind? p fuel v = none

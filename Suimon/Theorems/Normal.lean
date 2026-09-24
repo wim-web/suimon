@@ -1,8 +1,9 @@
 import Suimon.Theorems.Json
 import Suimon.Theorems.StaticLemmas
 
-/-! The validator is sound for `Definition.Normal`: a definition it accepts is normal (§15.2), so the
-    canonical form that a record header holds for it decodes back to it. -/
+/-! The validator decides `Definition.Normal`: a definition it accepts is normal (§15.2), and it accepts
+    every normal definition. The canonical form that a record header holds for an accepted definition
+    decodes back to it. -/
 
 namespace Suimon
 
@@ -301,6 +302,293 @@ theorem Definition.normal_of_validate {p : Definition} (h : p.validate = .ok ())
   exact hedge (w.id, id)
     (List.mem_flatMap.2 ⟨w, hw', List.mem_flatMap.2 ⟨pl, hpl, List.mem_map.2 ⟨id, hid, rfl⟩⟩⟩)
     (List.mem_map.2 ⟨w, hw', rfl⟩) (List.mem_map.2 ⟨w', hwm, hwn⟩)
+
+
+/-! ## The validator is complete
+
+It accepts every normal definition, so `Definition.Normal` states all that it checks
+(`Definition.validate_eq_ok_iff`). -/
+
+/-- Reduces a validator computation to the conditions under which it succeeds. --/
+local macro "complete_simp" : tactic =>
+  `(tactic| simp only [Static.except_bind_eq_ok, Static.except_pure_eq_ok, Static.except_throw_eq_ok,
+    Validate.check_eq_ok, Validate.need_eq_ok, Definition.validateTypes_eq_ok, exists_const, and_true,
+    true_and, Bool.false_eq_true, ↓reduceIte, false_and, and_false, exists_false])
+
+namespace Definition
+variable {p : Definition}
+
+theorem validateBody_of_normal {at_ : String} {body : Body} {input : Option ValueType} (h : body.Normal p)
+    (hinput : p.bodyInput body = some input) : p.validateBody at_ body = .ok input := by
+  cases body with
+  | function id =>
+    obtain ⟨f, hf⟩ := Option.isSome_iff_exists.1 h
+    simp only [bodyInput, hf, Option.map_some, Option.some.injEq] at hinput
+    unfold validateBody
+    complete_simp
+    exact ⟨f, hf, hinput⟩
+  | workflow id output =>
+    obtain ⟨w, hw, hpl, hend⟩ := h
+    simp only [bodyInput, hw, Option.map_some, Option.some.injEq] at hinput
+    unfold validateBody
+    complete_simp
+    exact ⟨w, hw, hpl, hend, hinput⟩
+
+theorem validateTimeout_of_legal {at_ : String} {t : Timeout} {function : Option Contract} {judge : Bool}
+    (h : t.Legal function judge) : validateTimeout at_ t function judge = .ok () := by
+  unfold validateTimeout
+  split
+  · rfl
+  · rename_i he
+    have hne : t ≠ {} := fun ht => by simp [ht, Timeout.isEmpty] at he
+    have hpos := h.positive
+    complete_simp
+    refine ⟨by simpa using h.target hne, ?_, ?_, ?_⟩
+    · rcases t with ⟨_ | c, _ | e⟩ <;> simp_all
+    · rcases t with ⟨_ | c, _ | e⟩ <;> simp_all
+    · split
+      · rename_i hel
+        obtain ⟨c, rfl, hc⟩ := h.element hel
+        complete_simp
+        simp [hc]
+      · rfl
+
+theorem validateTask_of_normal {at_ : String} {c : Concurrency} {task : TaskSpec} (h : task.Normal p c) :
+    p.validateTask at_ c task = .ok () := by
+  obtain ⟨input, hinput, hin⟩ := h.input
+  have hbody : ∀ at_, p.validateBody at_ task.body = .ok input := fun _ => validateBody_of_normal h.body hinput
+  have htimeout : ∀ at_, validateTimeout at_ task.timeout (match task.body with
+      | .function id => (p.function? id).map (·.output)
+      | .workflow .. => none) false = .ok () := by
+    intro at_
+    have := validateTimeout_of_legal (at_ := at_) h.timeout
+    cases hb : task.body <;> simp only [hb, calledContract] at this ⊢ <;> exact this
+  have hout : ∀ id ∈ task.output, ∃ t, p.transform? id = some t ∧
+      p.bodyElement p.depth task.body = some t.input ∧ t.output = c.element := h.output
+  have hname : task.name.isEmpty = false := by simpa using h.name
+  -- The input transform, then the output transform.
+  have hcases : (c.input = none ∧ input = none ∧ task.input = none) ∨
+      (∃ source, c.input = some source ∧ input = none ∧ task.input = some .discard) ∨
+      (∃ source expected id t, c.input = some source ∧ input = some expected ∧ task.input = some (.declared id) ∧
+        p.transform? id = some t ∧ t.input = source ∧ t.output = expected) := by
+    cases hc : c.input with
+    | none => rw [hc] at hin; exact .inl ⟨rfl, hin⟩
+    | some source =>
+      rw [hc] at hin
+      obtain ⟨transform, hti, hfits⟩ := hin
+      cases transform with
+      | discard =>
+        cases input with
+        | none => exact .inr (.inl ⟨source, rfl, rfl, hti⟩)
+        | some _ => cases hfits
+      | declared id =>
+        cases input with
+        | none => cases hfits
+        | some expected =>
+          obtain ⟨t, ht, hin, hout⟩ := hfits
+          exact .inr (.inr ⟨source, expected, id, t, rfl, rfl, hti, ht, hin, hout⟩)
+  have houtput : task.output = none ∨ ∃ id t, task.output = some id ∧ p.transform? id = some t ∧
+      p.bodyElement p.depth task.body = some t.input ∧ t.output = c.element := by
+    cases hto : task.output with
+    | none => exact .inl rfl
+    | some id =>
+      obtain ⟨t, ht, helement, hout⟩ := hout id hto
+      exact .inr ⟨id, t, rfl, ht, helement, hout⟩
+  unfold validateTask
+  rcases hcases with ⟨hc, rfl, hti⟩ | ⟨source, hc, rfl, hti⟩ | ⟨source, expected, id, t, hc, rfl, hti, ht, htin, htout⟩
+  all_goals
+    rcases houtput with hto | ⟨oid, ot, hto, hot, helement, hoout⟩
+    all_goals
+      simp [Validate.check, Validate.need, bind, Except.bind, pure, Except.pure, *]
+      exact htimeout _
+
+theorem validateConnection_of_normal {w : Workflow} {c : Connection} (h : c.Normal p w) :
+    p.validateConnection w c = .ok () := by
+  obtain ⟨src, dst, hsrc, hdst, hbranch, hnot, produced, input, hprod, hinput, hfits⟩ := h.ends
+  have htr : (c.transform = .discard ∧ input = none) ∨ (∃ id t expected, c.transform = .declared id ∧
+      input = some expected ∧ p.transform? id = some t ∧ t.input = produced ∧ t.output = expected) := by
+    cases htc : c.transform with
+    | discard =>
+      rw [htc] at hfits
+      cases input with
+      | none => exact .inl ⟨rfl, rfl⟩
+      | some _ => cases hfits
+    | declared id =>
+      rw [htc] at hfits
+      cases input with
+      | none => cases hfits
+      | some e =>
+        obtain ⟨t, ht, h1, h2⟩ := hfits
+        exact .inr ⟨id, t, e, rfl, rfl, ht, h1, h2⟩
+  unfold validateConnection
+  by_cases hb : ∃ judge arms, src.control = .branch judge arms
+  · obtain ⟨judge, arms, hctl⟩ := hb
+    obtain ⟨arm, harm, hca⟩ := hbranch judge arms hctl
+    rw [hctl] at hprod
+    rcases htr with ⟨htc, rfl⟩ | ⟨id, t, expected, htc, rfl, ht, h1, h2⟩
+    all_goals simp [Validate.check, Validate.need, bind, Except.bind, pure, Except.pure, *]
+  · have hca : c.arm = none := hnot fun j a h => hb ⟨j, a, h⟩
+    rcases hctl : src.control with body | ⟨judge, arms⟩ | e | e | cc
+    case branch => exact absurd ⟨judge, arms, hctl⟩ hb
+    all_goals
+      rw [hctl] at hprod
+      rcases htr with ⟨htc, rfl⟩ | ⟨id, t, expected, htc, rfl, ht, h1, h2⟩
+      all_goals simp [Validate.check, Validate.need, bind, Except.bind, pure, Except.pure, *]
+
+theorem validateEntry_of_normal {w : Workflow} {e : Entry} (h : e.Normal p w) : p.validateEntry w e = .ok () := by
+  obtain ⟨pl, hpl, hmerge, hinput⟩ := h.placement
+  unfold validateEntry
+  complete_simp
+  refine ⟨by simpa using h.type, pl, hpl, ?_, some e.valueType, hinput, by simp, by simpa using h.alone⟩
+  cases hc : pl.control with
+  | merge el => exact absurd hc (hmerge el)
+  | _ => rfl
+
+theorem validatePlacement_of_normal {w : Workflow} {pl : Placement} (h : pl.Normal p w) :
+    p.validatePlacement w pl = .ok () := by
+  obtain ⟨input, hinput, hcount⟩ := h.inputs
+  have hkind := h.kind
+  have htimeout : ∀ at_, validateTimeout at_ pl.timeout (pl.control.body?.bind p.calledContract)
+      (pl.control matches .branch ..) = .ok () := fun _ => validateTimeout_of_legal h.timeout
+  rcases pl with ⟨name, control, policy, timeout⟩
+  simp only [Workflow.inputCount] at hcount
+  unfold validatePlacement
+  cases control with
+  | call body =>
+    have hbody : ∀ at_, p.validateBody at_ body = .ok input := fun _ => validateBody_of_normal (h.call body rfl) hinput
+    have hcount := hcount nofun
+    cases body <;> simp only [Control.body?, Option.bind, calledContract] at htimeout <;> cases input <;>
+      simp [hbody, Validate.check, bind, Except.bind, pure, Except.pure, hcount, hkind, htimeout]
+  | branch judge arms =>
+    obtain ⟨hj, hne, hu, hnames, arm, harm, c, hc, hca⟩ := h.branch judge arms rfl
+    obtain ⟨j, hj⟩ := Option.isSome_iff_exists.1 hj
+    simp only [inputType, hj, Option.map_some, Option.some.injEq] at hinput
+    subst hinput
+    have hcount := hcount nofun
+    have harms : (!arms.isEmpty && unique arms && arms.all (!·.isEmpty)) = true := by
+      simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, List.all_eq_true]
+      exact ⟨⟨hne, unique_of_nodup hu⟩, fun a ha => by simpa using hnames a ha⟩
+    have hconn : (arms.any fun arm => (w.outgoing name).any (·.arm == some arm)) = true := by
+      simp only [List.any_eq_true, beq_iff_eq]
+      exact ⟨arm, harm, c, hc, hca⟩
+    simp only [Control.body?, Option.bind] at htimeout
+    simp [hj, harms, hconn, Validate.check, Validate.need, bind, Except.bind, pure, Except.pure, hcount, hkind,
+      htimeout]
+  | waitStream e =>
+    obtain ⟨htype, hwait⟩ := h.waitStream e rfl
+    simp only [inputType, Option.some.injEq] at hinput
+    subst hinput
+    have hcount := hcount nofun
+    have htypes : ∀ at_, validateTypes at_ [e] = .ok () := fun _ => validateTypes_eq_ok.2 (by simpa using htype)
+    simp only [Control.body?, Option.bind] at htimeout
+    simp [htypes, hwait, Validate.check, bind, Except.bind, pure, Except.pure, hcount, hkind,
+      htimeout]
+  | merge e =>
+    obtain ⟨htype, hne, hsingle⟩ := h.merge e rfl
+    dsimp only at hne hsingle hkind
+    have htypes : ∀ at_, validateTypes at_ [e] = .ok () := fun _ => validateTypes_eq_ok.2 (by simpa using htype)
+    simp only [Control.body?, Option.bind] at htimeout
+    simp [htypes, hne, Validate.check, bind, Except.bind, pure, Except.pure, hkind, htimeout]
+    rw [Codec.forIn_ok_of_yield]
+    intro c hc
+    simp [hsingle c hc]
+  | concurrency c =>
+    obtain ⟨htypes, hlimit, hmax, hne, hu, hany, htasks⟩ := h.concurrency c rfl
+    simp only [inputType, Option.some.injEq] at hinput
+    subst hinput
+    have hcount := hcount nofun
+    dsimp only at hkind
+    simp only [Control.body?, Option.bind] at htimeout
+    complete_simp
+    refine ⟨htypes, by simpa using hlimit, by simpa using hmax, by simpa using hne, unique_of_nodup hu,
+      List.any_eq_true.2 hany, (), Codec.forIn_ok_of_yield fun task ht => ?_, c.input, rfl, ?_⟩
+    · simp [validateTask_of_normal (htasks task ht), bind, Except.bind, pure, Except.pure]
+    · split
+      · rename_i hsome
+        complete_simp
+        exact ⟨by simpa using hcount.2 hsome, hkind, htimeout _⟩
+      · complete_simp
+        exact ⟨by simpa using hcount.1, hkind, htimeout _⟩
+
+theorem validateWorkflow_of_normal {w : Workflow} (h : w.Normal p) : p.validateWorkflow w = .ok () := by
+  have hacyclic : w.acyclic = true := by
+    obtain ⟨rank, hrank⟩ := h.acyclic
+    refine acyclic_of_rank (rank := rank) (fun e he => ?_) (by simp)
+    obtain ⟨c, hc, rfl⟩ := List.mem_map.1 he
+    exact hrank c hc
+  have hconnections : ∀ c ∈ w.connections, p.validateConnection w c = .ok () :=
+    fun c hc => validateConnection_of_normal (h.connections c hc)
+  have hplacements : ∀ pl ∈ w.placements, p.validatePlacement w pl = .ok () :=
+    fun pl hpl => validatePlacement_of_normal (h.placements pl hpl)
+  unfold validateWorkflow
+  complete_simp
+  refine ⟨by simpa using h.id, by simpa using h.nonempty, by simpa using h.names, unique_of_nodup h.distinct, (),
+    Codec.forIn_ok_of_yield fun c hc => by simp [hconnections c hc, bind, Except.bind, pure, Except.pure],
+    hacyclic, ?_⟩
+  have hloops : (∃ a, (forIn w.placements PUnit.unit fun (pl : Placement) _ => do
+      p.validatePlacement w pl
+      pure (ForInStep.yield PUnit.unit)) = .ok a) ∧ ∃ a, (forIn w.placements PUnit.unit fun (pl : Placement) _ =>
+        if w.isEndpoint pl.name = true then do
+          Validate.check (w.outputKind? p pl.name == some Kind.single)
+            s!"workflow {w.id}: endpoint {pl.name} must be Single"
+          pure (ForInStep.yield PUnit.unit)
+        else pure (ForInStep.yield PUnit.unit)) = .ok a := by
+    refine ⟨⟨(), Codec.forIn_ok_of_yield fun pl hpl => ?_⟩, (), Codec.forIn_ok_of_yield fun pl hpl => ?_⟩
+    · simp [hplacements pl hpl, bind, Except.bind, pure, Except.pure]
+    · split
+      · rename_i hend
+        simp [Validate.check, h.endpoints pl hpl hend, bind, Except.bind, pure, Except.pure]
+      · rfl
+  rcases hwi : w.input with _ | e
+  · dsimp only
+    complete_simp
+    obtain ⟨⟨a, ha⟩, b, hb⟩ := hloops
+    exact ⟨a, ha, b, hb⟩
+  · dsimp only
+    complete_simp
+    obtain ⟨⟨a, ha⟩, b, hb⟩ := hloops
+    exact ⟨(), validateEntry_of_normal (h.entry e hwi), a, ha, b, hb⟩
+
+/-- The validator is complete: it accepts every normal definition. --/
+theorem validate_of_normal (h : p.Normal) : p.validate = .ok () := by
+  have hcalls : p.callsAcyclic = true := by
+    obtain ⟨rank, hrank⟩ := h.calls
+    refine acyclic_of_rank (rank := rank) (fun e he => ?_) (by simp)
+    obtain ⟨w, hw, he⟩ := List.mem_flatMap.1 he
+    obtain ⟨pl, hpl, he⟩ := List.mem_flatMap.1 he
+    obtain ⟨id, hid, rfl⟩ := List.mem_map.1 he
+    exact hrank w hw pl hpl id hid
+  have hdiscard : (!p.transforms.any (·.id == TransformRef.discardName)) = true := by
+    simp only [Bool.not_eq_true', List.any_eq_false, beq_iff_eq]
+    exact h.discard
+  unfold validate
+  complete_simp
+  refine ⟨unique_of_nodup h.functionIds, unique_of_nodup h.judgeIds, unique_of_nodup h.transformIds, hdiscard,
+    unique_of_nodup h.workflowIds, h.main, hcalls, (), Codec.forIn_ok_of_yield fun f hf => ?_,
+    (), Codec.forIn_ok_of_yield fun j hj => ?_, (), Codec.forIn_ok_of_yield fun t ht => ?_,
+    (), Codec.forIn_ok_of_yield fun w hw => ?_⟩
+  · have : validateFunction f = .ok () := by
+      unfold validateFunction
+      complete_simp
+      exact ⟨by simpa using (h.functions f hf).1, (h.functions f hf).2⟩
+    simp [this, bind, Except.bind, pure, Except.pure]
+  · have : validateJudge j = .ok () := by
+      unfold validateJudge
+      complete_simp
+      exact ⟨by simpa using (h.judges j hj).1, by simpa using (h.judges j hj).2⟩
+    simp [this, bind, Except.bind, pure, Except.pure]
+  · have : validateTransform t = .ok () := by
+      unfold validateTransform
+      complete_simp
+      exact ⟨by simpa using (h.transforms t ht).1, by simpa using (h.transforms t ht).2⟩
+    simp [this, bind, Except.bind, pure, Except.pure]
+  · simp [validateWorkflow_of_normal (h.workflows w hw), bind, Except.bind, pure, Except.pure]
+
+/-- Validation accepts exactly the normal definitions. --/
+theorem validate_eq_ok_iff : p.validate = .ok () ↔ p.Normal :=
+  ⟨normal_of_validate, validate_of_normal⟩
+
+end Definition
 
 end Suimon
 
