@@ -323,18 +323,36 @@ func TestStreamFinishesBeforeBatch(t *testing.T) {
 					t.Errorf("process %s took %.1fms in stream and %.1fms in batch, want at least %.0fms in both", name, s, b, want)
 				}
 			}
-			// Within each run, and so whatever the load: Stream processes while it is still fetching, and
-			// Batch only after it has fetched everything. That this makes Stream finish earlier for the
-			// default input is TestDefaultInputFavoursStream, from the drawn times alone.
 			ss, sr := firstProcess(stream)
 			bs, br := firstProcess(batch)
 			t.Logf("stream: first process at %.0fms, first result at %.0fms, total %.0fms", ss, sr, stream.endMs)
 			t.Logf("batch:  first process at %.0fms, first result at %.0fms, total %.0fms", bs, br, batch.endMs)
-			if fetched := lastEnd(t, stream, "produce"); ss >= fetched {
-				t.Errorf("stream started processing at %.0fms, after produce ended at %.0fms", ss, fetched)
+			// The order of the engine's own operations, which one goroutine records whatever the load:
+			// Stream invokes process while produce is still yielding, and Batch only after produceAll
+			// returned. That this makes Stream finish earlier for the default input is
+			// TestDefaultInputFavoursStream, from the drawn times alone.
+			yields, returns := 0, 0
+			for _, op := range recordedOps(t, stream) {
+				if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
+					break
+				}
+				if _, ok := op.(suimon.OpYielded); ok {
+					yields++
+				}
 			}
-			if fetched := lastEnd(t, batch, "produceAll"); bs < fetched {
-				t.Errorf("batch started processing at %.0fms, before produceAll returned at %.0fms", bs, fetched)
+			if yields == 0 || yields >= len(ps) {
+				t.Errorf("stream invoked process after %d of %d yields, want while produce was still yielding", yields, len(ps))
+			}
+			for _, op := range recordedOps(t, batch) {
+				if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
+					break
+				}
+				if _, ok := op.(suimon.OpReturned); ok {
+					returns++
+				}
+			}
+			if returns == 0 {
+				t.Errorf("batch invoked process before produceAll returned")
 			}
 		})
 	}
@@ -368,20 +386,23 @@ func TestDefaultInputFavoursStream(t *testing.T) {
 	}
 }
 
-// lastEnd returns when the last call of function ended in r.
-func lastEnd(t *testing.T, r *run, function string) float64 {
+// recordedOps decodes the operations of r's record, in record order, after the header.
+func recordedOps(t *testing.T, r *run) []suimon.Op {
 	t.Helper()
-	end := math.Inf(-1)
-	for _, s := range spansOf(r, function) {
-		if s.EndMs == nil {
-			t.Fatalf("%s is still running", function)
+	r.mu.Lock()
+	lines := append([]string(nil), r.lines...)
+	r.mu.Unlock()
+	var ops []suimon.Op
+	for _, line := range lines[1:] {
+		record, err := suimon.DecodeRecord(line)
+		if err != nil {
+			t.Fatalf("record %q: %v", line, err)
 		}
-		end = max(end, *s.EndMs)
+		if !record.Commit {
+			ops = append(ops, record.Op)
+		}
 	}
-	if math.IsInf(end, -1) {
-		t.Fatalf("%s never ran", function)
-	}
-	return end
+	return ops
 }
 
 // processTimes returns how long process took for each item, by name.
