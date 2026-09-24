@@ -398,7 +398,7 @@ theorem beginTask_enabled {e : Execution} {cc : Concurrency} {ts : TaskState} {s
     (hts : e.tasks.find? (·.name == ts.name) = some ts) (hready : ts.status = .ready)
     (hslot : (e.tasks.filter (s.holdsSlot e)).length < cc.limit) (hspec : s.taskSpec p e ts.name = .ok spec)
     (hfun : ∀ f, spec.body = .function f → (p.function? f).isSome ∧ s.call? (Key.task e.id ts.name) = none)
-    (hwf : ∀ wf out, spec.body = .workflow wf out → s.run? (e.run ++ [Key.task e.id ts.name]) = none) :
+    (hwf : ∀ wf out, spec.body = .workflow wf out → s.run? (Key.child (Key.task e.id ts.name)) = none) :
     ∃ t, step p s (.beginTask e.id ts.name) = .ok t ∧ t ≠ s := by
   cases hbody : spec.body with
   | function f =>
@@ -412,11 +412,11 @@ theorem beginTask_enabled {e : Execution} {cc : Concurrency} {ts : TaskState} {s
       ?_, ne_of_calls rfl⟩
     simp [Step.beginTask, started, running, he, hopen, hcc, hts, hready, hslot, hspec, hbody, hdecl, hcall']
   | workflow wf out =>
-    have hrun : (s.setTask e { ts with status := .active }).run? (e.run ++ [State.taskId e.id ts.name]) = none :=
+    have hrun : (s.setTask e { ts with status := .active }).run? (Key.child (State.taskId e.id ts.name)) = none :=
       hwf wf out hbody
     refine ⟨{ s.setTask e { ts with status := .active } with
       runs := s.runs ++ [{
-        path := e.run ++ [State.taskId e.id ts.name], workflow := wf, input := ts.input, owner := some e.id,
+        path := Key.child (State.taskId e.id ts.name), workflow := wf, input := ts.input, owner := some e.id,
         task := some ts.name }] },
       ?_, ne_of_runs rfl⟩
     simp [Step.beginTask, started, running, he, hopen, hcc, hts, hready, hslot, hspec, hbody, hrun]
@@ -502,7 +502,7 @@ theorem invoke_enabled {path : Path} {name : String} {trigger : Option ResultId}
     (hbody : match pl.control with
       | .call (.function f) => (p.function? f).isSome ∧ s.call? (Key.invocation path name trigger) = none
       | .branch _ _ => s.call? (Key.invocation path name trigger) = none
-      | .call (.workflow _ _) => s.run? (path ++ [Key.invocation path name trigger]) = none
+      | .call (.workflow _ _) => s.run? (Key.child (Key.invocation path name trigger)) = none
       | .concurrency _ => s.execution? (Key.invocation path name trigger) = none
       | _ => False) :
     ∃ t, step p s (.invoke path name trigger) = .ok t ∧ t ≠ s := by
@@ -551,7 +551,7 @@ theorem invoke_enabled {path : Path} {name : String} {trigger : Option ResultId}
       invocations := s.invocations ++ [{
         id := Key.invocation path name trigger, run := path, placement := name, trigger, input }]
       runs := s.runs ++ [{
-        path := path ++ [Key.invocation path name trigger], workflow := wf, input,
+        path := Key.child (Key.invocation path name trigger), workflow := wf, input,
         owner := some (Key.invocation path name trigger) }] }, ?_, rfl⟩
     simp only [step_invoke, Step.invoke, h1, ok_bind', hr, need, pure_bind, hopen, Bool.not_false, require_true',
       hw, hpl, hinput, hdup, hwf, run?_withInvocations, hbody, Option.isNone_none]

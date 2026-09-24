@@ -5,7 +5,7 @@ open State
 
 /-! ## Helpers for [5] Round3/Fresh.lean — task B3: identities of results
 
-Each kind of result identity starts with its own tag, so by `identity_injective` an identity tells
+Each kind of result identity starts with its own tag, so by `Key.kind?` an identity tells
 which rule created the result. `ResultKeys` records, for every stored result, the record that
 justifies its identity: the call of an invocation, the settlement, the transformed task result, the
 complete execution or the complete sub-workflow run. It holds in every reachable state
@@ -16,65 +16,36 @@ namespace FreshAux
 /-! ### Identities -/
 
 theorem callResult_inj {a b : String} {m n : Nat} (h : Key.callResult a m = Key.callResult b n) :
-    a = b ∧ m = n := by
-  have h' := identity_injective h
-  simp only [List.cons.injEq, true_and, and_true] at h'
-  exact ⟨h'.1, Nat.repr_injective h'.2⟩
+    a = b ∧ m = n := Key.callResult_inj h
 
 theorem aggregate_inj {a b : Path} {m n : String} (h : Key.aggregate a m = Key.aggregate b n) :
-    a = b ∧ m = n := by
-  have h' := identity_injective h
-  simp only [List.cons.injEq, true_and, and_true] at h'
-  exact ⟨identity_injective h'.1, h'.2⟩
+    a = b ∧ m = n := Key.aggregate_inj h
 
 theorem taskOutput_inj {a b m n : String} {i j : Nat} (h : Key.taskOutput a m i = Key.taskOutput b n j) :
-    a = b ∧ m = n ∧ i = j := by
-  have h' := identity_injective h
-  simp only [List.cons.injEq, true_and, and_true] at h'
-  exact ⟨h'.1, h'.2.1, Nat.repr_injective h'.2.2⟩
+    a = b ∧ m = n ∧ i = j := Key.taskOutput_inj h
 
-theorem list_inj {a b : String} (h : Key.list a = Key.list b) : a = b := by
-  have h' := identity_injective h
-  simpa using h'
+theorem list_inj {a b : String} (h : Key.list a = Key.list b) : a = b := Key.list_inj h
 
-theorem returned_inj {a b : String} (h : Key.returned a = Key.returned b) : a = b := by
-  have h' := identity_injective h
-  simpa using h'
+theorem returned_inj {a b : String} (h : Key.returned a = Key.returned b) : a = b := Key.returned_inj h
 
-theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := by
-  have h' := identity_injective h
-  simpa using h'
+theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := Key.task_inj h
 
 theorem invocation_inj {a b : Path} {m n : String} {t t' : Option String}
-    (h : Key.invocation a m t = Key.invocation b n t') : a = b ∧ m = n ∧ t = t' := by
-  have h' := identity_injective h
-  simp only [List.cons_append, List.cons.injEq, true_and, List.nil_append] at h'
-  refine ⟨identity_injective h'.1, h'.2.1, ?_⟩
-  have h3 := h'.2.2
-  cases t <;> cases t' <;> simp_all
+    (h : Key.invocation a m t = Key.invocation b n t') : a = b ∧ m = n ∧ t = t' := Key.invocation_inj h
 
 theorem invocation_ne_task {a : Path} {m b n : String} {t : Option String} :
-    Key.invocation a m t ≠ Key.task b n := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.invocation a m t ≠ Key.task b n := Key.invocation_ne_task
 
 theorem aggregate_ne_callResult {path : Path} {name x : String} {k : Nat} :
-    Key.aggregate path name ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.aggregate path name ≠ Key.callResult x k := Key.aggregate_ne_callResult
 
 theorem taskOutput_ne_callResult {e n x : String} {i k : Nat} : Key.taskOutput e n i ≠ Key.callResult x k :=
-  fun h => by
-    have h' := identity_injective h
-    simp at h'
+  Key.taskOutput_ne_callResult
 
-theorem list_ne_callResult {e x : String} {k : Nat} : Key.list e ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem list_ne_callResult {e x : String} {k : Nat} : Key.list e ≠ Key.callResult x k := Key.list_ne_callResult
 
-theorem returned_ne_callResult {o x : String} {k : Nat} : Key.returned o ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem returned_ne_callResult {o x : String} {k : Nat} : Key.returned o ≠ Key.callResult x k :=
+  Key.returned_ne_callResult
 
 /-! ### What a result identity says -/
 
@@ -110,59 +81,42 @@ theorem ResultKey.callResult {s : State} {r : Result} (h : ResultKey s r) {x : S
     (hid : r.id = Key.callResult x k) : ∃ c ∈ s.calls, c.task = none ∧ c.id = x := by
   rcases h with ⟨c, hc, htask, k', h'⟩ | ⟨_, _, h', -⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, _, -, -, -, h'⟩
   · exact ⟨c, hc, htask, (callResult_inj (h'.symm.trans hid)).1⟩
-  all_goals
-    have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  all_goals exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
 
 theorem ResultKey.aggregate {s : State} {r : Result} (h : ResultKey s r) {path : Path} {name : String}
     (hid : r.id = Key.aggregate path name) : (s.settled? path name).isSome := by
   rcases h with ⟨_, -, -, _, h'⟩ | ⟨path', name', h', hx⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, _, -, -, -, h'⟩
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
   · obtain ⟨rfl, rfl⟩ := aggregate_inj (h'.symm.trans hid)
     exact hx
-  all_goals
-    have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  all_goals exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
 
 theorem ResultKey.taskOutput {s : State} {r : Result} (h : ResultKey s r) {e n : String} {i : Nat}
     (hid : r.id = Key.taskOutput e n i) :
     ∃ tr ∈ s.taskResults, tr.output ≠ .pending ∧ tr.execution = e ∧ tr.task = n ∧ tr.index = i := by
   rcases h with ⟨_, -, -, _, h'⟩ | ⟨_, _, h', -⟩ | ⟨tr, htr, hout, h'⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, _, -, -, -, h'⟩
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
   · obtain ⟨h1, h2, h3⟩ := taskOutput_inj (h'.symm.trans hid)
     exact ⟨tr, htr, hout, h1, h2, h3⟩
-  all_goals
-    have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  all_goals exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
 
 theorem ResultKey.list {s : State} {r : Result} (h : ResultKey s r) {e : String} (hid : r.id = Key.list e) :
     ∃ x ∈ s.executions, x.id = e ∧ x.complete = true := by
   rcases h with ⟨_, -, -, _, h'⟩ | ⟨_, _, h', -⟩ | ⟨_, -, -, h'⟩ | ⟨x, hx, hcomp, h'⟩ | ⟨_, -, _, -, -, -, h'⟩
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
   · exact ⟨x, hx, list_inj (h'.symm.trans hid), hcomp⟩
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
 
 theorem ResultKey.returned {s : State} {r : Result} (h : ResultKey s r) {o : String} (hid : r.id = Key.returned o) :
     ∃ run ∈ s.runs, run.owner = some o ∧ run.task = none ∧ run.complete = true := by
   rcases h with ⟨_, -, -, _, h'⟩ | ⟨_, _, h', -⟩ | ⟨_, -, -, h'⟩ | ⟨_, -, -, h'⟩ | ⟨run, hrun, o', ho, htask, hcomp, h'⟩
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
-  · have h'' := identity_injective (h'.symm.trans hid)
-    simp at h''
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
+  · exact absurd (h'.symm.trans hid) (Key.ne_of_kind? (by simp))
   · obtain rfl := returned_inj (h'.symm.trans hid)
     exact ⟨run, hrun, ho, htask, hcomp⟩
 

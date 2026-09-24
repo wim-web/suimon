@@ -11,14 +11,11 @@ variable {p : Definition} {s t : State} {op : Op}
 
 /-! ### Identities -/
 
-theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := by
-  have h' := identity_injective h
-  simpa using h'
+theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := Key.task_inj h
 
 theorem invocation_ne_task {a : Path} {m b n : String} {tr : Option String} :
-    Key.invocation a m tr ≠ Key.task b n := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.invocation a m tr ≠ Key.task b n :=
+  Key.ne_of_kind? (by simp)
 
 /-! ### The root run completes only by the conclusion from a running state -/
 
@@ -53,7 +50,7 @@ theorem step_done (hs : step p s op = .ok t) (hd : Done t) :
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, -, -, rfl⟩
     · exact same rfl
     · exact same rfl
-    · exact app (by simp) rfl
+    · exact app (Key.child_ne_nil _) rfl
     · exact same rfl
   | fetch id =>
     obtain ⟨-, -, _, -, -, -, rfl⟩ := Step.fetch_inv hs
@@ -99,7 +96,7 @@ theorem step_done (hs : step p s op = .ok t) (hd : Done t) :
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, -, h⟩ := Step.beginTask_inv hs
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩
     · exact same rfl
-    · exact app (by simp) rfl
+    · exact app (Key.child_ne_nil _) rfl
   | taskOutput eid name index value =>
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, h⟩ := Step.taskOutput_inv hs
     rcases h with ⟨-, -, rfl⟩ | ⟨-, rfl⟩ <;> exact same rfl

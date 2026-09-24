@@ -209,7 +209,7 @@ theorem step_root (hs : step p s op = .ok t) : RootStep op s t := by
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, -, -, rfl⟩
     · exact RootStep.of_runs rfl rfl
     · exact RootStep.of_runs rfl rfl
-    · exact RootStep.of_append (by simp) rfl rfl
+    · exact RootStep.of_append (Key.child_ne_nil _) rfl rfl
     · exact RootStep.of_runs rfl rfl
   | fetch id =>
     obtain ⟨-, -, _, -, -, -, rfl⟩ := Step.fetch_inv hs
@@ -264,7 +264,7 @@ theorem step_root (hs : step p s op = .ok t) : RootStep op s t := by
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, -, h⟩ := Step.beginTask_inv hs
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩
     · exact RootStep.of_runs rfl rfl
-    · exact RootStep.of_append (by simp) rfl rfl
+    · exact RootStep.of_append (Key.child_ne_nil _) rfl rfl
   | taskOutput eid name index value =>
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, h⟩ := Step.taskOutput_inv hs
     rcases h with ⟨-, -, rfl⟩ | ⟨-, rfl⟩ <;> exact RootStep.of_runs rfl rfl

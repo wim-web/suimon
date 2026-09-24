@@ -30,7 +30,7 @@
       "type": "boolean"
     },
     "path": {
-      "description": "A run: [] is the root run; a sub-workflow call appends the identity of its owner.",
+      "description": "A run: [] is the root run; the run of a sub-workflow call or of a workflow task appends the label of its owner in the calling run. The identity of a record encodes its run path followed by its own label.",
       "type": "array",
       "items": {
         "type": "string"

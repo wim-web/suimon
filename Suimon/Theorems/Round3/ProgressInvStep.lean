@@ -94,7 +94,7 @@ def InvBody (p : Definition) (s : State) (i : Invocation) : Prop :=
     (((∃ f, pl.control = .call (.function f)) ∨ (∃ j arms, pl.control = .branch j arms)) →
         ∃ c ∈ s.calls, c.id = i.id ∧ c.owner = i.id ∧ c.task = none) ∧
     (∀ wf out, pl.control = .call (.workflow wf out) →
-        ∃ r ∈ s.runs, r.path = i.run ++ [i.id] ∧ r.owner = some i.id ∧ r.task = none ∧ r.workflow = wf) ∧
+        ∃ r ∈ s.runs, r.path = Key.child i.id ∧ r.owner = some i.id ∧ r.task = none ∧ r.workflow = wf) ∧
     (∀ cc, pl.control = .concurrency cc → ∃ e ∈ s.executions, e.id = i.id)
 
 /-- The invocations of `t` are those of `s`, or updates of them to a status that is not active. -/
@@ -163,14 +163,14 @@ theorem step_invocations {op : Op} (hs : step p s op = .ok t) : ∀ i ∈ t.invo
   | invoke path name trigger =>
     obtain ⟨-, -, r, w, pl, input, id, hr, -, hw, hpl, -, rfl, -, hid', h⟩ := Step.invoke_inv hs
     have hwf : s.workflow? p path = some w := Delivery.workflow?_iff.mpr ⟨r, hr, hw⟩
-    have hpath : path ++ [Key.invocation path name trigger] ≠ path := append_ne_self _ _
+    have hpath : Key.child (Key.invocation path name trigger) ≠ path := Key.child_invocation_ne _ _ _
     -- The new invocation is found with its placement, and its body was stored with it.
     have body : ∀ {t' : State}, t'.workflow? p path = s.workflow? p path →
         ((((∃ f, pl.control = .call (.function f)) ∨ (∃ j arms, pl.control = .branch j arms)) →
           ∃ c ∈ t'.calls, c.id = Key.invocation path name trigger ∧ c.owner = Key.invocation path name trigger ∧
             c.task = none) ∧
         (∀ wf out, pl.control = .call (.workflow wf out) →
-          ∃ r ∈ t'.runs, r.path = path ++ [Key.invocation path name trigger] ∧
+          ∃ r ∈ t'.runs, r.path = Key.child (Key.invocation path name trigger) ∧
             r.owner = some (Key.invocation path name trigger) ∧ r.task = none ∧ r.workflow = wf) ∧
         (∀ cc, pl.control = .concurrency cc → ∃ e ∈ t'.executions, e.id = Key.invocation path name trigger)) →
         InvBody p t' { id := Key.invocation path name trigger, run := path, placement := name, trigger, input } := by
@@ -710,8 +710,8 @@ theorem step_runs {op : Op} (inv : Delivery.Inv p s) (hs : step p s op = .ok t) 
       refine RunCase.setRun hrm rfl (Or.inl ?_)
       rcases inv.own.runs r hrm with ⟨ho, -, -⟩ | ⟨-, i, -, -, hp, -⟩ | ⟨name, -, e, -, -, hp, -⟩
       · exact ho
-      · rw [hrp] at hp; simp at hp
-      · rw [hrp] at hp; simp at hp
+      · rw [hrp] at hp; exact absurd hp.symm (Key.child_ne_nil _)
+      · rw [hrp] at hp; exact absurd hp.symm (Key.child_ne_nil _)
     · exact RunCase.of_eq rfl
 
 /-! ### Executions and tasks -/
@@ -719,7 +719,7 @@ theorem step_runs {op : Op} (inv : Delivery.Inv p s) (hs : step p s op = .ok t) 
 /-- The body of an active task: a call that has not ended, or a run that is open (§8.2). -/
 def TaskBody (s : State) (e : Execution) (name : String) : Prop :=
   (∃ c ∈ s.calls, c.id = Key.task e.id name ∧ c.owner = e.id ∧ c.task = some name ∧ c.status.ended = false) ∨
-  (∃ r ∈ s.runs, r.path = e.run ++ [Key.task e.id name] ∧ r.owner = some e.id ∧ r.task = some name ∧
+  (∃ r ∈ s.runs, r.path = Key.child (Key.task e.id name) ∧ r.owner = some e.id ∧ r.task = some name ∧
     r.complete = false)
 
 /-- How one task may move in one step: it keeps its status, ends, takes its input (pending to ready), or
@@ -785,19 +785,19 @@ theorem Post.fail {f : Failure} {policy : Policy} : Post u (u.fail f policy) := 
   · exact Post.of_eq (by simp) (by simp) rfl rfl
 
 theorem TaskBody.post {e e' : Execution} {name : String} (h : TaskBody u e name) (hp : Post u t)
-    (hid : e'.id = e.id) (hrun : e'.run = e.run) : TaskBody t e' name := by
+    (hid : e'.id = e.id) : TaskBody t e' name := by
   rcases h with ⟨c, hc, h1, h2, h3, h4⟩ | ⟨r, hr, h1, h2, h3, h4⟩
   · obtain ⟨c', hc', a1, a2, a3, a4⟩ := hp.calls c hc
     exact Or.inl ⟨c', hc', by rw [a1, h1, hid], by rw [a2, h2, hid], by rw [a3, h3], a4 h4⟩
-  · exact Or.inr ⟨r, hp.runs ▸ hr, by rw [h1, hid, hrun], by rw [h2, hid], h3, h4⟩
+  · exact Or.inr ⟨r, hp.runs ▸ hr, by rw [h1, hid], by rw [h2, hid], h3, h4⟩
 
 theorem Moved.post {e e' : Execution} {name : String} {a b : TaskStatus} (h : Moved u e name a b) (hp : Post u t)
-    (hid : e'.id = e.id) (hrun : e'.run = e.run) : Moved t e' name a b := by
+    (hid : e'.id = e.id) : Moved t e' name a b := by
   rcases h with h | h | h | ⟨h1, h2, h3⟩
   · exact Or.inl h
   · exact Or.inr (Or.inl h)
   · exact Or.inr (Or.inr (Or.inl h))
-  · exact Or.inr (Or.inr (Or.inr ⟨h1, h2, h3.post hp hid hrun⟩))
+  · exact Or.inr (Or.inr (Or.inr ⟨h1, h2, h3.post hp hid⟩))
 
 /-- A case of every execution carries over a step that keeps what it reads (`Post`). -/
 theorem ExecCase.post (h : ∀ e ∈ u.executions, ExecCase p s u e) (hp : Post u t) :
@@ -812,7 +812,7 @@ theorem ExecCase.post (h : ∀ e ∈ u.executions, ExecCase p s u e) (hp : Post 
         · exact Or.inl hc
         · exact Or.inr fun i hi => hc i (hp.invocations ▸ hi)
       · obtain ⟨tk₀, htk₀, hn, hm⟩ := htasks tk htk
-        exact ⟨tk₀, htk₀, hn, hm.post hp rfl rfl⟩
+        exact ⟨tk₀, htk₀, hn, hm.post hp rfl⟩
     · refine Or.inr ⟨h1, h2, fun tk htk => ⟨(htasks tk htk).1, fun hpend cc hcc => ?_⟩⟩
       rw [conc] at hcc
       exact (htasks tk htk).2 hpend cc hcc
@@ -830,7 +830,7 @@ theorem ExecCase.post (h : ∀ e ∈ u.executions, ExecCase p s u e) (hp : Post 
         rcases stopTask_status tk' with hst | hst
         · exact Or.inr (Or.inl (by rw [hst]; rfl))
         · rw [hst]
-          exact hm.post hp rfl rfl
+          exact hm.post hp rfl
     · refine Or.inr ⟨h1, h2, fun tk htk => ?_⟩
       rw [Limit.stopExecution_tasks] at htk
       obtain ⟨tk', htk', rfl⟩ := List.mem_map.mp htk
@@ -1064,7 +1064,7 @@ theorem step_root {op : Op} (hs : step p s op = .ok t) (started : s.started = tr
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, -, -, rfl⟩
     · exact keep rfl
     · exact keep rfl
-    · exact Or.inl (by rw [run?_append_ne rfl (by simp), hr₀])
+    · exact Or.inl (by rw [run?_append_ne rfl (Key.child_ne_nil _), hr₀])
     · exact keep rfl
   | fetch id =>
     obtain ⟨-, -, _, -, -, -, rfl⟩ := Step.fetch_inv hs
@@ -1110,7 +1110,7 @@ theorem step_root {op : Op} (hs : step p s op = .ok t) (started : s.started = tr
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, -, h⟩ := Step.beginTask_inv hs
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩
     · exact keep rfl
-    · exact Or.inl (by rw [run?_append_ne rfl (by simp), hr₀])
+    · exact Or.inl (by rw [run?_append_ne rfl (Key.child_ne_nil _), hr₀])
   | taskOutput eid name index value =>
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, h⟩ := Step.taskOutput_inv hs
     rcases h with ⟨-, -, rfl⟩ | ⟨-, rfl⟩ <;> exact keep rfl

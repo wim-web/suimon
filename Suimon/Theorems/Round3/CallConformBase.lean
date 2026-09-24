@@ -21,28 +21,20 @@ theorem ite_of_neg {α : Type} {c : Prop} [Decidable c] {a b : α} (h : ¬c) : (
 /-! ### Identities -/
 
 theorem callResult_inj {a b : String} {m n : Nat} (h : Key.callResult a m = Key.callResult b n) :
-    a = b ∧ m = n := by
-  have h' := identity_injective h
-  simp only [List.cons.injEq, true_and, and_true] at h'
-  exact ⟨h'.1, Nat.repr_injective h'.2⟩
+    a = b ∧ m = n := Key.callResult_inj h
 
 theorem aggregate_ne_callResult {path : Path} {name x : String} {k : Nat} :
-    Key.aggregate path name ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.aggregate path name ≠ Key.callResult x k :=
+  Key.ne_of_kind? (by simp)
 
 theorem taskOutput_ne_callResult {e n x : String} {i k : Nat} : Key.taskOutput e n i ≠ Key.callResult x k :=
-  fun h => by
-    have h' := identity_injective h
-    simp at h'
+  Key.ne_of_kind? (by simp)
 
-theorem list_ne_callResult {e x : String} {k : Nat} : Key.list e ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem list_ne_callResult {e x : String} {k : Nat} : Key.list e ≠ Key.callResult x k :=
+  Key.ne_of_kind? (by simp)
 
-theorem returned_ne_callResult {o x : String} {k : Nat} : Key.returned o ≠ Key.callResult x k := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem returned_ne_callResult {o x : String} {k : Nat} : Key.returned o ≠ Key.callResult x k :=
+  Key.ne_of_kind? (by simp)
 
 /-! ### The root run
 
@@ -71,7 +63,7 @@ theorem step_root {op : Op} (hs : step p s op = .ok t) (hop : op ≠ .conclude) 
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩ | ⟨_, -, -, rfl⟩
     · exact keep rfl
     · exact keep rfl
-    · rw [run?_append_ne rfl (by simp)]
+    · rw [run?_append_ne rfl (Key.child_ne_nil _)]
       exact id
     · exact keep rfl
   | fetch id =>
@@ -118,7 +110,7 @@ theorem step_root {op : Op} (hs : step p s op = .ok t) (hop : op ≠ .conclude) 
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, -, h⟩ := Step.beginTask_inv hs
     rcases h with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩
     · exact keep rfl
-    · rw [run?_append_ne (s := s) rfl (by simp)]
+    · rw [run?_append_ne (s := s) rfl (Key.child_ne_nil _)]
       exact id
   | taskOutput eid name index value =>
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, h⟩ := Step.taskOutput_inv hs

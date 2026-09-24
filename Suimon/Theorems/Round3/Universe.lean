@@ -84,7 +84,7 @@ def runUniverse (p : Definition) (B : Behavior) : Nat → Path → Workflow → 
       match pl.control with
       | .call (.function _) | .branch .. => own ++ { invocations := ids, calls := ids }
       | .call (.workflow wf _) =>
-        own ++ { invocations := ids } ++ Universe.join (ids.map fun id => child (path ++ [id]) wf)
+        own ++ { invocations := ids } ++ Universe.join (ids.map fun id => child (Key.child id) wf)
       | .concurrency cc =>
         own ++ { invocations := ids, executions := ids } ++ Universe.join (ids.map fun id =>
           ({ tasks := cc.tasks.map fun t => (id, t.name)
@@ -94,7 +94,7 @@ def runUniverse (p : Definition) (B : Behavior) : Nat → Path → Workflow → 
              taskResults := cc.tasks.flatMap fun t => (steps (Key.task id t.name)).map fun j => (id, t.name, j) } :
             Universe) ++
           Universe.join (cc.tasks.map fun t => match t.body with
-            | .workflow wf _ => child (path ++ [Key.task id t.name]) wf
+            | .workflow wf _ => child (Key.child (Key.task id t.name)) wf
             | .function _ => {}))
       | .waitStream _ | .merge _ => own
     ({ runs := [path] } : Universe) ++ Universe.join (w.placements.map perPlacement)
@@ -248,7 +248,7 @@ def childU (p : Definition) (B : Behavior) (depth : Nat) (childPath : Path) (wf 
   | none => {}
 
 /-- The records the universe keeps for one invocation of a concurrency. -/
-def execU (p : Definition) (B : Behavior) (depth : Nat) (path : Path) (cc : Concurrency) (id : String) : Universe :=
+def execU (p : Definition) (B : Behavior) (depth : Nat) (cc : Concurrency) (id : String) : Universe :=
   ({ tasks := cc.tasks.map fun t => (id, t.name)
      calls := cc.tasks.filterMap fun t => match t.body with
        | .function _ => some (Key.task id t.name)
@@ -256,7 +256,7 @@ def execU (p : Definition) (B : Behavior) (depth : Nat) (path : Path) (cc : Conc
      taskResults := cc.tasks.flatMap fun t => (stepsOf B (Key.task id t.name)).map fun j => (id, t.name, j) } :
     Universe) ++
   Universe.join (cc.tasks.map fun t => match t.body with
-    | .workflow wf _ => childU p B depth (path ++ [Key.task id t.name]) wf
+    | .workflow wf _ => childU p B depth (Key.child (Key.task id t.name)) wf
     | .function _ => {})
 
 /-- The part of a run's universe every placement has, whatever its control: its settlement, its
@@ -273,9 +273,9 @@ def perPlacement (p : Definition) (B : Behavior) (depth : Nat) (path : Path) (w 
   | .call (.function _) | .branch .. => ownU p B path w pl ++ { invocations := ids, calls := ids }
   | .call (.workflow wf _) =>
     ownU p B path w pl ++ { invocations := ids } ++
-      Universe.join (ids.map fun id => childU p B depth (path ++ [id]) wf)
+      Universe.join (ids.map fun id => childU p B depth (Key.child id) wf)
   | .concurrency cc =>
-    ownU p B path w pl ++ { invocations := ids, executions := ids } ++ Universe.join (ids.map (execU p B depth path cc))
+    ownU p B path w pl ++ { invocations := ids, executions := ids } ++ Universe.join (ids.map (execU p B depth cc))
   | .waitStream _ | .merge _ => ownU p B path w pl
 
 /-- One unfolding of `runUniverse`. -/
@@ -571,7 +571,7 @@ theorem perPlacement_executions {p : Definition} {B : Behavior} {d : Nat} {path 
 theorem sub_execU {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} {cc : Concurrency} (hctrl : pl.control = .concurrency cc)
     (ht : trig ∈ triggersIn p B path w pl.name) :
-    Sub (execU p B d path cc (Key.invocation path pl.name trig)) (perPlacement p B d path w pl) := by
+    Sub (execU p B d cc (Key.invocation path pl.name trig)) (perPlacement p B d path w pl) := by
   have hid : Key.invocation path pl.name trig ∈ (triggersIn p B path w pl.name).map (Key.invocation path pl.name) :=
     List.mem_map.2 ⟨trig, ht, rfl⟩
   rcases pl with ⟨name, control, policy, timeout⟩
@@ -582,41 +582,41 @@ theorem sub_execU {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : W
 theorem sub_childU_call {p : Definition} {B : Behavior} {d : Nat} {path : Path} {w : Workflow}
     {pl : Placement} {trig : Option ResultId} {wf out : String} (hctrl : pl.control = .call (.workflow wf out))
     (ht : trig ∈ triggersIn p B path w pl.name) :
-    Sub (childU p B d (path ++ [Key.invocation path pl.name trig]) wf) (perPlacement p B d path w pl) := by
+    Sub (childU p B d (Key.child (Key.invocation path pl.name trig)) wf) (perPlacement p B d path w pl) := by
   have hid : Key.invocation path pl.name trig ∈ (triggersIn p B path w pl.name).map (Key.invocation path pl.name) :=
     List.mem_map.2 ⟨trig, ht, rfl⟩
-  have hmem : childU p B d (path ++ [Key.invocation path pl.name trig]) wf ∈
+  have hmem : childU p B d (Key.child (Key.invocation path pl.name trig)) wf ∈
       ((triggersIn p B path w pl.name).map (Key.invocation path pl.name)).map
-        (fun id => childU p B d (path ++ [id]) wf) :=
-    List.mem_map_of_mem (f := fun id => childU p B d (path ++ [id]) wf) hid
+        (fun id => childU p B d (Key.child id) wf) :=
+    List.mem_map_of_mem (f := fun id => childU p B d (Key.child id) wf) hid
   rcases pl with ⟨name, control, policy, timeout⟩
   dsimp only at hctrl; subst hctrl
   exact (Sub.join hmem).trans (Sub.right _ _)
 
-theorem execU_tasks {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
-    {task : TaskSpec} (htask : task ∈ cc.tasks) : (id, task.name) ∈ (execU p B d path cc id).tasks := by
+theorem execU_tasks {p : Definition} {B : Behavior} {d : Nat} {cc : Concurrency} {id : String}
+    {task : TaskSpec} (htask : task ∈ cc.tasks) : (id, task.name) ∈ (execU p B d cc id).tasks := by
   simp only [execU, append_tasks]
   exact List.mem_append_left _ (List.mem_map.2 ⟨task, htask, rfl⟩)
 
-theorem execU_calls {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem execU_calls {p : Definition} {B : Behavior} {d : Nat} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {f : String} (hbody : task.body = .function f) :
-    Key.task id task.name ∈ (execU p B d path cc id).calls := by
+    Key.task id task.name ∈ (execU p B d cc id).calls := by
   simp only [execU, append_calls]
   exact List.mem_append_left _ (List.mem_filterMap.2 ⟨task, htask, by rw [hbody]⟩)
 
-theorem execU_taskResults {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem execU_taskResults {p : Definition} {B : Behavior} {d : Nat} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {j : Nat}
     (hj : j < max 1 (B.script (Key.task id task.name)).yields.length) :
-    (id, task.name, j) ∈ (execU p B d path cc id).taskResults := by
+    (id, task.name, j) ∈ (execU p B d cc id).taskResults := by
   simp only [execU, append_taskResults]
   exact List.mem_append_left _ (List.mem_flatMap.2 ⟨task, htask, List.mem_map.2 ⟨j, mem_stepsOf hj, rfl⟩⟩)
 
 /-- A workflow task has its run. -/
-theorem sub_childU_task {p : Definition} {B : Behavior} {d : Nat} {path : Path} {cc : Concurrency} {id : String}
+theorem sub_childU_task {p : Definition} {B : Behavior} {d : Nat} {cc : Concurrency} {id : String}
     {task : TaskSpec} (htask : task ∈ cc.tasks) {wf out : String} (hbody : task.body = .workflow wf out) :
-    Sub (childU p B d (path ++ [Key.task id task.name]) wf) (execU p B d path cc id) := by
+    Sub (childU p B d (Key.child (Key.task id task.name)) wf) (execU p B d cc id) := by
   have hmem := List.mem_map_of_mem (f := fun t : TaskSpec => match t.body with
-    | .workflow wf _ => childU p B d (path ++ [Key.task id t.name]) wf
+    | .workflow wf _ => childU p B d (Key.child (Key.task id t.name)) wf
     | .function _ => ({} : Universe)) htask
   simp only [hbody] at hmem
   exact (Sub.join hmem).trans (Sub.right _ _)
@@ -877,7 +877,7 @@ theorem execution_ctx (reach : Reachable p s)
     (hres : ∀ r ∈ s.results, ∀ w, s.workflow? p r.run = some w → r.id ∈ resultsIn p B r.run w r.placement)
     (hrun : RunU p B rank s) {e : Execution} (he : e ∈ s.executions) :
     ∃ cc d, s.concurrencyOf p e = .ok cc ∧ e.id ∈ (universeOf p B).executions ∧
-      Sub (execU p B d e.run cc e.id) (universeOf p B) := by
+      Sub (execU p B d cc e.id) (universeOf p B) := by
   obtain ⟨i, hi, hie, hir, hip, cc, hcc⟩ := (Delivery.Reachable.inv reach).own.executions e he
   obtain ⟨w, pl, d, hw, hpl, -, htrig, hid, hsub⟩ := invocation_ctx reach hres hrun hi
   obtain ⟨pl', hpl', hctrl⟩ := State.concurrencyOf_eq_ok.mp hcc
@@ -892,7 +892,7 @@ theorem execution_ctx (reach : Reachable p s)
   · have := hsub.executions _ (perPlacement_executions hctrl htrig)
     rwa [hkey] at this
   · have := (sub_execU hctrl htrig).trans hsub
-    rwa [hkey, hir] at this
+    rwa [hkey] at this
 
 /-- The task names of an execution are those of its concurrency. -/
 theorem execution_names (reach : Reachable p s) {e : Execution} (he : e ∈ s.executions) {cc : Concurrency}

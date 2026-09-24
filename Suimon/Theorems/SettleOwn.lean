@@ -20,6 +20,21 @@ theorem empty : Own p {} where
   invId := by simp
   invPlaced := by simp
 
+/-- An execution's identity is its invocation's, so it names the execution's run. --/
+theorem scope_execution (h : Own p s) {e : Execution} (he : e ∈ s.executions) : Key.scope e.id = e.run := by
+  obtain ⟨i, hi, hid, hrun, -⟩ := h.execOwner e he
+  rw [← hid, h.invId i hi, Key.scope_invocation, hrun]
+
+/-- The run of a sub-workflow invocation is one level below the invocation's run. --/
+theorem length_child_invocation (h : Own p s) {i : Invocation} (hi : i ∈ s.invocations) :
+    (Key.child i.id).length = i.run.length + 1 := by
+  rw [h.invId i hi, Key.length_child_invocation]
+
+/-- The run of a workflow task is one level below its execution's run. --/
+theorem length_child_task (h : Own p s) {e : Execution} (he : e ∈ s.executions) (name : String) :
+    (Key.child (Key.task e.id name)).length = e.run.length + 1 := by
+  rw [Key.length_child_task, h.scope_execution he]
+
 /-- Ownership only depends on the keys of the records and on the workflows of the runs. --/
 theorem of_keys (h : Own p s) (hw : KeepsWorkflows p s t)
     (hc : t.calls.map callKey = s.calls.map callKey) (hi : t.invocations.map invKey = s.invocations.map invKey)
@@ -61,7 +76,7 @@ theorem of_keys (h : Own p s) (hw : KeepsWorkflows p s t)
     obtain ⟨i', hi', hk'⟩ := exists_of_map_eq hi hi0
     simp only [invKey_eq] at hk'
     obtain ⟨hid', hrun', hpl', -⟩ := hk'
-    refine ⟨i', hi', by rw [hid', hio], by rw [← hpath, hipath, hrun', hid'], pl, wf, out, ?_, hctrl⟩
+    refine ⟨i', hi', by rw [hid', hio], by rw [← hpath, hipath, hid'], pl, wf, out, ?_, hctrl⟩
     rw [hrun', hpl']
     exact hw.placementAt hpl
   callTask := by
@@ -84,7 +99,7 @@ theorem of_keys (h : Own p s) (hw : KeepsWorkflows p s t)
     obtain ⟨e', he', hk'⟩ := exists_of_map_eq he he0
     simp only [execKey_eq] at hk'
     obtain ⟨hid', hrun', hpl', -⟩ := hk'
-    refine ⟨e', he', by rw [← howner, heo, hid'], by rw [← hpath, hepath, hrun', hid'], spec, wf, out, ?_, hbody⟩
+    refine ⟨e', he', by rw [← howner, heo, hid'], by rw [← hpath, hepath, hid'], spec, wf, out, ?_, hbody⟩
     exact hw.taskSpec hrun' hpl' hspec
   invId := by
     intro i' hi'
@@ -183,10 +198,10 @@ theorem appendExecution (h : Own p s) {e : Execution}
 /-- Recording a new run keeps ownership. --/
 theorem appendRun (h : Own p s) {r : Run}
     (hnone : ∀ o, r.owner = some o → r.task = none → ∃ i ∈ s.invocations, i.id = o ∧
-      r.path = i.run ++ [i.id] ∧ ∃ pl wf out, placementAt p s i.run i.placement = some pl ∧
+      r.path = Key.child i.id ∧ ∃ pl wf out, placementAt p s i.run i.placement = some pl ∧
         pl.control = .call (.workflow wf out))
     (hsome : ∀ name, r.task = some name → ∃ e ∈ s.executions, r.owner = some e.id ∧
-      r.path = e.run ++ [Key.task e.id name] ∧ ∃ spec wf out, s.taskSpec p e name = .ok spec ∧
+      r.path = Key.child (Key.task e.id name) ∧ ∃ spec wf out, s.taskSpec p e name = .ok spec ∧
         spec.body = .workflow wf out) :
     Own p { s with runs := s.runs ++ [r] } := by
   have hw : KeepsWorkflows p s { s with runs := s.runs ++ [r] } := KeepsWorkflows.of_append rfl
@@ -344,7 +359,7 @@ theorem step (h : Own p s) (wk : s.WellKeyed) (h0 : s = {} ∨ s.started = true)
         (fun name' h' => by
           simp only [Option.some.injEq] at h'
           subst h'
-          exact ⟨_, hmem, rfl, rfl, spec, wf, out, hspec', hbody⟩)
+          exact ⟨withTask e { ts with status := .active }, hmem, rfl, rfl, spec, wf, out, hspec', hbody⟩)
   | taskOutput eid name index value =>
     obtain ⟨-, -, _, _, _, _, -, -, -, -, -, -, hcases⟩ := Step.taskOutput_inv hs
     rcases hcases with ⟨-, -, rfl⟩ | ⟨-, rfl⟩

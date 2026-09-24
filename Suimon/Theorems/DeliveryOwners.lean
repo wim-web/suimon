@@ -41,7 +41,7 @@ theorem call_placement (own : Own p s) (wk : s.WellKeyed) {c : Call} (hc : c ∈
 /-- A run without a task belongs to the invocation of a sub-workflow call, under a path of its own. --/
 theorem run_placement (own : Own p s) (wk : s.WellKeyed) {r : Run} (hr : r ∈ s.runs) (htask : r.task = none)
     {i : Invocation} (hi : i ∈ s.invocations) (howner : r.owner = some i.id) :
-    r.path = i.run ++ [i.id] ∧ ∃ pl, PlacementOf p s i pl ∧ ∃ wf out, pl.control = .call (.workflow wf out) := by
+    r.path = Key.child i.id ∧ ∃ pl, PlacementOf p s i pl ∧ ∃ wf out, pl.control = .call (.workflow wf out) := by
   rcases own.runs r hr with ⟨ho, -, -⟩ | ⟨-, i', hi', ho, hp, w, pl, wf, out, hw, hpl, hc⟩ | ⟨name, ht, -⟩
   · rw [howner] at ho; cases ho
   · obtain rfl := wk.invocation_eq_of_id hi' hi (Option.some.inj (ho.symm.trans howner))

@@ -228,7 +228,7 @@ theorem body_output (valid : p.validate = .ok ()) {at_ wf out : String} {input :
 theorem subrun_output (valid : p.validate = .ok ()) (h : Reachable p s) {i : Invocation} (hi : i ∈ s.invocations)
     {w : Workflow} {pl : Placement} (hw : s.workflow? p i.run = some w) (hpl : w.placement? i.placement = some pl)
     {wf out : String} (hctrl : pl.control = .call (.workflow wf out)) :
-    ∃ R ∈ s.runs, R.path = i.run ++ [i.id] ∧ R.owner = some i.id ∧ R.task = none ∧ R.workflow = wf ∧
+    ∃ R ∈ s.runs, R.path = Key.child i.id ∧ R.owner = some i.id ∧ R.task = none ∧ R.workflow = wf ∧
       s.designatedOutput p R = .ok out ∧ ∃ w' plo, p.workflow? wf = some w' ∧ w'.placement? out = some plo ∧
         plo ∈ w'.placements ∧ w'.outputKind? p out = some .single := by
   obtain ⟨R, hR, hRp, hRo, hRt, hRwf⟩ := (invocation_body h i hi w pl hw hpl).2.1 wf out hctrl

@@ -198,10 +198,10 @@ theorem invocable_of_invoke {pl : Placement} {s t : State} {id : String} {path :
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
             calls := s.calls ++ [{
               id, owner := id, target := .judge judge, input, timeout := pl.timeout, policy := pl.policy }] }) ∨
-       (∃ wf out, pl.control = .call (.workflow wf out) ∧ s.run? (path ++ [id]) = none ∧
+       (∃ wf out, pl.control = .call (.workflow wf out) ∧ s.run? (Key.child id) = none ∧
           t = { s with
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
-            runs := s.runs ++ [{ path := path ++ [id], workflow := wf, input, owner := some id }] }) ∨
+            runs := s.runs ++ [{ path := Key.child id, workflow := wf, input, owner := some id }] }) ∨
        (∃ c, pl.control = .concurrency c ∧ s.execution? id = none ∧
           t = { s with
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]

@@ -71,10 +71,10 @@ theorem step_own {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : 
           ⟨name, ht, e, he, ho, hp, htk, spec, wf', out, hspec, hbody⟩
       · exact Or.inl ⟨howner ▸ ho, htask ▸ ht, hpath ▸ hp⟩
       · obtain ⟨i', hi', a1, a2, a3, -, -⟩ := K.invocation i hi
-        refine Or.inr (Or.inl ⟨htask ▸ ht, i', hi', by rw [← howner, ho, a1], by rw [← hpath, hp, a1, a2], w, pl, wf',
+        refine Or.inr (Or.inl ⟨htask ▸ ht, i', hi', by rw [← howner, ho, a1], by rw [← hpath, hp, a1], w, pl, wf',
           out, by rw [a2]; exact wf hw, by rw [a3]; exact hpl, hc⟩)
       · obtain ⟨e', he', a1, a2, a3, a4, -⟩ := K.execution e he
-        refine Or.inr (Or.inr ⟨name, htask ▸ ht, e', he', by rw [← howner, ho, a1], by rw [← hpath, hp, a1, a2],
+        refine Or.inr (Or.inr ⟨name, htask ▸ ht, e', he', by rw [← howner, ho, a1], by rw [← hpath, hp, a1],
           exists_task_kept a4 htk, spec, wf', out, K.taskSpec wk' a2 a3 hspec, hbody⟩)
     · obtain ⟨-, -, hcase⟩ := hnew
       rcases hcase with ⟨-, ho, ht, hp⟩ | ⟨ht, i, hi, ho, hnewi, hp, w, pl, wf', out, hw, hpl, hc⟩ |

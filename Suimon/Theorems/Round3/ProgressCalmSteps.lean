@@ -252,7 +252,7 @@ theorem exec_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : s
     · rw [calm.calls c hc] at hcend
       cases hcend
     · have := hr.2.2 r' hr' hrc
-      rw [hpath, herun, List.length_append, List.length_singleton] at this
+      rw [hpath, own.length_child_task he, herun] at this
       omega
   have hnocan : ∀ c ∈ s.calls, c.status ≠ .cancelling := by
     intro c hc hcan
@@ -297,7 +297,7 @@ theorem exec_step (valid : p.validate = .ok ()) (h : Reachable p s) (started : s
         obtain ⟨e', he', heo, hpath, -⟩ := own.runTask r' hr' t.name htk
         have : e' = e := wk.execution_eq_of_id he' he (Option.some.inj (heo.symm.trans ho))
         subst this
-        exact below_complete hr hr' (by rw [hpath, herun]; simp)
+        exact below_complete hr hr' (by rw [hpath, own.length_child_task he', herun]; simp)
     have houts : ∀ x ∈ s.taskResults, x.execution = e.id →
         ((cc.tasks.filter (·.output.isSome)).map (·.name)).contains x.task = true → x.output ≠ .pending := by
       intro x hx hxe hcont
@@ -327,7 +327,7 @@ theorem inv_ended (h : Reachable p s) (calm : Calm p s) {r : Run} (hr : DeepestO
     obtain ⟨i', hi', hio, hpath, -⟩ := own.runNone r' hr' i.id ho ht
     have : i' = i := wk.invocation_eq_of_id hi' hi hio
     subst this
-    exact below_complete hr hr' (by rw [hpath, hir]; simp)
+    exact below_complete hr hr' (by rw [hpath, own.length_child_invocation hi, hir]; simp)
   have hexecs : ∀ e ∈ s.executions, e.id = i.id → e.complete = true := by
     intro e he hid
     obtain ⟨i', hi', hie, hir', -⟩ := own.execOwner e he
@@ -428,7 +428,7 @@ theorem placement_step (valid : p.validate = .ok ()) (h : Reachable p s) (starte
     have hbody : match pl.control with
         | .call (.function f) => (p.function? f).isSome ∧ s.call? (Key.invocation r.path pl.name tr) = none
         | .branch _ _ => s.call? (Key.invocation r.path pl.name tr) = none
-        | .call (.workflow _ _) => s.run? (r.path ++ [Key.invocation r.path pl.name tr]) = none
+        | .call (.workflow _ _) => s.run? (Key.child (Key.invocation r.path pl.name tr)) = none
         | .concurrency _ => s.execution? (Key.invocation r.path pl.name tr) = none
         | _ => False := by
       rcases hctrl with ⟨b, hb⟩ | ⟨j, arms, hb⟩ | ⟨cc, hb⟩

@@ -6,7 +6,9 @@ open Lean
 
 /-- Values stay opaque; the model only moves their identities. --/
 abbrev Value := String
-/-- A run is a workflow executed as the root or as one sub-workflow call; `[]` is the root. --/
+/-- A run is a workflow executed as the root, as one sub-workflow call or as one workflow task. Its
+    path lists the labels of the records that own it and the runs around it (`Key.child`); `[]` is
+    the root. --/
 abbrev Path := List String
 /-- A result is identified by where it came from, never by its value (§5.4). --/
 abbrev ResultId := String
@@ -16,19 +18,62 @@ deriving instance ToJson, FromJson for Policy, Timeout
 /-- A list value is identified by the multiset of its elements (§15.4). --/
 def listValue (values : List Value) : Value := identity ("list" :: values.mergeSort (· ≤ ·))
 
-/-! Identities of the records the engine creates. Each kind starts with its own tag, so identities
-    of different kinds never coincide (by `identity_injective`), and each is a function of where the
+/-! Identities of the records the engine creates. A record lives in a run and has a label there; its
+    identity is the run path followed by the label, like a file path (`Key.within`). A label starts
+    with the kind of the record and refers to other records of the same run by their labels
+    (`Key.relative`), and a run path is a list of labels (`Key.child`), so an identity holds its run
+    path once and grows linearly with the nesting of runs. Identities of different kinds never
+    coincide, since their labels start with different tags, and each is a function of where the
     record comes from, never of the schedule. -/
 namespace Key
+
+/-- The identity of the record labelled `label` in the run at `path`. --/
+@[irreducible] def within (path : Path) (label : String) : String := identity (path ++ [label])
+
+/-- The run path and the label of an identity that `within` builds; `none` for any other string. --/
+@[irreducible] def split (id : String) : Option (Path × String) :=
+  match decodeIdentity id with
+  | some parts =>
+    match parts.getLast? with
+    | some label => if identity parts = id then some (parts.dropLast, label) else none
+    | none => none
+  | none => none
+
+/-- The run of the record `id`; the root for a string that `within` does not build. --/
+@[irreducible] def scope (id : String) : Path :=
+  match split id with
+  | some (run, _) => run
+  | none => []
+
+/-- How a label in the run at `path` refers to the record `id`: by its label, since the record lives
+    in that run. The engine refers to no other record; any other string is kept whole and followed by
+    an empty part, so that a reference still determines its record (`Key.relative_inj`). --/
+@[irreducible] def relative (path : Path) (id : String) : List String :=
+  match split id with
+  | some (run, label) => if run = path then [label] else [id, ""]
+  | none => [id, ""]
+
+/-- The path of the run that the record `id` owns: the owner's run path followed by the owner's
+    label, which is the owner's identity read as a path. --/
+@[irreducible] def child (id : String) : Path :=
+  match split id with
+  | some (run, label) => run ++ [label]
+  | none => [id]
+
+/-- A record that the record `owner` owns lives in the owner's run, and its label refers to the
+    owner. --/
+def owned (kind owner : String) (parts : List String) : String :=
+  within (scope owner) (identity (kind :: relative (scope owner) owner ++ parts))
+
 def invocation (path : Path) (placement : String) (trigger : Option ResultId) : String :=
-  identity (["invocation", identity path, placement] ++ trigger.toList)
-def task (execution task : String) : String := identity ["task", execution, task]
-def callResult (call : String) (index : Nat) : ResultId := identity ["result", call, toString index]
-def aggregate (path : Path) (placement : String) : ResultId := identity ["aggregate", identity path, placement]
+  within path (identity (["invocation", placement] ++ trigger.toList.flatMap (relative path)))
+def task (execution task : String) : String := owned "task" execution [task]
+def callResult (call : String) (index : Nat) : ResultId := owned "result" call [toString index]
+def aggregate (path : Path) (placement : String) : ResultId := within path (identity ["aggregate", placement])
 def taskOutput (execution task : String) (index : Nat) : ResultId :=
-  identity ["output", execution, task, toString index]
-def list (execution : String) : ResultId := identity ["list", execution]
-def returned (invocation : String) : ResultId := identity ["return", invocation]
+  owned "output" execution [task, toString index]
+def list (execution : String) : ResultId := owned "list" execution []
+def returned (invocation : String) : ResultId := owned "return" invocation []
 end Key
 
 inductive Cause where

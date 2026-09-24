@@ -288,8 +288,8 @@ def invoke (p : Definition) (s : State) (path : Path) (name : String) (trigger :
     let call : Call := { id, owner := id, target := .judge judge, input, timeout := pl.timeout, policy := pl.policy }
     pure { s with calls := s.calls ++ [call] }
   | .call (.workflow workflow _) =>
-    require (s.run? (path ++ [id])).isNone "DUPLICATE_RUN"
-    pure { s with runs := s.runs ++ [{ path := path ++ [id], workflow, input, owner := some id : Run }] }
+    require (s.run? (Key.child id)).isNone "DUPLICATE_RUN"
+    pure { s with runs := s.runs ++ [{ path := Key.child id, workflow, input, owner := some id : Run }] }
   | .concurrency c =>
     require (s.execution? id).isNone "DUPLICATE_EXECUTION"
     let tasks := c.tasks.map fun t => { name := t.name, status := if c.input.isSome then .pending else .ready : TaskState }
@@ -426,8 +426,8 @@ def beginTask (p : Definition) (s : State) (eid name : String) : Result' State :
       stream := decl.output.kind == .stream, timeout := spec.timeout, policy := spec.policy }
     pure { s with calls := s.calls ++ [call] }
   | .workflow workflow _ =>
-    require (s.run? (e.run ++ [id])).isNone "DUPLICATE_RUN"
-    let child : Run := { path := e.run ++ [id], workflow, input := t.input, owner := some e.id, task := some name }
+    require (s.run? (Key.child id)).isNone "DUPLICATE_RUN"
+    let child : Run := { path := Key.child id, workflow, input := t.input, owner := some e.id, task := some name }
     pure { s with runs := s.runs ++ [child] }
 
 def taskResult (s : State) (eid name : String) (index : Nat) : Result' TaskResult :=

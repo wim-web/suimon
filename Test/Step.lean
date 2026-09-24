@@ -130,6 +130,21 @@ def run : IO Unit := do
   expectStatus "merge" s .succeeded
   ensure ((s.invocationsOf [] "notify").length == 1) "merge: discard runs its target once"
 
+  -- An identity is the run path followed by the record's label; the run a record owns is at the
+  -- record's identity read as a path. The Go port pins the same values (identity_test.go).
+  let p1 := Key.invocation [] "p" none
+  let p2 := Key.invocation (Key.child p1) "p" none
+  ensure (p1 == "16:10:invocation1:p" && Key.child p1 == ["10:invocation1:p"]) "keys: root"
+  ensure (p2 == "16:10:invocation1:p16:10:invocation1:p" && Key.child p2 == ["10:invocation1:p", "10:invocation1:p"])
+    "keys: one level down"
+  let r := Key.callResult (Key.invocation [] "a" none) 0
+  let q := Key.invocation [] "q" (some r)
+  ensure (r == "30:6:result16:10:invocation1:a1:0" && q == "49:10:invocation1:q30:6:result16:10:invocation1:a1:0")
+    "keys: a trigger by its label"
+  ensure (Key.child (Key.task q "t") == ["4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t"])
+    "keys: the run of a task"
+  ensure (Key.invocation ["x"] "b" (some r) == "1:x54:10:invocation1:b33:30:6:result16:10:invocation1:a1:00:")
+    "keys: a result of another run"
   -- The JSON of a task result tells a pending output from a failed one.
   let pending : TaskResult := { execution := "e", task := "t", index := 0, value := "v" }
   let outputs := [pending, { pending with output := .failed }, { pending with output := .value "w" }]

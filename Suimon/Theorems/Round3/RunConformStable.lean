@@ -36,28 +36,20 @@ theorem invocationInput_step (h : Reachable p s) (hs : step p s op = .ok t) {pat
 /-! ### Task-output results -/
 
 theorem callResult_ne_taskOutput {x e n : String} {k i : Nat} : Key.callResult x k ≠ Key.taskOutput e n i :=
-  fun h => by
-    have h' := identity_injective h
-    simp at h'
+  Key.ne_of_kind? (by simp)
 
 theorem aggregate_ne_taskOutput {path : Path} {x e n : String} {i : Nat} :
-    Key.aggregate path x ≠ Key.taskOutput e n i := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.aggregate path x ≠ Key.taskOutput e n i :=
+  Key.ne_of_kind? (by simp)
 
-theorem list_ne_taskOutput {x e n : String} {i : Nat} : Key.list x ≠ Key.taskOutput e n i := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem list_ne_taskOutput {x e n : String} {i : Nat} : Key.list x ≠ Key.taskOutput e n i :=
+  Key.ne_of_kind? (by simp)
 
-theorem returned_ne_taskOutput {x e n : String} {i : Nat} : Key.returned x ≠ Key.taskOutput e n i := fun h => by
-  have h' := identity_injective h
-  simp at h'
+theorem returned_ne_taskOutput {x e n : String} {i : Nat} : Key.returned x ≠ Key.taskOutput e n i :=
+  Key.ne_of_kind? (by simp)
 
 theorem taskOutput_inj {a b m n : String} {i j : Nat} (h : Key.taskOutput a m i = Key.taskOutput b n j) :
-    a = b ∧ m = n ∧ i = j := by
-  have h' := identity_injective h
-  simp only [List.cons.injEq, true_and, and_true] at h'
-  exact ⟨h'.1, h'.2.1, Nat.repr_injective h'.2.2⟩
+    a = b ∧ m = n ∧ i = j := Key.taskOutput_inj h
 
 /-- A result accepted from a call carries a call-result identity. -/
 theorem accept_results {c : Call} {index : Nat} {value : Value} {arm : Option String} {s' : State}

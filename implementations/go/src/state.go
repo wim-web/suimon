@@ -1,6 +1,7 @@
 package suimon
 
 import (
+	"slices"
 	"strconv"
 )
 
@@ -9,47 +10,103 @@ import (
 // owner that holds the one reference to a state, the runtime driver and Check, changes it in place
 // (machine, step.go).
 
-// Path identifies a run: nil for the root run, and each sub-workflow call appends the identity of
-// its owner.
+// Path identifies a run: nil for the root run. The run of a sub-workflow call or of a workflow task
+// appends the label of its owner in the calling run (keyChild).
 type Path []string
 
-// Identities of the records the engine creates (Lean namespace Key). Each kind starts with its own
-// tag, so identities of different kinds never coincide, and each is a function of where the record
-// comes from, never of the schedule.
+// Identities of the records the engine creates (Lean namespace Key). A record lives in a run and has
+// a label there; its identity is the run path followed by the label, like a file path (keyWithin). A
+// label starts with the kind of the record and refers to other records of the same run by their
+// labels (keyRelative), and a run path is a list of labels (keyChild), so an identity holds its run
+// path once and grows linearly with the nesting of runs. Identities of different kinds never
+// coincide, since their labels start with different tags, and each is a function of where the
+// record comes from, never of the schedule.
+
+// keyWithin is the identity of the record labelled label in the run at path.
+func keyWithin(path Path, label string) string {
+	parts := make([]string, 0, len(path)+1)
+	return Identity(append(append(parts, path...), label)...)
+}
+
+// keySplit returns the run path and the label of an identity keyWithin builds, and false for any
+// other string: a string that does not decode, decodes to no part, or is not the canonical encoding
+// of its parts.
+func keySplit(id string) (Path, string, bool) {
+	parts, ok := DecodeIdentity(id)
+	if !ok || len(parts) == 0 || Identity(parts...) != id {
+		return nil, "", false
+	}
+	return Path(parts[:len(parts)-1]), parts[len(parts)-1], true
+}
+
+// keyScope is the run of the record id; the root for a string keyWithin does not build.
+func keyScope(id string) Path {
+	if run, _, ok := keySplit(id); ok {
+		return run
+	}
+	return nil
+}
+
+// keyRelative is how a label in the run at path refers to the record id: by its label, since the
+// record lives in that run. The engine refers to no other record; any other string is kept whole and
+// followed by an empty part, so that a reference still determines its record.
+func keyRelative(path Path, id string) []string {
+	if run, label, ok := keySplit(id); ok && slices.Equal(run, path) {
+		return []string{label}
+	}
+	return []string{id, ""}
+}
+
+// keyChild is the path of the run that the record id owns: the owner's run path followed by the
+// owner's label, which is the owner's identity read as a path.
+func keyChild(id string) Path {
+	if run, label, ok := keySplit(id); ok {
+		return appendOne(run, label)
+	}
+	return Path{id}
+}
+
+// keyOwned identifies a record of the given kind that the record owner owns: it lives in the owner's
+// run, and its label refers to the owner.
+func keyOwned(kind, owner string, parts ...string) string {
+	scope := keyScope(owner)
+	label := append([]string{kind}, keyRelative(scope, owner)...)
+	return keyWithin(scope, Identity(append(label, parts...)...))
+}
 
 // keyInvocation identifies the invocation of a placement in a run by its trigger, nil for none.
 func keyInvocation(path Path, placement string, trigger *string) string {
-	parts := []string{"invocation", Identity(path...), placement}
+	parts := []string{"invocation", placement}
 	if trigger != nil {
-		parts = append(parts, *trigger)
+		parts = append(parts, keyRelative(path, *trigger)...)
 	}
-	return Identity(parts...)
+	return keyWithin(path, Identity(parts...))
 }
 
 // keyTask identifies the call or run of a task in an execution.
-func keyTask(execution, task string) string { return Identity("task", execution, task) }
+func keyTask(execution, task string) string { return keyOwned("task", execution, task) }
 
 // keyCallResult identifies the index-th value a call returned or yielded.
 func keyCallResult(call string, index int) string {
-	return Identity("result", call, strconv.Itoa(index))
+	return keyOwned("result", call, strconv.Itoa(index))
 }
 
 // keyAggregate identifies the list of a waitStream or Merge placement in a run.
 func keyAggregate(path Path, placement string) string {
-	return Identity("aggregate", Identity(path...), placement)
+	return keyWithin(path, Identity("aggregate", placement))
 }
 
 // keyTaskOutput identifies a result of a Stream concurrency output: the output transform of the
 // index-th result of a task.
 func keyTaskOutput(execution, task string, index int) string {
-	return Identity("output", execution, task, strconv.Itoa(index))
+	return keyOwned("output", execution, task, strconv.Itoa(index))
 }
 
 // keyList identifies the list of a List concurrency output.
-func keyList(execution string) string { return Identity("list", execution) }
+func keyList(execution string) string { return keyOwned("list", execution) }
 
 // keyReturned identifies the result a sub-workflow call returned.
-func keyReturned(invocation string) string { return Identity("return", invocation) }
+func keyReturned(invocation string) string { return keyOwned("return", invocation) }
 
 // Cause is why a failure was recorded.
 type Cause int

@@ -956,7 +956,7 @@ func (st *stepper) invoke(path Path, name string, trigger *string) error {
 				Stream: decl.Output.Kind == KindStream, Timeout: pl.Timeout, Policy: pl.Policy})
 			return nil
 		}
-		child := appendOne(path, id)
+		child := keyChild(id)
 		if _, dup := st.run(child); dup {
 			return reject("DUPLICATE_RUN")
 		}
@@ -1349,7 +1349,6 @@ func (st *stepper) beginTask(eid, name string) error {
 		return err
 	}
 	id := taskID(e.ID, name)
-	run := e.Run
 	if !spec.Body.Workflow {
 		decl, ok := st.p.function(spec.Body.ID)
 		if !ok {
@@ -1363,7 +1362,7 @@ func (st *stepper) beginTask(eid, name string) error {
 			Input: task.Input, Stream: decl.Output.Kind == KindStream, Timeout: spec.Timeout, Policy: spec.Policy})
 		return nil
 	}
-	child := appendOne(run, id)
+	child := keyChild(id)
 	if _, dup := st.run(child); dup {
 		return reject("DUPLICATE_RUN")
 	}

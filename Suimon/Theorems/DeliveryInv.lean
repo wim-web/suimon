@@ -18,10 +18,10 @@ open State
 /-- A run is the root, or the run of a sub-workflow call, or the run of a workflow task (§4.5, §8.1). --/
 def RunOwned (p : Definition) (s : State) (r : Run) : Prop :=
   (r.owner = none ∧ r.task = none ∧ r.path = []) ∨
-  (r.task = none ∧ ∃ i ∈ s.invocations, r.owner = some i.id ∧ r.path = i.run ++ [i.id] ∧
+  (r.task = none ∧ ∃ i ∈ s.invocations, r.owner = some i.id ∧ r.path = Key.child i.id ∧
     ∃ w pl wf out, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧
       pl.control = .call (.workflow wf out)) ∨
-  (∃ name, r.task = some name ∧ ∃ e ∈ s.executions, r.owner = some e.id ∧ r.path = e.run ++ [Key.task e.id name] ∧
+  (∃ name, r.task = some name ∧ ∃ e ∈ s.executions, r.owner = some e.id ∧ r.path = Key.child (Key.task e.id name) ∧
     (∃ tk ∈ e.tasks, tk.name = name) ∧ ∃ spec wf out, s.taskSpec p e name = .ok spec ∧ spec.body = .workflow wf out)
 
 /-- An invocation is identified by where it comes from, applies an invocable placement of its run, and
@@ -144,12 +144,12 @@ def NewCall (p : Definition) (s t : State) (c : Call) : Prop :=
 def NewRun (p : Definition) (s t : State) (r : Run) : Prop :=
   s.run? r.path = none ∧ r.complete = false ∧
   ((s.started = false ∧ r.owner = none ∧ r.task = none ∧ r.path = []) ∨
-   (r.task = none ∧ ∃ i ∈ t.invocations, r.owner = some i.id ∧ NewInvocation p s i ∧ r.path = i.run ++ [i.id] ∧
+   (r.task = none ∧ ∃ i ∈ t.invocations, r.owner = some i.id ∧ NewInvocation p s i ∧ r.path = Key.child i.id ∧
       ∃ w pl wf out, s.workflow? p i.run = some w ∧ w.placement? i.placement = some pl ∧
         pl.control = .call (.workflow wf out)) ∨
    (∃ name e ts spec wf out, r.task = some name ∧ r.owner = some e.id ∧ s.execution? e.id = some e ∧
       e.complete = false ∧ e.tasks.find? (·.name == name) = some ts ∧ ts.status = .ready ∧
-      s.taskSpec p e name = .ok spec ∧ spec.body = .workflow wf out ∧ r.path = e.run ++ [Key.task e.id name] ∧
+      s.taskSpec p e name = .ok spec ∧ spec.body = .workflow wf out ∧ r.path = Key.child (Key.task e.id name) ∧
       withTask e { ts with status := .active } ∈ t.executions ∧ s.status = .running))
 
 /-- An execution `invoke` creates. --/

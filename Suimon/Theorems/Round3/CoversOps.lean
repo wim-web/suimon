@@ -198,7 +198,7 @@ theorem covers_invoke {path : Path} {name : String} {trigger : Option ResultId}
     rcases List.mem_append.mp hx with hx | hx
     · exact cov.runs x hx
     · rw [List.mem_singleton.mp hx]
-      exact ⟨r', hr'm, by rw [hr'p, hi'run, hi'id], hr'w, hr'in.trans hi'in, by rw [hr'o, hi'id], hr't⟩
+      exact ⟨r', hr'm, by rw [hr'p, hi'id], hr'w, hr'in.trans hi'in, by rw [hr'o, hi'id], hr't⟩
   · -- A concurrency: `T` created the same execution, with the same tasks.
     obtain ⟨e', he'm, he'id⟩ := body.2.2 c hc
     obtain ⟨i₂, hi₂, hi₂id, hi₂run, hi₂pl, -⟩ := invT.own.executions e' he'm
@@ -481,7 +481,7 @@ theorem covers_beginTask {eid name : String} (h : StepCtx p env T s (.beginTask 
     rw [hwf] at hout'
     cases hout'
     -- Its path is the task's (`RunOwned`).
-    have hr'p : r'.path = e.run ++ [State.taskId e.id name] := by
+    have hr'p : r'.path = Key.child (State.taskId e.id name) := by
       rcases invT.own.runs r' hr'm with ⟨ho, -⟩ | ⟨ht, -⟩ | ⟨name', ht, e₃, he₃, ho₃, hp₃, -⟩
       · rw [hr'o] at ho
         cases ho
@@ -491,7 +491,7 @@ theorem covers_beginTask {eid name : String} (h : StepCtx p env T s (.beginTask 
         cases ht
         rw [hr'o] at ho₃
         obtain rfl : e₃ = eT := wkT.execution_eq_of_id he₃ heTm (Option.some.inj ho₃).symm
-        rw [hp₃, heTrun, heTid]
+        rw [hp₃, heTid]
         rfl
     refine CoversOpsAux.covers_mk h (fun x hx => ?_) cov.invocations cov.calls
       (CoversOpsAux.covers_setTask cov hem hopen fun e' he' hid hrun' hpl a6 t' ht' hn =>

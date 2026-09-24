@@ -81,19 +81,16 @@ def TaskKey (id : String) : Prop := ∃ execution task, id = Key.task execution 
 theorem not_taskKey_of_invocationKey {id : String} (hi : InvocationKey id) (ht : TaskKey id) : False := by
   obtain ⟨path, name, trigger, rfl⟩ := hi
   obtain ⟨a, b, h⟩ := ht
-  have := identity_injective h
-  simp at this
+  exact Key.invocation_ne_task h
 
 theorem not_invocationKey_aggregate {path : Path} {name : String} (h : InvocationKey (Key.aggregate path name)) :
     False := by
   obtain ⟨path', name', trigger, h⟩ := h
-  have := identity_injective h
-  simp at this
+  exact Key.invocation_ne_aggregate h.symm
 
 theorem not_taskKey_aggregate {path : Path} {name : String} (h : TaskKey (Key.aggregate path name)) : False := by
   obtain ⟨a, b, h⟩ := h
-  have := identity_injective h
-  simp at this
+  exact Key.task_ne_aggregate h.symm
 
 /-- How the identities of calls relate to the other records. --/
 structure Keys (s : State) : Prop where

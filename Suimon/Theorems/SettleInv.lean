@@ -62,14 +62,14 @@ structure Own (p : Definition) (s : State) : Prop where
       e.tasks.map (·.name) = cc.tasks.map (·.name)
   /-- A run called by an invocation is the one run of a sub-workflow call. --/
   runNone : ∀ r ∈ s.runs, ∀ o, r.owner = some o → r.task = none → ∃ i ∈ s.invocations, i.id = o ∧
-    r.path = i.run ++ [i.id] ∧ ∃ pl wf out, placementAt p s i.run i.placement = some pl ∧
+    r.path = Key.child i.id ∧ ∃ pl wf out, placementAt p s i.run i.placement = some pl ∧
       pl.control = .call (.workflow wf out)
   /-- A call of a task has the task's identity and a function body. --/
   callTask : ∀ c ∈ s.calls, ∀ name, c.task = some name → c.id = Key.task c.owner name ∧
     ∃ e ∈ s.executions, e.id = c.owner ∧ ∃ spec f, s.taskSpec p e name = .ok spec ∧ spec.body = .function f
   /-- A run of a task is the one run of a task with a workflow body. --/
   runTask : ∀ r ∈ s.runs, ∀ name, r.task = some name → ∃ e ∈ s.executions, r.owner = some e.id ∧
-    r.path = e.run ++ [Key.task e.id name] ∧ ∃ spec wf out, s.taskSpec p e name = .ok spec ∧
+    r.path = Key.child (Key.task e.id name) ∧ ∃ spec wf out, s.taskSpec p e name = .ok spec ∧
       spec.body = .workflow wf out
   /-- An invocation is identified by its run, placement and trigger. --/
   invId : ∀ i ∈ s.invocations, i.id = Key.invocation i.run i.placement i.trigger

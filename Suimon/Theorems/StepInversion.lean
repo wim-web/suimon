@@ -273,10 +273,10 @@ theorem Step.invoke_inv {path : Path} {name : String} {trigger : Option ResultId
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
             calls := s.calls ++ [{
               id, owner := id, target := .judge judge, input, timeout := pl.timeout, policy := pl.policy }] }) ∨
-       (∃ wf out, pl.control = .call (.workflow wf out) ∧ s.run? (path ++ [id]) = none ∧
+       (∃ wf out, pl.control = .call (.workflow wf out) ∧ s.run? (Key.child id) = none ∧
           t = { s with
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
-            runs := s.runs ++ [{ path := path ++ [id], workflow := wf, input, owner := some id }] }) ∨
+            runs := s.runs ++ [{ path := Key.child id, workflow := wf, input, owner := some id }] }) ∨
        (∃ c, pl.control = .concurrency c ∧ s.execution? id = none ∧
           t = { s with
             invocations := s.invocations ++ [{ id, run := path, placement := name, trigger, input }]
@@ -481,10 +481,10 @@ theorem Step.beginTask_inv {eid name : String} (h : Step.beginTask p s eid name 
               id := State.taskId e.id name, owner := e.id, task := some name, target := .function f
               input := ts.input, stream := decl.output.kind == .stream, timeout := spec.timeout
               policy := spec.policy }] }) ∨
-       (∃ wf out, spec.body = .workflow wf out ∧ s.run? (e.run ++ [State.taskId e.id name]) = none ∧
+       (∃ wf out, spec.body = .workflow wf out ∧ s.run? (Key.child (State.taskId e.id name)) = none ∧
           t = { s.setTask e { ts with status := .active } with
             runs := s.runs ++ [{
-              path := e.run ++ [State.taskId e.id name], workflow := wf, input := ts.input, owner := some e.id
+              path := Key.child (State.taskId e.id name), workflow := wf, input := ts.input, owner := some e.id
               task := some name }] })) := by
   unfold Step.beginTask at h
   step_norm at h

@@ -649,8 +649,8 @@ theorem Conforming.root {env : Env} {tr : List Op} (h : Conforming p env tr s) :
         exact ⟨a2 ▸ b1, a3 ▸ b2, a4 ▸ b3, a5 ▸ b4⟩
       · rcases hnew with ⟨hst', -⟩ | ⟨-, i, -, -, -, hp, -⟩ | ⟨name, e, -, -, -, -, -, -, -, -, -, -, -, -, hp, -⟩
         · rw [hst] at hst'; cases hst'
-        · rw [hpath] at hp; simp at hp
-        · rw [hpath] at hp; simp at hp
+        · rw [hpath] at hp; exact absurd hp.symm (Key.child_ne_nil _)
+        · rw [hpath] at hp; exact absurd hp.symm (Key.child_ne_nil _)
     · obtain ⟨input, rfl, rfl⟩ := step_not_started hs (by simpa using hst)
       simp only [List.mem_singleton] at hr
       subst hr

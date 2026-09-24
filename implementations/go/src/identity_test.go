@@ -3,6 +3,7 @@ package suimon
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -37,6 +38,74 @@ func TestIdentity(t *testing.T) {
 	for id, want := range map[string][]string{":": {""}, "01:a": {"a"}, ":1:b": {"", "b"}} {
 		if parts, ok := DecodeIdentity(id); !ok || !reflect.DeepEqual(parts, want) {
 			t.Errorf("DecodeIdentity(%q) = %q %v, want %q", id, parts, ok, want)
+		}
+	}
+}
+
+// Identities are the run path followed by a label (Lean Key); the values are those Lean computes.
+func TestKeys(t *testing.T) {
+	// A chain of sub-workflow calls: each level adds the label of the call to the run path.
+	p1 := keyInvocation(nil, "p", nil)
+	p2 := keyInvocation(keyChild(p1), "p", nil)
+	p3 := keyInvocation(keyChild(p2), "p", nil)
+	for _, c := range []struct {
+		got, want string
+		path      Path
+	}{
+		{p1, "16:10:invocation1:p", Path{"10:invocation1:p"}},
+		{p2, "16:10:invocation1:p16:10:invocation1:p", Path{"10:invocation1:p", "10:invocation1:p"}},
+		{p3, "16:10:invocation1:p16:10:invocation1:p16:10:invocation1:p",
+			Path{"10:invocation1:p", "10:invocation1:p", "10:invocation1:p"}},
+	} {
+		if c.got != c.want || !reflect.DeepEqual(keyChild(c.got), c.path) {
+			t.Errorf("key %q, run %q; want %q, run %q", c.got, keyChild(c.got), c.want, c.path)
+		}
+	}
+	// A label refers to the records of its run by their labels: the trigger of an invocation, the
+	// execution of a task, and the owner of a result.
+	r := keyCallResult(keyInvocation(nil, "a", nil), 0)
+	q := keyInvocation(nil, "q", &r)
+	task := keyTask(q, "t")
+	a2 := keyInvocation(keyChild(task), "a", nil)
+	r2 := keyCallResult(a2, 0)
+	for _, c := range []struct{ got, want string }{
+		{r, "30:6:result16:10:invocation1:a1:0"},
+		{q, "49:10:invocation1:q30:6:result16:10:invocation1:a1:0"},
+		{task, "61:4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t"},
+		{keyTaskOutput(q, "t", 1), "66:6:output49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t1:1"},
+		{keyList(q), "58:4:list49:10:invocation1:q30:6:result16:10:invocation1:a1:0"},
+		{keyReturned(q), "60:6:return49:10:invocation1:q30:6:result16:10:invocation1:a1:0"},
+		{keyAggregate(Path{"x"}, "w"), "1:x14:9:aggregate1:w"},
+		{a2, "61:4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t16:10:invocation1:a"},
+		{r2, "61:4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t30:6:result16:10:invocation1:a1:0"},
+		{keyInvocation(keyChild(task), "b", &r2),
+			"61:4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t49:10:invocation1:b30:6:result16:10:invocation1:a1:0"},
+		// The engine refers to no record of another run and to no string that is not an identity; such
+		// a reference keeps the whole string and an empty part, so it still determines the string.
+		{keyInvocation(Path{"x"}, "b", &r), "1:x54:10:invocation1:b33:30:6:result16:10:invocation1:a1:00:"},
+		{keyInvocation(nil, "b", ptr("01:a")), "24:10:invocation1:b4:01:a0:"},
+		{keyTask("junk", "t"), "17:4:task4:junk0:1:t"},
+	} {
+		if c.got != c.want {
+			t.Errorf("key %q, want %q", c.got, c.want)
+		}
+	}
+	if got := keyChild(task); !reflect.DeepEqual(got, Path{"4:task49:10:invocation1:q30:6:result16:10:invocation1:a1:01:t"}) {
+		t.Errorf("the run of a task: %q", got)
+	}
+	if got := keyChild("junk"); !reflect.DeepEqual(got, Path{"junk"}) {
+		t.Errorf("the run of a string that is not an identity: %q", got)
+	}
+	// keySplit inverts keyWithin, and rejects what keyWithin does not write.
+	for _, path := range []Path{nil, {"a"}, {"", "b:c"}} {
+		run, label, ok := keySplit(keyWithin(path, "l"))
+		if !ok || label != "l" || !slices.Equal(run, path) {
+			t.Errorf("keySplit(keyWithin(%q, l)) = %q %q %v", path, run, label, ok)
+		}
+	}
+	for _, id := range []string{"", "01:a", ":", "5", "junk"} {
+		if run, label, ok := keySplit(id); ok {
+			t.Errorf("keySplit(%q) = %q %q", id, run, label)
 		}
 	}
 }

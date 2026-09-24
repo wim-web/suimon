@@ -347,9 +347,9 @@ theorem stable_run_step (valid : p.validate = .ok ()) (h : Reachable p s) {t : S
     · rw [ho] at ho'
       cases ho'
     · rw [hroot] at hp
-      simp at hp
+      exact Key.child_ne_nil _ hp.symm
     · rw [hroot] at hp
-      simp at hp
+      exact Key.child_ne_nil _ hp.symm
 
 end StableAux
 

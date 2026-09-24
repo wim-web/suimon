@@ -255,10 +255,7 @@ theorem LInv.hasBody_not_begun (hL : LInv p s) {e : Execution} (he : e ∈ s.exe
     have hkey := hL.keys.invocations _ (hL.keys.calls c hc ht)
     exact Calls.not_taskKey_of_invocationKey hkey ⟨e.id, x.name, hid⟩
   | some n =>
-    have h1 := (hL.lim.keys c hc n ht).symm.trans hid
-    have h2 := identity_injective h1
-    simp only [List.cons.injEq, true_and] at h2
-    obtain ⟨ho, hn, -⟩ := h2
+    obtain ⟨ho, hn⟩ := Key.task_inj ((hL.lim.keys c hc n ht).symm.trans hid)
     exact hL.lim.no_call he hx hb c hc (by rw [ht, hn]) ho
 
 end Facts
@@ -735,8 +732,7 @@ theorem LInv.books_beginTask (hL : LInv p s) {eid name : String} (hs : Step.begi
   have hnb : ¬Limit.Begun ts.status := by simp [Limit.Begun, hready]
   have hkey : ∀ eid' n, (eid' ≠ e.id ∨ n ≠ ts.name) → State.taskId e.id name ≠ Key.task eid' n := by
     intro eid' n hne h
-    have h2 := identity_injective h
-    simp only [List.cons.injEq, true_and, and_true] at h2
+    have h2 := Key.task_inj h
     rcases hne with h1 | h1
     · exact h1 h2.1.symm
     · exact h1 (h2.2.symm.trans htsn.symm)

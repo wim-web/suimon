@@ -296,7 +296,7 @@ theorem failCall_good {s t : State} {c : Call} {status : CallStatus} {cause : Ca
 /-- A task run is stored under the path of its execution and task, so a task has one run. -/
 theorem taskRun_path {p : Definition} {s : State} (inv : Delivery.Inv p s) {R : Run} (hR : R ∈ s.runs)
     {name : String} (ht : R.task = some name) {e : Execution} (he : e ∈ s.executions) (ho : R.owner = some e.id) :
-    R.path = e.run ++ [Key.task e.id name] := by
+    R.path = Key.child (Key.task e.id name) := by
   rcases inv.own.runs R hR with ⟨-, h, -⟩ | ⟨h, -⟩ | ⟨name', ht', e₁, he₁, ho₁, hp, -⟩
   · rw [ht] at h; cases h
   · rw [ht] at h; cases h

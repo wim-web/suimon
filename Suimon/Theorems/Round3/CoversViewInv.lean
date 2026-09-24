@@ -21,15 +21,12 @@ variable {p : Definition}
 /-! ### Identities -/
 
 /-- Task identities name their execution and task. -/
-theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := by
-  have h' := identity_injective h
-  simpa using h'
+theorem task_inj {a b m n : String} (h : Key.task a m = Key.task b n) : a = b ∧ m = n := Key.task_inj h
 
 /-- An invocation identity is never a task identity (distinct tags). -/
 theorem invocation_ne_task {a : Path} {m b n : String} {tr : Option String} :
-    Key.invocation a m tr ≠ Key.task b n := fun h => by
-  have h' := identity_injective h
-  simp at h'
+    Key.invocation a m tr ≠ Key.task b n :=
+  Key.ne_of_kind? (by simp)
 
 /-! ### Results with an arm -/
 

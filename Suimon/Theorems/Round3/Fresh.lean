@@ -16,10 +16,10 @@ structure Fresh (s : State) : Prop where
   invocation : ∀ path name trigger, (∀ i ∈ s.invocationsOf path name, i.trigger ≠ trigger) →
     s.invocation? (Key.invocation path name trigger) = none ∧ s.call? (Key.invocation path name trigger) = none ∧
     s.execution? (Key.invocation path name trigger) = none ∧
-    s.run? (path ++ [Key.invocation path name trigger]) = none
+    s.run? (Key.child (Key.invocation path name trigger)) = none
   /-- A task that has not begun owns neither its call nor its run. -/
   taskBody : ∀ e ∈ s.executions, ∀ t ∈ e.tasks, (t.status = .pending ∨ t.status = .ready) →
-    s.call? (Key.task e.id t.name) = none ∧ s.run? (e.run ++ [Key.task e.id t.name]) = none
+    s.call? (Key.task e.id t.name) = none ∧ s.run? (Key.child (Key.task e.id t.name)) = none
   /-- The aggregate of an unsettled placement. -/
   aggregate : ∀ path name, s.settled? path name = none → s.result? (Key.aggregate path name) = none
   /-- The list of an open execution. -/
@@ -65,14 +65,14 @@ theorem Reachable.fresh (h : Reachable p s) : Fresh s := by
       obtain ⟨r, hr, hpath⟩ := List.mem_map.mp hmem
       rcases downs.runs r hr with ⟨-, -, hroot⟩ | ⟨-, i, hi, -, hrp, -⟩ | ⟨tname, -, e, -, -, hrp, -⟩
       · rw [hroot] at hpath
-        simp at hpath
-      · rw [hrp] at hpath
-        have hlast : i.id = Key.invocation path name trigger := by simpa using (List.append_inj' hpath rfl).2
+        exact Key.child_ne_nil _ hpath.symm
+      · rw [hrp, own.invId i hi] at hpath
+        have hlast : i.id = Key.invocation path name trigger := by
+          rw [own.invId i hi]
+          exact Key.child_inj (Key.within_invocation _ _ _) (Key.within_invocation _ _ _) hpath
         exact hnotmem (List.mem_map.mpr ⟨i, hi, hlast⟩)
       · rw [hrp] at hpath
-        have hlast : Key.task e.id tname = Key.invocation path name trigger := by
-          simpa using (List.append_inj' hpath rfl).2
-        exact FreshAux.invocation_ne_task hlast.symm
+        exact Key.child_invocation_ne_task hpath.symm
   · -- A call or run of a task names its execution and task, and needs the task to have begun.
     intro e he ts hts hst
     have hb : ¬ Limit.Begun ts.status := fun hb => by
@@ -93,13 +93,11 @@ theorem Reachable.fresh (h : Reachable p s) : Fresh s := by
       obtain ⟨r, hr, hpath⟩ := List.mem_map.mp hmem
       rcases downs.runs r hr with ⟨-, -, hroot⟩ | ⟨-, i, hi, -, hrp, -⟩ | ⟨tname, htname, e', -, hro, hrp, -⟩
       · rw [hroot] at hpath
-        simp at hpath
+        exact Key.child_ne_nil _ hpath.symm
+      · rw [hrp, own.invId i hi] at hpath
+        exact Key.child_invocation_ne_task hpath
       · rw [hrp] at hpath
-        have hlast : i.id = Key.task e.id ts.name := by simpa using (List.append_inj' hpath rfl).2
-        exact FreshAux.invocation_ne_task ((own.invId i hi).symm.trans hlast)
-      · rw [hrp] at hpath
-        have hlast : Key.task e'.id tname = Key.task e.id ts.name := by simpa using (List.append_inj' hpath rfl).2
-        obtain ⟨h1, h2⟩ := FreshAux.task_inj hlast
+        obtain ⟨h1, h2⟩ := Key.child_task_inj hpath
         exact linv.no_run he hts hb r hr (by rw [htname, h2]) (by rw [hro, h1])
   · -- An aggregate is stored only together with its settlement.
     intro path name hnone

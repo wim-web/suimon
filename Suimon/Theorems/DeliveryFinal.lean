@@ -42,13 +42,16 @@ theorem all_runs_complete (inv : Inv p s) {root : Run} (hroot : s.run? [] = some
     · obtain rfl : r = root := Option.some.inj ((inv.wk.run?_of_mem hr).symm.trans (hp ▸ hroot))
       exact hc
     · obtain ⟨r', hr', hr'p⟩ := run_of_invocation inv hi
-      have hlt : r'.path.length < n := by rw [← hlen, hp, hr'p]; simp
+      have hlt : r'.path.length < n := by
+        rw [← hlen, hp, hr'p, (inv.own.invocations i hi).1, Key.length_child_invocation]; simp
       have hc' := ih _ hlt r' hr' rfl
       have hend := (inv.sett.runs r' hr' hc').1 i hi hr'p.symm
       exact (invocationEnded_iff.mp hend).2.2.1 r hr ho ht
     · obtain ⟨i, hi, hiid, hir, -, -⟩ := inv.own.executions e he
       obtain ⟨r', hr', hr'p⟩ := run_of_invocation inv hi
-      have hlt : r'.path.length < n := by rw [← hlen, hp, hr'p, hir]; simp
+      have hlt : r'.path.length < n := by
+        rw [← hlen, hp, hr'p, Key.length_child_task, ← hiid, (inv.own.invocations i hi).1, Key.scope_invocation]
+        simp
       have hc' := ih _ hlt r' hr' rfl
       have hend := (inv.sett.runs r' hr' hc').1 i hi hr'p.symm
       have hec := (invocationEnded_iff.mp hend).2.2.2 e he hiid.symm

@@ -54,7 +54,7 @@ theorem ProgressInvAux.InvBody.kept {t : State} {i₀ i : Invocation} (h : Progr
     exact ⟨c', hc', by rw [a1, h1, hid], by rw [a2, h2, hid], by rw [a3, h3]⟩
   · obtain ⟨r, hr, h1, h2, h3, h4⟩ := hrunb wf out hc
     obtain ⟨r', hr', a1, a2, -, a4, a5, -⟩ := hk.run r hr
-    exact ⟨r', hr', by rw [a1, h1, hrun, hid], by rw [a4, h2, hid], by rw [a5, h3], by rw [a2, h4]⟩
+    exact ⟨r', hr', by rw [a1, h1, hid], by rw [a4, h2, hid], by rw [a5, h3], by rw [a2, h4]⟩
   · obtain ⟨e, he, h1⟩ := hexec cc hc
     obtain ⟨e', he', a1, -⟩ := hk.execution e he
     exact ⟨e', he', by rw [a1, h1, hid]⟩
@@ -66,7 +66,7 @@ theorem invocation_body (h : Reachable p s) : ∀ i ∈ s.invocations, ∀ w pl,
     (((∃ f, pl.control = .call (.function f)) ∨ (∃ j arms, pl.control = .branch j arms)) →
         ∃ c ∈ s.calls, c.id = i.id ∧ c.owner = i.id ∧ c.task = none) ∧
     (∀ wf out, pl.control = .call (.workflow wf out) →
-        ∃ r ∈ s.runs, r.path = i.run ++ [i.id] ∧ r.owner = some i.id ∧ r.task = none ∧ r.workflow = wf) ∧
+        ∃ r ∈ s.runs, r.path = Key.child i.id ∧ r.owner = some i.id ∧ r.task = none ∧ r.workflow = wf) ∧
     (∀ cc, pl.control = .concurrency cc → ∃ e ∈ s.executions, e.id = i.id) := by
   suffices body : ∀ i ∈ s.invocations, ProgressInvAux.InvBody p s i from body
   induction h with
@@ -195,7 +195,7 @@ theorem ProgressInvAux.closed_inv (h : Reachable p s) : ProgressInvAux.Closed s 
 theorem active_task_body (h : Reachable p s) :
     ∀ e ∈ s.executions, ∀ t ∈ e.tasks, t.status = .active →
       (∃ c ∈ s.calls, c.id = Key.task e.id t.name ∧ c.owner = e.id ∧ c.task = some t.name ∧ c.status.ended = false) ∨
-      (∃ r ∈ s.runs, r.path = e.run ++ [Key.task e.id t.name] ∧ r.owner = some e.id ∧ r.task = some t.name ∧
+      (∃ r ∈ s.runs, r.path = Key.child (Key.task e.id t.name) ∧ r.owner = some e.id ∧ r.task = some t.name ∧
         r.complete = false) := by
   suffices body : ∀ e ∈ s.executions, ∀ tk ∈ e.tasks, tk.status = .active → ProgressInvAux.TaskBody s e tk.name from
     body
@@ -219,7 +219,7 @@ theorem active_task_body (h : Reachable p s) :
             rw [hact] at this
             cases this
         · obtain ⟨r', hr'', b1, -, -, b4, b5, -⟩ := hk.run r hr'
-          refine Or.inr ⟨r', hr'', by rw [b1, a1, h1, h2, hn], by rw [b4, a2, h1], by rw [b5, a3, hn], ?_⟩
+          refine Or.inr ⟨r', hr'', by rw [b1, a1, h1, hn], by rw [b4, a2, h1], by rw [b5, a3, hn], ?_⟩
           cases hcomp : r'.complete
           · rfl
           · have := closed4 r' hr'' hcomp tk.name (by rw [b5, a3, hn]) e he (by rw [b4, a2, h1]) tk htk rfl
