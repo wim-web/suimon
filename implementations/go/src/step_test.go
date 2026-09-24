@@ -181,6 +181,32 @@ func checkTransition(t *testing.T, p *Definition, label string, before, after *S
 	}
 }
 
+// nothingRunning: no invocation is active, every task ended and none holds a slot, as in a final state
+// reached through a stop (§8.2, §11.3).
+func nothingRunning(s *State) bool {
+	for _, i := range s.Invocations {
+		if i.Status == InvocationActive {
+			return false
+		}
+	}
+	v := s.view()
+	for i := range s.Executions {
+		e := &s.Executions[i]
+		for j := range e.Tasks {
+			if !e.Tasks[j].Status.ended() || v.holdsSlot(e, &e.Tasks[j]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// rootComplete: the workflow concluded without a stop.
+func rootComplete(s *State) bool {
+	r, ok := s.run(Path{})
+	return ok && r.Complete
+}
+
 func randomWalks(t *testing.T, label string, p *Definition, cfg Config, seeds int) {
 	for seed := range seeds {
 		s := &State{}
@@ -202,6 +228,9 @@ func randomWalks(t *testing.T, label string, p *Definition, cfg Config, seeds in
 		}
 		if !s.Status.Terminal() {
 			t.Fatalf("%s seed %d: stuck in %v after %d steps", label, seed, s.Status, steps)
+		}
+		if !rootComplete(s) && !nothingRunning(s) {
+			t.Fatalf("%s seed %d: something runs after the conclusion of a stop", label, seed)
 		}
 		if len(s.Failures) > 0 && s.Status != StatusFailed {
 			t.Fatalf("%s seed %d: a recorded failure must fail the workflow", label, seed)
@@ -312,6 +341,104 @@ func TestMergeScenario(t *testing.T) {
 	expectStatus(t, "merge", s, StatusSucceeded)
 	if len(s.invocationsOf(nil, "notify")) != 1 {
 		t.Error("merge: discard runs its target once")
+	}
+}
+
+// stoppedText is a concurrency task and a placement whose bodies are sub-workflows, each running one
+// call (Test/Step.lean).
+const stoppedText = `{"main": "outer", "functions": [{"id": "child", "output": {"single": "T"}}],
+  "transforms": [{"id": "pass", "input": "T", "output": "T"}], "workflows": [
+  {"id": "outer", "placements": [
+    {"name": "fan", "node": {"type": "concurrency", "limit": 1, "output": "list", "element": "T",
+      "tasks": [{"name": "sub", "body": {"type": "subworkflow", "workflow": "inner", "output": "leaf"},
+        "outputTransform": "pass", "policy": "continue"}]}, "policy": "stop"},
+    {"name": "call", "node": {"type": "subworkflow", "workflow": "inner", "output": "leaf"}, "policy": "stop"}]},
+  {"id": "inner", "placements": [{"name": "leaf", "node": {"type": "function", "function": "child"}, "policy": "stop"}]}]}`
+
+// §8.2, §11.3: the conclusion after a stop ends the task and the invocation whose sub-workflows were
+// still open, without a result, and leaves their runs as they are (Test/Step.lean). Step and a
+// machine, which changes its state in place through an index, conclude alike.
+func TestConcludeAfterStop(t *testing.T) {
+	p, err := ParseDefinition([]byte(stoppedText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	exec := keyInvocation(Path{}, "fan", nil)
+	taskRun := keyChild(taskID(exec, "sub"))
+	call := keyInvocation(Path{}, "call", nil)
+	callRun := keyChild(call)
+	ops := []Op{OpStart{}, OpInvoke{Run: Path{}, Placement: "fan"}, OpBeginTask{exec, "sub"},
+		OpInvoke{Run: taskRun, Placement: "leaf"}, OpInvoke{Run: Path{}, Placement: "call"},
+		OpInvoke{Run: callRun, Placement: "leaf"}, OpCancel{}, OpTerminated{keyInvocation(taskRun, "leaf", nil)},
+		OpTerminated{keyInvocation(callRun, "leaf", nil)}}
+	s := &State{}
+	m := newMachine(p, p.derive(), &State{})
+	for _, op := range ops {
+		s = mustStep(t, p, s, op)
+		if _, err := m.apply(op); err != nil {
+			t.Fatalf("machine %s: %v", EncodeOp(op), err)
+		}
+	}
+	task := func(s *State) (*Execution, *TaskState) {
+		e, ok := s.view().execution(exec)
+		if !ok || len(e.Tasks) != 1 {
+			t.Fatal("the execution of fan")
+		}
+		return e, &e.Tasks[0]
+	}
+	invocation := func(s *State, id string) InvocationStatus {
+		i, ok := s.view().invocation(id)
+		if !ok {
+			t.Fatalf("no invocation %s", id)
+		}
+		return i.Status
+	}
+	if e, ts := task(s); ts.Status != TaskActive || !s.view().holdsSlot(e, ts) {
+		t.Fatalf("before the conclusion the task holds its slot: %v", ts.Status)
+	}
+	if st := invocation(s, call); st != InvocationActive {
+		t.Fatalf("before the conclusion the call is active: %v", st)
+	}
+	concluded := mustStep(t, p, s, OpConclude{})
+	if _, err := m.apply(OpConclude{}); err != nil {
+		t.Fatalf("machine conclude: %v", err)
+	}
+	checkMachine(t, "conclude", m)
+	if !m.s.Equal(concluded) {
+		t.Fatal("the machine concluded to another state")
+	}
+	if concluded.Status != StatusCancelled {
+		t.Fatalf("status %v", concluded.Status)
+	}
+	if e, ts := task(concluded); ts.Status != TaskCancelled || concluded.view().holdsSlot(e, ts) {
+		t.Errorf("the task ended: %v", ts.Status)
+	}
+	if invocation(concluded, exec) != InvocationCancelled || invocation(concluded, call) != InvocationCancelled {
+		t.Error("the invocations ended as cancelled")
+	}
+	if !nothingRunning(concluded) {
+		t.Error("something still runs")
+	}
+	if !slices.EqualFunc(concluded.Results, s.Results, Result.equal) || len(concluded.Deliveries) != 0 ||
+		len(concluded.Settled) != len(s.Settled) || len(concluded.TaskResults) != 0 ||
+		len(concluded.Failures) != len(s.Failures) {
+		t.Error("the conclusion published something")
+	}
+	for _, r := range concluded.Runs {
+		if r.Complete {
+			t.Errorf("run %v completed", r.Path)
+		}
+	}
+	for _, e := range concluded.Executions {
+		if e.Complete {
+			t.Error("the execution completed")
+		}
+	}
+	if _, err := Step(p, concluded, OpConclude{}); err == nil || err.Error() != "TERMINAL" {
+		t.Errorf("a second conclusion: %v", err)
 	}
 }
 

@@ -313,7 +313,12 @@ theorem step_execution_completed {p : Definition} {s t : State} {op : Op} (wk : 
       exact congrArg Execution.complete (wk.execution_eq_of_id he' he₀ (by simpa using hid))
     · exact same he
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same he
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same he
+    · obtain ⟨e', he', rfl⟩ := State.mem_endUnfinished_executions.mp he
+      refine Or.inl ?_
+      simp only [endExecution_complete]
+      exact congrArg Execution.complete (wk.execution_eq_of_id he' he₀ (by simpa using hid))
 
 /-- What completing a run checked: every placement of its workflow settled; and no invocation was
     added. --/
@@ -438,8 +443,8 @@ theorem frozen {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : st
     (hi₀ : i₀ ∈ s.invocations) (hna : i₀.status ≠ .active) (hi : i ∈ t.invocations) (hid : i.id = i₀.id) : i = i₀ := by
   rcases step_invocation_change inv.wk hs hi₀ hi hid with h | ⟨-, -, -, -, -, hc⟩
   · exact h
-  · obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive i₀ hi₀ hna
-    rcases hc with ⟨c, hc, hco, hct, -, hrun, -⟩ | ⟨e, he, heid, hec, -⟩ | ⟨R, hR, hRo, hRt, hRc, -⟩
+  · obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive (step_source_nonterminal hs) i₀ hi₀ hna
+    rcases hc with ⟨c, hc, hco, hct, -, hrun, -⟩ | ⟨e, he, heid, hec, -⟩ | ⟨R, hR, hRo, hRt, hRc, -⟩ | ⟨hact, -⟩
     · rcases hrun with hrun | hact
       · have := hcalls c hc hco hct
         rcases hrun with h | h <;> simp [h] at this
@@ -448,6 +453,7 @@ theorem frozen {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : st
       simp [hec] at this
     · have := hruns R hR hRo hRt
       simp [hRc] at this
+    · exact absurd hact hna
 
 /-- An ended invocation stays ended: nothing it owns starts again. --/
 theorem ended_kept {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : step p s op = .ok t) {i₀ i : Invocation}

@@ -75,8 +75,10 @@ def ResultOwned (p : Definition) (s : State) (r : Result) : Prop :=
     ∃ x ∈ s.settled, x.run = r.run ∧ x.placement = r.placement ∧ x.outcome = .normal ∧ x.arms = [])
 
 structure Dyn (p : Definition) (s : State) : Prop where
-  /-- An invocation that is no longer active runs no call, and its sub-run and execution completed. --/
-  nonActive : ∀ i ∈ s.invocations, i.status ≠ .active →
+  /-- Until the conclusion, an invocation that is no longer active runs no call, and its sub-run and
+      execution completed; after a stop, the conclusion ends the invocations of open runs and
+      executions (`State.endUnfinished`). --/
+  nonActive : s.status.terminal = false → ∀ i ∈ s.invocations, i.status ≠ .active →
     (∀ c ∈ s.calls, c.owner = i.id → c.task = none → c.status ≠ .running ∧ c.status ≠ .fetching) ∧
     (∀ r ∈ s.runs, r.owner = some i.id → r.task = none → r.complete = true) ∧
     (∀ e ∈ s.executions, e.id = i.id → e.complete = true)

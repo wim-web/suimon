@@ -413,7 +413,7 @@ theorem step (h : Own p s) (wk : s.WellKeyed) (h0 : s = {} ∨ s.started = true)
     · have hr' : s.run? r.path = some r := by rw [(run?_eq_some hr).2]; exact hr
       exact h.of_sameKeys ((SameKeys.setRun (r' := { r with complete := true }) wk.runs hr' rfl).trans
         (SameKeys.of_records rfl rfl rfl rfl))
-    · exact h.of_sameKeys (SameKeys.of_records rfl rfl rfl rfl)
+    · exact h.of_sameKeys (SameKeys.endUnfinished.trans (SameKeys.of_records rfl rfl rfl rfl))
 
 /-! ### What ownership excludes -/
 

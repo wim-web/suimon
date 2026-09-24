@@ -282,6 +282,12 @@ theorem stop {s : State} : Frame s s.stop where
     exact ⟨c', hc', stopCall_id.symm, stopCall_task.symm⟩
   runs := fun r h => ⟨r, h, rfl⟩
 
+theorem endUnfinished {s : State} : Frame s s.endUnfinished where
+  invocations := endUnfinished_invocations_map_id
+  executions := endUnfinished_executions_map_id
+  calls := fun c h => ⟨c, h, rfl, rfl⟩
+  runs := fun r h => ⟨r, h, rfl⟩
+
 theorem fail {s : State} {f : Failure} {policy : Policy} : Frame s (s.fail f policy) := by
   cases policy
   · rw [State.fail_stop]
@@ -453,7 +459,7 @@ theorem step_keys {p : Definition} {s t : State} {op : Op} (h : Keys s) (hs : st
     obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · have hf : Frame s (s.setRun { r with complete := true }) := Frame.setRun (run?_eq_some hr).1 rfl
       exact h.frame (hf.trans (Frame.of_eq rfl rfl rfl rfl))
-    · exact h.frame (Frame.of_eq rfl rfl rfl rfl)
+    · exact h.frame (Frame.endUnfinished.trans (Frame.of_eq rfl rfl rfl rfl))
 
 theorem reachable_keys {p : Definition} {s : State} (h : Reachable p s) : Keys s := by
   induction h with

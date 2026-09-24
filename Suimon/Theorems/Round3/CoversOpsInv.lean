@@ -594,7 +594,7 @@ theorem step_created (h : Reachable p s) (hC : Created p s) {op : Op} (hs : step
   | conclude =>
     obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · exact fr ((Frame.setRun wk (State.run?_eq_some hr).1 true fun _ => rfl).congr K rfl rfl rfl rfl)
-    · exact fr (Frame.of_eq K rfl rfl rfl rfl)
+    · exact fr (Frame.endUnfinished.congr K rfl rfl rfl rfl)
 
 /-- `Created` in every reachable state. -/
 theorem Reachable.created (h : Reachable p s) : Created p s := by

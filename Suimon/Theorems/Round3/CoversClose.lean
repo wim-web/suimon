@@ -372,7 +372,8 @@ theorem covers_closeRun {path : Path} (h : StepCtx p env T s (.closeRun path) s'
       task_ext (htsTn.trans htsn.symm) ((a6 ts htsm tsT htsTm (htsTn.trans htsn.symm)).1 hbegun) hstT
     -- The execution is open, since its task run is.
     have hec : e.complete = false := by
-      obtain ⟨e₁, he₁, he₁o, he₁c⟩ := (Settle.reachable hreach).2.1.taskRunOpen r hrm name htask hrc
+      obtain ⟨e₁, he₁, he₁o, he₁c⟩ :=
+        ((Settle.reachable hreach).2.1 (step_source_nonterminal h.accepted)).taskRunOpen r hrm name htask hrc
       have he₁e : e₁ = e :=
         wkS.execution_eq_of_id he₁ hem (Option.some.inj (he₁o.symm.trans (howner.trans (by rw [heid]))))
       rw [he₁e] at he₁c

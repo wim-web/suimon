@@ -107,10 +107,10 @@ structure LInv (p : Definition) (s : State) : Prop where
   dinv : Delivery.Inv p s
   start : s = {} ∨ s.started = true
 
-theorem LInv.of_reachable {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s) :
-    LInv p s := by
+theorem LInv.of_reachable {p : Definition} {s : State} (valid : p.validate = .ok ()) (h : Reachable p s)
+    (hnt : s.status.terminal = false) : LInv p s := by
   obtain ⟨own, act, -, -⟩ := Settle.reachable h
-  exact ⟨h.wellKeyed, Limit.reachable_inv h, Reachable.taskNames valid h, own, act, Calls.reachable_keys h,
+  exact ⟨h.wellKeyed, Limit.reachable_inv h, Reachable.taskNames valid h, own, act hnt, Calls.reachable_keys h,
     Delivery.Reachable.inv h, h.eq_empty_or_started⟩
 
 /-- A list whose keys are distinct has no duplicates. -/
@@ -551,6 +551,73 @@ theorem outputPart_stop : outputPart s.stop = outputPart s := by
 theorem ledgerL_stop (h : StopSafe s) : ledgerL p s.stop = ledgerL p s := by
   unfold ledgerL
   rw [callPart_stop h, deliveryPart_stop, inputPart_stop, outputPart_stop]
+
+/-- The conclusion after a stop fails nothing and leaves every failed owner failed. -/
+theorem endTask_status_failed (x : TaskState) : ((endTask x).status == .failed) = (x.status == .failed) := by
+  rw [endTask_status]
+  split
+  · rename_i h; rw [h]; rfl
+  · split
+    · rename_i _ h; rcases h with h | h <;> rw [h] <;> rfl
+    · rfl
+
+theorem ownerView_endUnfinished (c : Call) : ownerView s.endUnfinished c = ownerView s c := by
+  unfold ownerView
+  cases ht : c.task with
+  | none =>
+    simp only
+    rw [invocation?_endUnfinished]
+    cases s.invocation? c.owner with
+    | none => rfl
+    | some i =>
+      simp only [Option.map_some, endInvocation_run, endInvocation_placement, Option.some.injEq, Prod.mk.injEq,
+        true_and]
+      rw [endInvocation_status]
+      split
+      · rename_i h; rw [h]; rfl
+      · rfl
+  | some name =>
+    simp only
+    rw [execution?_endUnfinished]
+    cases s.execution? c.owner with
+    | none => rfl
+    | some e =>
+      simp only [Option.map_some, endExecution_run, endExecution_placement, Option.some.injEq,
+        Prod.mk.injEq, true_and]
+      rw [endExecution_tasks, List.any_map]
+      exact List.any_congr rfl fun x => by
+        simp only [Function.comp_apply, endTask_name, endTask_status_failed]
+
+theorem callPart_endUnfinished : callPart s.endUnfinished = callPart s := by
+  unfold callPart callL
+  apply filterMap_congr'
+  intro c _
+  rw [ownerView_endUnfinished]
+
+theorem inputPart_endUnfinished : inputPart s.endUnfinished = inputPart s := by
+  unfold inputPart
+  rw [endUnfinished_executions]
+  apply flatMap_map_eq
+  intro e _
+  rw [endExecution_tasks]
+  apply filterMap_map_eq
+  intro x _
+  exact taskInputL_congr rfl rfl rfl endTask_name (endTask_status_failed x)
+    (hasBody_congr (t := s.endUnfinished) (s := s) (by simp) rfl _ _)
+
+theorem outputPart_endUnfinished : outputPart s.endUnfinished = outputPart s := by
+  unfold outputPart
+  apply filterMap_congr'
+  intro r _
+  refine taskOutputL_congr rfl rfl ?_
+  unfold execPos
+  rw [execution?_endUnfinished]
+  cases s.execution? r.execution <;> rfl
+
+theorem ledgerL_endUnfinished : ledgerL p s.endUnfinished = ledgerL p s := by
+  unfold ledgerL
+  rw [callPart_endUnfinished, inputPart_endUnfinished, outputPart_endUnfinished]
+  rfl
 
 theorem ledgerL_failures {fs : List Failure} : ledgerL p { s with failures := fs } = ledgerL p s := rfl
 

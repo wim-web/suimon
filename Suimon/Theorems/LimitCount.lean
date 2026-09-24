@@ -232,6 +232,25 @@ theorem stop (h : Inv s) : Kept s s.stop where
       · rw [ite_eq_right hrun] at hst
         exact Or.inr ⟨c0, hc0, ho, ht, hst⟩
 
+/-- Ending the unfinished tasks adds no slot holder: none of them is active afterwards. --/
+theorem endUnfinished : Kept s s.endUnfinished where
+  names := fun hn e' he' => by
+    obtain ⟨e, he, rfl⟩ := mem_endUnfinished_executions.mp he'
+    rw [endExecution_tasks, List.map_map]
+    have : ((·.name) ∘ endTask : TaskState → String) = (·.name) := by
+      funext x
+      simp
+    rw [this]
+    exact hn e he
+  runs := fun _ r h0 => ⟨r, h0, rfl⟩
+  fewer := fun e' he' => by
+    obtain ⟨e, he, rfl⟩ := mem_endUnfinished_executions.mp he'
+    refine Or.inr ⟨e, he, rfl, rfl, count_le endExecution_tasks rfl fun x _ hh => ?_⟩
+    rcases hh with hact | ⟨c, hc, ho, ht, hst⟩
+    · exact absurd hact endTask_status_ne_active
+    · rw [endTask_name] at ht
+      exact Or.inr ⟨c, hc, ho, ht, hst⟩
+
 theorem fail (h : Inv s) {f : Failure} {policy : Policy} : Kept s (s.fail f policy) := by
   have k : Kept s { s with failures := s.failures ++ [f] } := of_eq rfl rfl rfl
   cases policy
@@ -465,7 +484,7 @@ theorem step_kept {p : Definition} {s t : State} {op : Op} (valid : p.validate =
     · have k : Kept s (s.setRun { r with complete := true }) :=
         Kept.setRun (r := r) (by show s.run? r.path = some r; rw [(run?_eq_some hr).2]; exact hr) rfl
       exact k.trans (Kept.of_eq rfl rfl rfl)
-    · exact Kept.of_eq rfl rfl rfl
+    · exact Kept.endUnfinished.trans (Kept.of_eq rfl rfl rfl)
 
 /-! ### The limit -/
 

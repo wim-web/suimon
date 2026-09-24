@@ -1061,7 +1061,10 @@ theorem LInv.step_books (hL : LInv p s) {op : Op} (hs : step p s op = .ok t) : B
         (outputPart_of rfl rfl))
       exact deliveryPart_eq_of (N := []) (by simp)
         (fun d _ => deliveryL_congr (Settle.SameWorkflows.setRun hr' rfl d.run)) (fun _ h => by cases h)
-    · exact books_of_grew (fs := []) (by simp) (List.Perm.of_eq (by rw [List.append_nil]; rfl))
+    · refine books_of_grew (fs := []) (by simp) ?_
+      unfold Grew
+      rw [List.append_nil]
+      exact List.Perm.of_eq (ledgerL_endUnfinished (p := p))
 
 end Ops
 
@@ -1071,7 +1074,7 @@ theorem Reachable.failures_ledgerL {p : Definition} {s : State} (valid : p.valid
   induction h with
   | empty => exact List.Perm.of_eq rfl
   | step op hr hs ih =>
-    obtain ⟨fs, hf, hg⟩ := (LInv.of_reachable valid hr).step_books hs
+    obtain ⟨fs, hf, hg⟩ := (LInv.of_reachable valid hr (step_source_nonterminal hs)).step_books hs
     rw [hf]
     exact (List.Perm.append_right fs ih).trans hg.symm
 

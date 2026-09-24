@@ -708,7 +708,7 @@ theorem conclude_running_enabled {r : Run} {w : Workflow} (started : s.started =
 theorem conclude_stopping_enabled (started : s.started = true) (stopping : s.status = .stopping)
     (hended : ∀ c ∈ s.calls, c.status.ended = true) :
     ∃ t, step p s .conclude = .ok t ∧ t ≠ s := by
-  refine ⟨{ s with status := if s.failures.isEmpty then .cancelled else .failed }, ?_, ?_⟩
+  refine ⟨{ s.endUnfinished with status := if s.failures.isEmpty then .cancelled else .failed }, ?_, ?_⟩
   · have hall : s.calls.all (·.status.ended) = true := List.all_eq_true.mpr hended
     simp [step, Step.conclude, require, started, stopping, hall, pure, Except.pure, bind, Except.bind]
   · intro heq

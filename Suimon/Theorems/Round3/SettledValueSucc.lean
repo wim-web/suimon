@@ -82,6 +82,7 @@ theorem cancelOwner_old {c : Call} (h : s.cancelOwner c = .ok t) :
 theorem step (h : SuccResult p s) (hr : Reachable p s) {op : Op} (hs : Suimon.step p s op = .ok t) :
     SuccResult p t := by
   obtain ⟨own, act, -, -⟩ := Settle.reachable hr
+  have act := act (step_source_nonterminal hs)
   have wk := hr.wellKeyed
   have wk' := step_wellKeyed wk hs
   have hk := Delivery.Inv.kept (Delivery.Reachable.inv hr) hs
@@ -256,7 +257,15 @@ theorem step (h : SuccResult p s) (hr : Reachable p s) {op : Op} (hs : Suimon.st
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact same rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same rfl
+    · refine of_old h own hk wk' fun i hi hsucc => ?_
+      obtain ⟨i₀, hi₀, rfl⟩ := mem_endUnfinished_invocations.mp hi
+      by_cases hact : i₀.status = .active
+      · rw [endInvocation_status] at hsucc
+        simp [hact] at hsucc
+      · rw [endInvocation_of_ne hact]
+        exact hi₀
 
 end SuccResult
 

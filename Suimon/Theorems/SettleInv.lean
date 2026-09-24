@@ -104,7 +104,9 @@ structure Active (p : Definition) (s : State) : Prop where
 structure Prov (p : Definition) (s : State) : Prop where
   /-- An invocation took a trigger available on its placement's input. --/
   invTrigger : ∀ i ∈ s.invocations, ∃ w, s.workflow? p i.run = some w ∧ TriggerOk p s w i
-  results : ∀ r ∈ s.results, ResultOk p s r
+  /-- Until the conclusion, a result has an origin; after a stop, the conclusion ends the invocations
+      of open executions, whose results stay (`State.endUnfinished`). --/
+  results : s.status.terminal = false → ∀ r ∈ s.results, ResultOk p s r
   /-- A skipped task has no result. --/
   skipped : ∀ e ∈ s.executions, ∀ name ts, e.tasks.find? (·.name == name) = some ts → ts.status = .skipped →
     ∀ tr ∈ s.taskResults, tr.execution = e.id → tr.task ≠ name

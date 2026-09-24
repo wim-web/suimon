@@ -340,13 +340,14 @@ theorem reachable_taskResultShape (valid : p.validate = .ok ()) {s : State} (h :
 
 /-- How a changed task may move: it keeps its status, waits, takes its input, begins, fails its declared
     input transform, or is moved by its call or its run; a run that closes normally records the index-0
-    result in `results`. -/
+    result in `results`. The conclusion after a stop cancels an active task. -/
 def TaskMove (p : Definition) (s : State) (results : List TaskResult) (e₀ : Execution) (tk₀ tk : TaskState) : Prop :=
   tk.status = tk₀.status ∨ tk.status = .notStarted ∨ tk.status = .ready ∨ tk.status = .active ∨
   (tk.status = .failed ∧ ∃ spec tid, s.taskSpec p e₀ tk.name = .ok spec ∧ spec.input = some (.declared tid)) ∨
   (∃ c ∈ s.calls, c.owner = e₀.id ∧ c.task = some tk.name) ∨
   (∃ R ∈ s.runs, R.owner = some e₀.id ∧ R.task = some tk.name ∧
-    (tk.status = .succeeded → ∃ tr ∈ results, tr.execution = e₀.id ∧ tr.task = tk.name ∧ tr.index = 0))
+    (tk.status = .succeeded → ∃ tr ∈ results, tr.execution = e₀.id ∧ tr.task = tk.name ∧ tr.index = 0)) ∨
+  (tk₀.status = .active ∧ tk.status = .cancelled)
 
 /-- Where a task after a step comes from: a task of a new execution, which waits, or a task of a stored
     execution under the same name that moved as `TaskMove` allows. -/
@@ -383,6 +384,23 @@ theorem origin_stop (h : ∀ e ∈ u.executions, ∀ tk ∈ e.tasks, TaskOrigin 
   · rcases ho with ⟨hnew, hst⟩ | ⟨e₀, he₀, h1, h2, h3, tk₀, htk₀, hn, hmove⟩
     · exact Or.inl ⟨hnew, hst⟩
     · exact Or.inr ⟨e₀, he₀, h1, h2, h3, tk₀, htk₀, hn, hmove⟩
+
+/-- The conclusion after a stop cancels active tasks, leaves waiting ones unstarted, and keeps the
+    others. -/
+theorem origin_endUnfinished : ∀ e ∈ s.endUnfinished.executions, ∀ tk ∈ e.tasks, TaskOrigin p s results e tk := by
+  intro e he tk htk
+  obtain ⟨e', he', rfl⟩ := mem_endUnfinished_executions.mp he
+  rw [endExecution_tasks, List.mem_map] at htk
+  obtain ⟨tk', htk', rfl⟩ := htk
+  refine Or.inr ⟨e', he', rfl, rfl, rfl, tk', htk', by rw [endTask_name], ?_⟩
+  unfold TaskMove
+  rw [endTask_status]
+  split
+  · rename_i hact
+    exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨hact, rfl⟩))))))
+  · split
+    · exact Or.inr (Or.inl rfl)
+    · exact Or.inl rfl
 
 /-- Recording a failure stops or keeps the tasks. -/
 theorem origin_fail {f : Failure} {policy : Policy}
@@ -554,9 +572,9 @@ theorem step_taskOrigin {s t : State} {op : Op} (hs : step p s op = .ok t) :
         exact origin_setTask (s := s) (u := s.setRun { r with complete := true }) (results := u.taskResults)
           (ts' := { ts with status := st }) rfl hem
           (List.mem_of_find?_eq_some hts) rfl
-          (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨r, hR, hRo, by simp [htask, hname], fun hst => by
+          (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨r, hR, hRo, by simp [htask, hname], fun hst => by
             obtain ⟨tr, htr, h1, h2, h3⟩ := hres hst
-            exact ⟨tr, htr, h1, h2.trans hname.symm, h3⟩⟩))))))
+            exact ⟨tr, htr, h1, h2.trans hname.symm, h3⟩⟩)))))))
           e' he' tk htk
       rcases h with ⟨-, v, -, -, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩
       · exact key rfl fun _ => ⟨_, List.mem_append_right _ (List.mem_singleton_self _), rfl, rfl, rfl⟩
@@ -568,7 +586,9 @@ theorem step_taskOrigin {s t : State} {op : Op} (hs : step p s op = .ok t) :
     · exact origin_stop (fun e he tk htk => origin_self he htk)
     · exact same rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same rfl
+    · exact origin_endUnfinished
 
 /-! ### What a step keeps about tasks -/
 
@@ -639,7 +659,7 @@ theorem TaskStatusInv.step {s t : State} {op : Op} (hreach : Reachable p s) (hs 
       rcases hw with hw | hw | hw <;> cases hw
     have hspec₀ : s.taskSpec p e₀ tk₀.name = .ok spec := by
       rw [hn, ← taskSpec_back hreach hs he₀ h2 h3]; exact hspec
-    rcases hmove with heq | hw | hw | hw | ⟨hw, -⟩ | ⟨c, hc, hco, hct⟩ | ⟨R, -, -, -, hres⟩
+    rcases hmove with heq | hw | hw | hw | ⟨hw, -⟩ | ⟨c, hc, hco, hct⟩ | ⟨R, -, -, -, hres⟩ | ⟨-, hw⟩
     · obtain ⟨tr, htr, a1, a2, a3⟩ := h.succeeded e₀ he₀ tk₀ htk₀ (heq.symm.trans hst) spec hspec₀ hbody
       obtain ⟨tr', htr', b1, b2, b3, -⟩ := K.taskResult tr htr
       exact ⟨tr', htr', b1.trans (a1.trans h1), b2.trans (a2.trans hn), b3.trans a3⟩
@@ -655,12 +675,14 @@ theorem TaskStatusInv.step {s t : State} {op : Op} (hreach : Reachable p s) (hs 
       exact absurd hf (hbody f)
     · obtain ⟨tr, htr, a1, a2, a3⟩ := hres hst
       exact ⟨tr, htr, a1.trans h1, a2, a3⟩
+    · rw [hst] at hw; cases hw
   · rcases step_taskOrigin hs e he ts hts with ⟨-, hw⟩ | ⟨e₀, he₀, h1, h2, h3, tk₀, htk₀, hn, hmove⟩
     · rw [hst] at hw
       rcases hw with hw | hw | hw <;> cases hw
     have hspec₀ : s.taskSpec p e₀ tk₀.name = .ok spec := by
       rw [hn, ← taskSpec_back hreach hs he₀ h2 h3]; exact hspec
-    rcases hmove with heq | hw | hw | hw | ⟨-, spec', tid, hspec', hin⟩ | ⟨c, hc, hco, hct⟩ | ⟨R, hR, hRo, hRt, -⟩
+    rcases hmove with heq | hw | hw | hw | ⟨-, spec', tid, hspec', hin⟩ | ⟨c, hc, hco, hct⟩ | ⟨R, hR, hRo, hRt, -⟩ |
+        ⟨-, hw⟩
     · refine h.failed e₀ he₀ tk₀ htk₀ (heq.symm.trans hst) ?_ spec hspec₀
       rw [hn]
       exact notBegun_back hreach hs h1 hnb
@@ -678,6 +700,7 @@ theorem TaskStatusInv.step {s t : State} {op : Op} (hreach : Reachable p s) (hs 
       cases this
     · obtain ⟨R', hR', -, -, -, a4, a5, -⟩ := K.run R hR
       exact absurd ⟨by rw [a4, hRo, h1], by rw [a5, hRt]⟩ (hnb.2 R' hR')
+    · rw [hst] at hw; cases hw
 
 /-- `TaskStatusInv` holds in every reachable state. -/
 theorem reachable_taskStatusInv {s : State} (h : Reachable p s) : TaskStatusInv p s := by

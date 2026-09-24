@@ -304,10 +304,65 @@ theorem taskRun_path {p : Definition} {s : State} (inv : Delivery.Inv p s) {R : 
     obtain rfl : e₁ = e := inv.wk.execution_eq_of_id he₁ he (Option.some.inj (ho₁.symm.trans ho))
     exact hp
 
+/-- A step to a final status is the conclusion: it keeps the executions, or, after a stop, ends the
+    invocations and tasks that have not ended. -/
+theorem step_final_executions {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
+    (ht : t.status.terminal = true) :
+    t.executions = s.executions ∨ t.executions = s.endUnfinished.executions := by
+  by_cases running : s.status = .running
+  · rcases FinalStatus.step_of_running hs running with (h | ⟨h, -⟩) | rfl
+    · rw [h] at ht; cases ht
+    · rw [h] at ht; cases ht
+    · obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨h, -⟩⟩ := Step.conclude_inv hs
+      · exact Or.inl rfl
+      · rw [h] at running; cases running
+  · obtain ⟨hstop, -, hcases⟩ := step_of_status_ne_running hs running
+    rcases hcases with ⟨c, -, -, hf⟩ | ⟨c, -, -, ho⟩ | rfl | ⟨-, rfl⟩
+    · rcases State.failCall_status hf with h | h <;> rw [h] at ht <;> simp [hstop, Status.terminal] at ht
+    · rw [(State.cancelOwner_update ho).status] at ht; simp [hstop, Status.terminal] at ht
+    · simp [hstop, Status.terminal] at ht
+    · exact Or.inr rfl
+
+/-- The conclusion leaves an execution whose tasks ended as it is. -/
+theorem endExecution_of_ended {e : Execution} (h : ∀ tk ∈ e.tasks, tk.status.ended = true) :
+    endExecution e = e := by
+  have htasks : e.tasks.map endTask = e.tasks := by
+    have : e.tasks.map endTask = e.tasks.map id :=
+      List.map_congr_left fun tk htk => endTask_of_ended (h tk htk)
+    rw [this, List.map_id]
+  cases e
+  simp only [endExecution] at htasks ⊢
+  rw [htasks]
+
+/-- What a step to a final status keeps: ended tasks, complete executions whose tasks ended, and
+    `DoneTasks`; after a stop, every task has ended. -/
+theorem step_final {p : Definition} {s t : State} {op : Op} (dt : DoneTasks s) (hs : step p s op = .ok t)
+    (ht : t.status.terminal = true) :
+    (∀ e ∈ s.executions, ∀ tk ∈ e.tasks, tk.status.ended = true →
+      ∃ e' ∈ t.executions, e'.id = e.id ∧ tk ∈ e'.tasks) ∧
+    (∀ e ∈ s.executions, e.complete = true → (∀ tk ∈ e.tasks, tk.status.ended = true) → e ∈ t.executions) ∧
+    DoneTasks t := by
+  rcases step_final_executions hs ht with he | he
+  · exact ⟨fun e hm tk htk _ => ⟨e, he ▸ hm, rfl, htk⟩, fun e hm _ _ => he ▸ hm,
+      fun e hm hc tk htk => dt e (he ▸ hm) hc tk htk⟩
+  · refine ⟨fun e hm tk htk hend => ?_, fun e hm _ hall => ?_, fun e hm _ tk htk => ?_⟩
+    · refine ⟨endExecution e, he ▸ mem_endUnfinished_executions.mpr ⟨e, hm, rfl⟩, rfl, ?_⟩
+      rw [endExecution_tasks]
+      exact List.mem_map.mpr ⟨tk, htk, endTask_of_ended hend⟩
+    · rw [he]
+      exact mem_endUnfinished_executions.mpr ⟨e, hm, endExecution_of_ended hall⟩
+    · rw [he] at hm
+      obtain ⟨e₀, -, rfl⟩ := mem_endUnfinished_executions.mp hm
+      rw [endExecution_tasks, List.mem_map] at htk
+      obtain ⟨tk₀, -, rfl⟩ := htk
+      exact endTask_ended
+
 open State in
-/-- Every step keeps ended tasks and complete executions, and both invariants. -/
+/-- Every step to a state that has not concluded keeps ended tasks and complete executions, and both
+    invariants (the conclusion after a stop ends the tasks of open runs, `step_final`). -/
 theorem step_good {p : Definition} {s t : State} {op : Op} (inv : Delivery.Inv p s) (lim : Limit.Inv s)
-    (dt : DoneTasks s) (rt : RunTasks s) (hs : step p s op = .ok t) : Good s t := by
+    (dt : DoneTasks s) (rt : RunTasks s) (hs : step p s op = .ok t) (ht : t.status.terminal = false) :
+    Good s t := by
   cases op with
   | start input =>
     obtain ⟨hst, -, -, -, -, rfl⟩ := Step.start_inv hs
@@ -451,17 +506,21 @@ theorem step_good {p : Definition} {s t : State} {op : Op} (inv : Delivery.Inv p
     · exact Good.stop.trans (Good.of_eq rfl rfl)
     · exact Good.of_eq rfl rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
-    · exact Good.completeRun.trans (Good.of_eq rfl rfl)
-    · exact Good.of_eq rfl rfl
+    rw [step_conclude_terminal hs] at ht
+    cases ht
 
-/-- Both invariants hold in every reachable state. -/
-theorem reachable_tasks {p : Definition} {s : State} (h : Reachable p s) : DoneTasks s ∧ RunTasks s := by
+/-- Both invariants hold in every reachable state; a task whose run is open is active until the
+    conclusion, which ends it after a stop. -/
+theorem reachable_tasks {p : Definition} {s : State} (h : Reachable p s) :
+    DoneTasks s ∧ (s.status.terminal = false → RunTasks s) := by
   induction h with
-  | empty => exact ⟨by simp [DoneTasks], by simp [RunTasks]⟩
-  | step op hr hs ih =>
-    have g := step_good (Delivery.Reachable.inv hr) (Limit.reachable_inv hr) ih.1 ih.2 hs
-    exact ⟨g.doneTasks ih.1, g.runTasks ih.2⟩
+  | empty => exact ⟨by simp [DoneTasks], fun _ => by simp [RunTasks]⟩
+  | @step s t op hr hs ih =>
+    have rt := ih.2 (step_source_nonterminal hs)
+    cases ht : t.status.terminal
+    · have g := step_good (Delivery.Reachable.inv hr) (Limit.reachable_inv hr) ih.1 rt hs ht
+      exact ⟨g.doneTasks ih.1, fun _ => g.runTasks rt⟩
+    · exact ⟨(step_final ih.1 hs ht).2.2, fun h => by cases h⟩
 
 /-! ### Task results -/
 

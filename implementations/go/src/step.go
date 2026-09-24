@@ -387,6 +387,37 @@ func (st *stepper) stop() {
 	}
 }
 
+// endUnfinished ends every invocation and task that has not ended, at the conclusion after a stop
+// (§8.2, §11.3): an active invocation or task ends cancelled, and a task that never started ends
+// unstarted, so that none holds a slot any more. It publishes no result, delivery or settlement, and
+// leaves runs as they are.
+func (st *stepper) endUnfinished() {
+	own(st, listInvocations, &st.s.Invocations)
+	for i := range st.s.Invocations {
+		if inv := &st.s.Invocations[i]; inv.Status == InvocationActive {
+			inv.Status = InvocationCancelled
+			if st.ix != nil {
+				st.ix.setInvocationStatus(inv, InvocationActive)
+			}
+		}
+	}
+	own(st, listExecutions, &st.s.Executions)
+	for i := range st.s.Executions {
+		e := &st.s.Executions[i]
+		if st.ix == nil {
+			e.Tasks = slices.Clone(e.Tasks)
+		}
+		for j := range e.Tasks {
+			switch t := &e.Tasks[j]; t.Status {
+			case TaskActive:
+				t.Status = TaskCancelled
+			case TaskPending, TaskReady:
+				t.Status = TaskNotStarted
+			}
+		}
+	}
+}
+
 // fail records a failure; the policy is chosen where the failure happened, never again by an
 // enclosing placement (§11.2).
 func (st *stepper) fail(f Failure, policy Policy) {
@@ -1688,7 +1719,8 @@ func (st *stepper) cancel() error {
 	return reject("TERMINAL")
 }
 
-// conclude decides the final status (§11.3, §13.3).
+// conclude decides the final status (§11.3, §13.3). After a stop, the cancelled calls have all
+// terminated, and what has not ended ends without a result (endUnfinished).
 func (st *stepper) conclude() error {
 	s := st.s
 	if err := require(s.Started, "NOT_STARTED"); err != nil {
@@ -1735,6 +1767,7 @@ func (st *stepper) conclude() error {
 				return reject("CALLS_RUNNING")
 			}
 		}
+		st.endUnfinished()
 		s.Status = StatusCancelled
 		if len(s.Failures) > 0 {
 			s.Status = StatusFailed

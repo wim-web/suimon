@@ -340,6 +340,28 @@ theorem execW_stopExecution (e : Execution) : execW e ≤ execW (stopExecution e
   rw [stopExecution_complete, Limit.stopExecution_tasks]
   omega
 
+/-- The conclusion after a stop ends invocations and tasks, never moves one back. -/
+theorem work_endUnfinished_le : work s ≤ work s.endUnfinished := by
+  have hi : (s.invocations.map invW).sum ≤ (s.endUnfinished.invocations.map invW).sum := by
+    rw [endUnfinished_invocations]
+    refine sum_map_le fun i _ => ?_
+    have := endInvocation_status_ne (i := i)
+    unfold invW
+    split <;> simp_all
+  have he : (s.executions.map execW).sum ≤ (s.endUnfinished.executions.map execW).sum := by
+    rw [endUnfinished_executions]
+    refine sum_map_le fun e _ => ?_
+    have := sum_map_le (l := e.tasks) (g := endTask) (f := taskProgress) fun x _ =>
+      taskProgress_le_ended x endTask_ended
+    unfold execW
+    rw [endExecution_complete, endExecution_tasks]
+    omega
+  rw [work_eq, work_eq]
+  simp only [flagW, endUnfinished_status, endUnfinished_started, endUnfinished_cancelled, endUnfinished_runs,
+    endUnfinished_calls, endUnfinished_results, endUnfinished_taskResults, endUnfinished_deliveries,
+    endUnfinished_settled]
+  omega
+
 /-- The stop moves calls to `cancelling` and waiting tasks to `notStarted`, never back. -/
 theorem work_stop_le (h : s.status = .running ∨ s.status = .stopping) : work s ≤ work s.stop := by
   have hc : (s.calls.map callW).sum ≤ (s.stop.calls.map callW).sum := by
@@ -740,8 +762,8 @@ theorem step_work_lt (h : Reachable p s) (hs : step p s op = .ok t) (hne : t ≠
       split
       · decide
       · split <;> decide
-    · refine work_withStatus_lt ?_
-      rw [hstop]
+    · refine Nat.lt_of_le_of_lt work_endUnfinished_le (work_withStatus_lt (u := s.endUnfinished) ?_)
+      rw [endUnfinished_status, hstop]
       split <;> decide
 
 theorem Conforming.length_le_work {tr : List Op} (h : Conforming p env tr s) : tr.length ≤ work s := by

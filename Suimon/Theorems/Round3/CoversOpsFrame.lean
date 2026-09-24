@@ -252,6 +252,28 @@ theorem Frame.stop : Frame p s s.stop := by
         rw [e]
         exact TaskMove.refl tk₀
 
+/-- The conclusion after a stop ends the tasks that have not ended, keeping their inputs; it fails
+    none and makes none pending. -/
+theorem Frame.endUnfinished : Frame p s s.endUnfinished := by
+  refine ⟨Delivery.Kept.endUnfinished s, fun c h => ⟨c, h, rfl⟩, fun i h => Delivery.invOld_endUnfinished h,
+    fun r h => ⟨r, h, rfl, rfl, rfl, rfl, rfl⟩, fun x hx => ?_⟩
+  obtain ⟨e, he, rfl⟩ := State.mem_endUnfinished_executions.mp hx
+  refine ⟨e, he, rfl, rfl, rfl, rfl, ?_, fun tk htk => ?_⟩
+  · rw [endExecution_tasks, List.map_map]
+    exact List.map_congr_left fun x _ => by simp
+  · rw [endExecution_tasks] at htk
+    obtain ⟨tk₀, htk₀, rfl⟩ := List.mem_map.mp htk
+    refine ⟨tk₀, htk₀, by simp, Or.inl (by simp), fun h => ?_, fun h => Or.inl ?_⟩
+    · have hend := endTask_ended (t := tk₀)
+      rw [h] at hend
+      cases hend
+    · rw [endTask_status] at h
+      split at h
+      · cases h
+      · split at h
+        · cases h
+        · exact h
+
 theorem Frame.fail (wk : s.WellKeyed) (f : Failure) (policy : Policy) : Frame p s (s.fail f policy) := by
   have h : Frame p s { s with failures := s.failures ++ [f] } :=
     Frame.of_eq (Delivery.Kept.of_eq rfl rfl rfl rfl rfl rfl rfl rfl ⟨[f], rfl⟩) rfl rfl rfl rfl

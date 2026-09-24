@@ -104,10 +104,11 @@ theorem taskFrom_cancelled (h : Reachable p s) (hs : step p s op = .ok t) {c : C
       have hex : t.executions = s.executions := by rw [ht]; rfl
       exact taskFrom_same h hs (hex ▸ he) he rfl rfl rfl htk htk
 
-/-- Every task after a step that does not stop comes from a new execution, or from a task before the
-    step as `TaskFrom` describes. -/
-theorem step_taskFrom (h : Reachable p s) (hs : step p s op = .ok t) (hstop : t.status ≠ .stopping)
-    {e : Execution} (he : e ∈ t.executions) {tk : TaskState} (htk : tk ∈ e.tasks) : TaskFrom p s t op e tk := by
+/-- Every task after a step from a running state that does not stop comes from a new execution, or
+    from a task before the step as `TaskFrom` describes. -/
+theorem step_taskFrom (h : Reachable p s) (hs : step p s op = .ok t) (hrun : s.status = .running)
+    (hstop : t.status ≠ .stopping) {e : Execution} (he : e ∈ t.executions) {tk : TaskState} (htk : tk ∈ e.tasks) :
+    TaskFrom p s t op e tk := by
   have same : t.executions = s.executions → TaskFrom p s t op e tk := fun hex =>
     taskFrom_same h hs (hex ▸ he) he rfl rfl rfl htk htk
   cases op with
@@ -261,7 +262,10 @@ theorem step_taskFrom (h : Reachable p s) (hs : step p s op = .ok t) (hstop : t.
     · exact absurd (show t.status = .stopping by rw [ht]; rfl) hstop
     · exact absurd (show t.status = .stopping by rw [ht]; exact hst) hstop
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨hst, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same rfl
+    · rw [hrun] at hst
+      cases hst
 
 end RunConformAux
 end Suimon.Round3

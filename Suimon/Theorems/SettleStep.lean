@@ -170,6 +170,7 @@ theorem noNewResult (hres : t.results = s.results) :
 /-- Every step keeps the settlement invariant. --/
 theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed)
     (h0 : s = {} ∨ s.started = true) {op : Op} (hs : step p s op = .ok t) : SettledInv p t := by
+  have hnt := step_source_nonterminal hs
   cases op with
   | start input =>
     obtain ⟨hns, -, _, -, -, rfl⟩ := Step.start_inv hs
@@ -198,17 +199,17 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
         rw [h1, h2, hnew] at this
         cases this
     rcases hcases with ⟨f, decl, -, -, -, rfl⟩ | ⟨judge, arms, -, -, rfl⟩ | ⟨wf, out, -, -, rfl⟩ | ⟨cc, -, -, rfl⟩
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendCall fun _ x hx i hi => hown x hx i hi)) rfl
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendCall fun _ x hx i hi => hown x hx i hi)) rfl
         (noNewResult rfl)
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendCall fun _ x hx i hi => hown x hx i hi)) rfl
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendCall fun _ x hx i hi => hown x hx i hi)) rfl
         (noNewResult rfl)
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendRun fun _ o ho x hx i hi => by
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendRun fun _ o ho x hx i hi => by
         rw [← Option.some.inj ho]; exact hown x hx i hi)) rfl (noNewResult rfl)
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendExecution fun x hx i hi => hown x hx i hi)) rfl
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendExecution fun x hx i hi => hown x hx i hi)) rfl
         (noNewResult rfl)
   | fetch id =>
     obtain ⟨-, -, c, hc, -, hst, rfl⟩ := Step.fetch_inv hs
-    exact h.of_facts own prov wk (Facts.setCall (call?_eq_some hc).1 rfl rfl (by rw [hst]; rfl)) rfl
+    exact h.of_facts own prov hnt wk (Facts.setCall (call?_eq_some hc).1 rfl rfl (by rw [hst]; rfl)) rfl
       (noNewResult rfl)
   | returned id value =>
     obtain ⟨-, -, c, f, s', hc, -, hst, -, hacc, hso⟩ := Step.returned_inv hs
@@ -219,7 +220,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       have f := (Facts.appendResult (p := p) (r := ⟨Key.callResult c.id 0, i.run, i.placement, c.id, none, value⟩)
         hres).trans (Facts.afterCall (wk.accept hacc) hc0 (Or.inl hst) (fun h => act.callActive c hc0 h (Or.inl hst))
           hso)
-      refine h.of_facts own prov wk f (by rw [(settleOwner_update hso).settled]; rfl)
+      refine h.of_facts own prov hnt wk f (by rw [(settleOwner_update hso).settled]; rfl)
         (newResult (r0 := ⟨Key.callResult c.id 0, i.run, i.placement, c.id, none, value⟩) ?_ ?_)
       · rw [(settleOwner_update hso).results]; rfl
       · exact fun w pl hwt hpl e => not_wait_of_inv own f.workflows hi'.1 hwt hpl e
@@ -227,7 +228,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
         (t := { s with taskResults := s.taskResults ++ [{ execution := c.owner, task := name, index := 0, value }] })
         rfl rfl rfl rfl rfl rfl rfl).trans (Facts.afterCall (wk.accept hacc) hc0 (Or.inl hst)
           (fun h => act.callActive c hc0 h (Or.inl hst)) hso)
-      exact h.of_facts own prov wk f (by rw [(settleOwner_update hso).settled]; rfl)
+      exact h.of_facts own prov hnt wk f (by rw [(settleOwner_update hso).settled]; rfl)
         (noNewResult (by rw [(settleOwner_update hso).results]; rfl))
   | judged id arm =>
     obtain ⟨-, -, c, j, i, pl, judge, arms, s', hc, hst, -, htc, hi, -, -, -, hacc, rfl⟩ := Step.judged_inv hs
@@ -246,7 +247,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
         (Facts.setCall (c' := { c with status := .returned }) hc0 rfl rfl (by rw [hst]; rfl))).trans
         (Facts.setInvocation (i := i0) (i' := { i0 with status := .succeeded, arm := some arm })
           (by exact wk1.invocations) (by exact hj') rfl hja)
-      exact h.of_facts own prov wk f rfl (newResult rfl fun w pl hwt hpl e =>
+      exact h.of_facts own prov hnt wk f rfl (newResult rfl fun w pl hwt hpl e =>
         not_wait_of_inv own f.workflows hj' hwt hpl e)
     · rw [htc] at htc'; cases htc'
   | yielded id value =>
@@ -258,22 +259,22 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       have f := (Facts.appendResult (p := p)
         (r := ⟨Key.callResult c.id c.yields, i.run, i.placement, c.id, none, value⟩) hres).trans
         (Facts.setCall (c' := { c with status := .running, yields := c.yields + 1 }) hc0 rfl rfl (by rw [hst]; rfl))
-      exact h.of_facts own prov wk f rfl (newResult rfl fun w pl hwt hpl e =>
+      exact h.of_facts own prov hnt wk f rfl (newResult rfl fun w pl hwt hpl e =>
         not_wait_of_inv own f.workflows hi'.1 hwt hpl e)
     · have f := (Facts.of_records (p := p) (s := s)
         (t := { s with taskResults := s.taskResults ++ [{ execution := c.owner, task := name, index := c.yields, value }] })
         rfl rfl rfl rfl rfl rfl rfl).trans
         (Facts.setCall (c' := { c with status := .running, yields := c.yields + 1 }) hc0 rfl rfl (by rw [hst]; rfl))
-      exact h.of_facts own prov wk f rfl (noNewResult rfl)
+      exact h.of_facts own prov hnt wk f rfl (noNewResult rfl)
   | ended id =>
     obtain ⟨-, -, c, hc, -, hst, hso⟩ := Step.ended_inv hs
-    exact h.of_facts own prov wk (Facts.afterCall wk (call?_eq_some hc).1 (Or.inr hst)
+    exact h.of_facts own prov hnt wk (Facts.afterCall wk (call?_eq_some hc).1 (Or.inr hst)
       (fun h => act.callActive c (call?_eq_some hc).1 h (Or.inr hst)) hso)
       (by rw [(settleOwner_update hso).settled]; rfl) (noNewResult (by rw [(settleOwner_update hso).results]; rfl))
   | failed id =>
     obtain ⟨-, -, c, hc, hrun, hf⟩ := Step.failed_inv hs
     obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
-    exact h.of_facts own prov wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
+    exact h.of_facts own prov hnt wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
         (fun h => act.callActive c (call?_eq_some hc).1 h hrun) hso).trans Facts.fail)
       (by simp [(settleOwner_update hso).settled]) (noNewResult (by simp [(settleOwner_update hso).results]))
   | timedOut id element =>
@@ -283,20 +284,20 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       · exact Or.inr h1
       · exact h1
     obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
-    exact h.of_facts own prov wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
+    exact h.of_facts own prov hnt wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
         (fun h => act.callActive c (call?_eq_some hc).1 h hrun) hso).trans Facts.fail)
       (by simp [(settleOwner_update hso).settled]) (noNewResult (by simp [(settleOwner_update hso).results]))
   | lost id =>
     obtain ⟨-, -, c, hc, ⟨hrun, hf⟩ | ⟨hcan, ho⟩⟩ := Step.lost_inv hs
     · obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
-      exact h.of_facts own prov wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
+      exact h.of_facts own prov hnt wk ((Facts.afterCall wk (call?_eq_some hc).1 hrun
         (fun h => act.callActive c (call?_eq_some hc).1 h hrun) hso).trans Facts.fail)
         (by simp [(settleOwner_update hso).settled]) (noNewResult (by simp [(settleOwner_update hso).results]))
-    · exact h.of_facts own prov wk (Facts.afterCancel wk (call?_eq_some hc).1 hcan ho)
+    · exact h.of_facts own prov hnt wk (Facts.afterCancel wk (call?_eq_some hc).1 hcan ho)
         (by rw [(cancelOwner_update ho).settled]; rfl) (noNewResult (by rw [(cancelOwner_update ho).results]; rfl))
   | terminated id =>
     obtain ⟨-, -, c, hc, hcan, ho⟩ := Step.terminated_inv hs
-    exact h.of_facts own prov wk (Facts.afterCancel wk (call?_eq_some hc).1 hcan ho)
+    exact h.of_facts own prov hnt wk (Facts.afterCancel wk (call?_eq_some hc).1 hcan ho)
       (by rw [(cancelOwner_update ho).settled]; rfl) (noNewResult (by rw [(cancelOwner_update ho).results]; rfl))
   | deliver path index source value =>
     obtain ⟨-, -, w, c, outcome, hdt, -, rfl⟩ := Step.deliver_inv hs
@@ -304,27 +305,27 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
     have hr' := result?_eq_some hr
     have hfits := h.deliveryFits (d := { run := path, connection := index, source, outcome }) hfresh
       ⟨w, hw, c, hc, r, hr'.1, hr'.2, h1, h2, by rcases h3 with h3 | h3 <;> simp [h3]⟩
-    exact h.of_facts own prov wk (Facts.appendDelivery hfits) rfl (noNewResult rfl)
+    exact h.of_facts own prov hnt wk (Facts.appendDelivery hfits) rfl (noNewResult rfl)
   | transformFailed path index source =>
     obtain ⟨-, -, w, c, tid, target, hdt, -, -, rfl⟩ := Step.transformFailed_inv hs
     obtain ⟨hw, hc, ⟨r, hr, h1, h2, h3⟩, hfresh⟩ := Step.deliveryTarget_eq_ok.mp hdt
     have hr' := result?_eq_some hr
     have hfits := h.deliveryFits (d := { run := path, connection := index, source, outcome := .failed }) hfresh
       ⟨w, hw, c, hc, r, hr'.1, hr'.2, h1, h2, by rcases h3 with h3 | h3 <;> simp [h3]⟩
-    exact h.of_facts own prov wk ((Facts.appendDelivery hfits).trans Facts.fail) (by simp) (noNewResult (by simp))
+    exact h.of_facts own prov hnt wk ((Facts.appendDelivery hfits).trans Facts.fail) (by simp) (noNewResult (by simp))
   | taskInput eid name value =>
     obtain ⟨-, -, e, _, _, he, -, -, -, -, rfl⟩ := Step.taskInput_inv hs
-    exact h.of_facts own prov wk (Facts.setTask (execution?_eq_some he).1) rfl (noNewResult rfl)
+    exact h.of_facts own prov hnt wk (Facts.setTask (execution?_eq_some he).1) rfl (noNewResult rfl)
   | taskInputFailed eid name =>
     obtain ⟨-, -, e, _, _, _, he, -, -, -, -, rfl⟩ := Step.taskInputFailed_inv hs
-    exact h.of_facts own prov wk ((Facts.setTask (execution?_eq_some he).1).trans Facts.fail) (by simp)
+    exact h.of_facts own prov hnt wk ((Facts.setTask (execution?_eq_some he).1).trans Facts.fail) (by simp)
       (noNewResult (by simp))
   | beginTask eid name =>
     obtain ⟨-, -, e, _, ts, _, he, -, -, -, -, -, -, hcases⟩ := Step.beginTask_inv hs
     have f1 := Facts.setTask (p := p) (ts := { ts with status := .active }) (execution?_eq_some he).1
     rcases hcases with ⟨_, _, -, -, -, rfl⟩ | ⟨_, _, -, -, rfl⟩
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendCall fun h => by simp at h)) rfl (noNewResult rfl)
-    · exact h.of_facts own prov wk (f1.trans (Facts.appendRun fun h => by simp at h)) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendCall fun h => by simp at h)) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (f1.trans (Facts.appendRun fun h => by simp at h)) rfl (noNewResult rfl)
   | taskOutput eid name index value =>
     obtain ⟨-, -, e, cc, spec, r, he, hcc0, hspec, hout, hr, hpend, hcases⟩ := Step.taskOutput_inv hs
     have he' := execution?_eq_some he
@@ -350,12 +351,12 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       rw [hir, hip] at hres
       have f := f1.trans (Facts.appendResult (p := p) (s := s.setTaskResult { r with output := .value value })
         (r := ⟨Key.taskOutput eid name index, e.run, e.placement, eid, none, value⟩) hres)
-      exact h.of_facts own prov wk f rfl (newResult rfl fun w pl hwt hpl e' =>
+      exact h.of_facts own prov hnt wk f rfl (newResult rfl fun w pl hwt hpl e' =>
         not_wait_of_inv own f.workflows hi (hir ▸ hwt) (hip ▸ hpl) e')
-    · exact h.of_facts own prov wk f1 rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk f1 rfl (noNewResult rfl)
   | taskOutputFailed eid name index =>
     obtain ⟨-, -, _, _, r, -, -, -, -, -, rfl⟩ := Step.taskOutputFailed_inv hs
-    exact h.of_facts own prov wk ((Facts.of_records (p := p) (s := s) (t := s.setTaskResult { r with output := .failed })
+    exact h.of_facts own prov hnt wk ((Facts.of_records (p := p) (s := s) (t := s.setTaskResult { r with output := .failed })
       rfl rfl rfl rfl rfl rfl rfl).trans Facts.fail) (by simp) (noNewResult (by simp))
   | settle path name =>
     obtain ⟨-, -, r, w, pl, shape, kind, x, result, hr, -, hw, hpl, hfresh, hshape, hkind, hout, hcases⟩ :=
@@ -365,7 +366,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
     obtain ⟨hall, hxrun, hxpl, -⟩ := settleOutcome_some hout
     rw [hpln] at hxpl hall
     have hcl := settle_closed hpl hshape hout
-    have hne := settle_noEligible h prov own wk hwf hpl hfresh hshape hkind hout
+    have hne := settle_noEligible h prov hnt own wk hwf hpl hfresh hshape hkind hout
     -- The new settlement: its invocations ended, its input closed, its missing results.
     have newEnded : ∀ i ∈ s.invocationsOf x.run x.placement, s.invocationEnded i = true := by
       rw [hxrun, hxpl]
@@ -391,7 +392,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
           · rw [List.mem_singleton.mp hx'] at harm hr'
             rw [hxrun, hxpl] at hr'
             exact hne arm harm r' hr'
-        waitValue := h.waitValue_mono own prov f (noNewResult rfl) }
+        waitValue := h.waitValue_mono own prov hnt f (noNewResult rfl) }
     · obtain ⟨hxv, hresr, hresp, e, hwe⟩ := settleOutcome_aggregate hout
       have hresfresh : s.settled? res.run res.placement = none := by rw [hresr, hresp, hpln]; exact hfresh
       have f : Facts p s { s with settled := s.settled ++ [x], results := s.results ++ [res] } :=
@@ -448,7 +449,7 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
     have f2 := fun (st : InvocationStatus) => f1.trans
       (Facts.setInvocation (i := j) (i' := { j with status := st }) wk1.invocations hj rfl hja)
     rcases hcases with ⟨-, rfl⟩ | ⟨-, -, -, rfl⟩ | ⟨-, -, rfl⟩
-    · exact h.of_facts own prov wk (f2 .skipped) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (f2 .skipped) rfl (noNewResult rfl)
     · obtain ⟨i3, hi3, hi3e, hi3r, hi3p, -⟩ := own.execOwner e he'.1
       have : i3 = j := wk.invocation_eq_of_id hi3 hj (hi3e.trans hje.symm)
       subst this
@@ -457,9 +458,9 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       have f := (f2 .succeeded).trans (Facts.appendResult (p := p) (r := ⟨Key.list eid, e.run, e.placement, eid, none,
         listValue ((s.taskResults.filter fun x => x.execution == eid &&
           ((cc.tasks.filter (·.output.isSome)).map (·.name)).contains x.task).filterMap (·.output.value?))⟩) hres)
-      exact h.of_facts own prov wk f rfl (newResult rfl fun w pl hwt hpl e' =>
+      exact h.of_facts own prov hnt wk f rfl (newResult rfl fun w pl hwt hpl e' =>
         not_wait_of_inv own f.workflows hj (hi3r ▸ hwt) (hi3p ▸ hpl) e')
-    · exact h.of_facts own prov wk (f2 .succeeded) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (f2 .succeeded) rfl (noNewResult rfl)
   | closeRun path =>
     obtain ⟨-, -, r, w, output, x, owner, hr, hrc, -, -, -, -, -, howner, hcases⟩ := Step.closeRun_inv hs
     have hr' : s.run? r.path = some r := by rw [(run?_eq_some hr).2]; exact hr
@@ -477,41 +478,45 @@ theorem step (h : SettledInv p s) (prov : Prov p s) (act : Active p s) (own : Ow
       · have hres := h.unsettled_of_run hr0 hrc htask hj (howner.trans (by rw [hjo]))
         have f := (f2 .succeeded).trans (Facts.appendResult (p := p)
           (r := ⟨Key.returned j.id, j.run, j.placement, j.id, none, v⟩) hres)
-        exact h.of_facts own prov wk f rfl (newResult rfl fun w pl hwt hpl e =>
+        exact h.of_facts own prov hnt wk f rfl (newResult rfl fun w pl hwt hpl e =>
           not_wait_of_inv own f.workflows hj hwt hpl e)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
     · have he' := execution?_eq_some he
       have f2 := fun (st : TaskStatus) => f1.trans (Facts.setTask (s := s.setRun { r with complete := true })
         (ts := { ts with status := st }) he'.1)
       rcases hcases with ⟨-, v, -, -, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩
-      · exact h.of_facts own prov wk ((f2 .succeeded).trans (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl
+      · exact h.of_facts own prov hnt wk ((f2 .succeeded).trans (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl
           (noNewResult rfl)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
-      · exact h.of_facts own prov wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
+      · exact h.of_facts own prov hnt wk (f2 _) rfl (noNewResult rfl)
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs
-    · exact h.of_facts own prov wk (Facts.stop.trans (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl
+    · exact h.of_facts own prov hnt wk (Facts.stop.trans (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl
         (noNewResult rfl)
-    · exact h.of_facts own prov wk (Facts.of_records rfl rfl rfl rfl rfl rfl rfl) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (Facts.of_records rfl rfl rfl rfl rfl rfl rfl) rfl (noNewResult rfl)
   | conclude =>
     obtain ⟨-, ⟨-, r, w, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · have hr' : s.run? r.path = some r := by rw [(run?_eq_some hr).2]; exact hr
-      exact h.of_facts own prov wk ((Facts.setRun (r' := { r with complete := true }) hr' rfl (fun _ => rfl)).trans
+      exact h.of_facts own prov hnt wk ((Facts.setRun (r' := { r with complete := true }) hr' rfl (fun _ => rfl)).trans
         (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl (noNewResult rfl)
-    · exact h.of_facts own prov wk (Facts.of_records rfl rfl rfl rfl rfl rfl rfl) rfl (noNewResult rfl)
+    · exact h.of_facts own prov hnt wk (Facts.endUnfinished.trans (Facts.of_records rfl rfl rfl rfl rfl rfl rfl)) rfl
+        (noNewResult rfl)
 
 end SettledInv
 
-/-- All four layers of the settlement invariant hold in every reachable state. --/
+/-- All four layers of the settlement invariant hold in every reachable state; what keeps owners
+    active holds until the conclusion, which ends the invocations of open executions and runs after a
+    stop (`State.endUnfinished`). --/
 theorem reachable {p : Definition} {s : State} (h : Reachable p s) :
-    Own p s ∧ Active p s ∧ Prov p s ∧ SettledInv p s := by
+    Own p s ∧ (s.status.terminal = false → Active p s) ∧ Prov p s ∧ SettledInv p s := by
   induction h with
-  | empty => exact ⟨Own.empty, Active.empty, Prov.empty, SettledInv.empty⟩
+  | empty => exact ⟨Own.empty, fun _ => Active.empty, Prov.empty, SettledInv.empty⟩
   | step op hr hs ih =>
     obtain ⟨own, act, prov, sinv⟩ := ih
+    have act := act (step_source_nonterminal hs)
     have wk := hr.wellKeyed
     have h0 := hr.eq_empty_or_started
     exact ⟨own.step wk h0 hs, act.step own wk h0 hs, prov.step act own wk h0 hs, sinv.step prov act own wk h0 hs⟩

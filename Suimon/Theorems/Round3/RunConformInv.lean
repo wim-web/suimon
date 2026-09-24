@@ -210,7 +210,8 @@ theorem TaskInv.empty : TaskInv p env {} :=
 
 /-- A conforming step that does not stop keeps `TaskInv`. -/
 theorem step_taskInv (valid : p.validate = .ok ()) (h : Reachable p s) (hconf : Conforms env s op)
-    (hs : step p s op = .ok t) (hstop : t.status ≠ .stopping) (inv : TaskInv p env s) : TaskInv p env t := by
+    (hs : step p s op = .ok t) (hrun : s.status = .running) (hstop : t.status ≠ .stopping) (inv : TaskInv p env s) :
+    TaskInv p env t := by
   have K := (Delivery.Reachable.inv h).kept hs
   -- The spec of a task before and after the step.
   have spec₀ : ∀ {e₀ e : Execution} {tk₀ tk : TaskState} {spec : TaskSpec}, e₀ ∈ s.executions →
@@ -221,7 +222,7 @@ theorem step_taskInv (valid : p.validate = .ok ()) (h : Reachable p s) (hconf : 
     exact hspec
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · intro e he tk htk hpend
-    rcases step_taskFrom h hs hstop he htk with ⟨-, hin, -⟩ | ⟨e₀, he₀, -, -, -, tk₀, htk₀, -, hcase⟩
+    rcases step_taskFrom h hs hrun hstop he htk with ⟨-, hin, -⟩ | ⟨e₀, he₀, -, -, -, tk₀, htk₀, -, hcase⟩
     · exact hin
     · rcases hcase with ⟨rfl, -⟩ | ⟨-, hst, -⟩ | ⟨-, hst, -⟩ | ⟨-, -, -, hst, -⟩
       · exact inv.pending e₀ he₀ tk htk₀ hpend
@@ -229,7 +230,7 @@ theorem step_taskInv (valid : p.validate = .ok ()) (h : Reachable p s) (hconf : 
       · rw [hst] at hpend; cases hpend
       · exact absurd hpend hst
   · intro e he tk htk spec hspec hpend tid hin
-    rcases step_taskFrom h hs hstop he htk with ⟨-, -, c, hc, hst⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
+    rcases step_taskFrom h hs hrun hstop he htk with ⟨-, -, c, hc, hst⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
     · -- A new execution waits for the input of its tasks exactly when the concurrency takes one.
       exfalso
       obtain ⟨c', hc', hfind⟩ := taskSpec_eq_ok.mp hspec
@@ -262,7 +263,7 @@ theorem step_taskInv (valid : p.validate = .ok ()) (h : Reachable p s) (hconf : 
           rw [← hid, ← hname]
           exact h1
   · intro e he tk htk spec hspec hpend hnd
-    rcases step_taskFrom h hs hstop he htk with ⟨-, hin, -⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
+    rcases step_taskFrom h hs hrun hstop he htk with ⟨-, hin, -⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
     · exact hin
     · have hs₀ := spec₀ he₀ hrun hpl hname hspec
       rcases hcase with ⟨rfl, -⟩ | ⟨-, -, -, spec', hspec', hin'⟩ | ⟨-, -, -, -, -, spec', tid', hspec', hin', -⟩ |
@@ -278,7 +279,7 @@ theorem step_taskInv (valid : p.validate = .ok ()) (h : Reachable p s) (hconf : 
         exact absurd hin' (hnd tid')
       · exact hinp.trans (inv.other e₀ he₀ tk₀ htk₀ spec hs₀ hp₀ hnd)
   · intro e he tk htk hp hr hnb
-    rcases step_taskFrom h hs hstop he htk with ⟨-, -, c, -, hst⟩ | ⟨e₀, he₀, hid, -, -, tk₀, htk₀, -, hcase⟩
+    rcases step_taskFrom h hs hrun hstop he htk with ⟨-, -, c, -, hst⟩ | ⟨e₀, he₀, hid, -, -, tk₀, htk₀, -, hcase⟩
     · rw [hst] at hp hr
       by_cases hci : c.input.isSome = true
       · simp [hci] at hp
@@ -312,8 +313,8 @@ theorem conforming_taskInv (valid : p.validate = .ok ()) {tr : List Op} (h : Con
   | @snoc tr s₀ t₀ op hprev hc hs _ ih =>
     intro us
     have hr := hprev.reachable
-    exact step_taskInv valid hr hc hs (not_stopping_of_unstopped (Reachable.step _ hr hs) us)
-      (ih (unstopped_back hs us))
+    exact step_taskInv valid hr hc hs (running_of_unstopped hr (unstopped_back hs us) hs)
+      (not_stopping_of_unstopped (Reachable.step _ hr hs) us) (ih (unstopped_back hs us))
 
 /-! ### Failures under the continue policy -/
 
@@ -480,8 +481,8 @@ theorem step_call_failed (hs : step p s op = .ok t) (hstop : t.status ≠ .stopp
     obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same hc
 
 /-- A step that does not stop keeps `PolicyInv`. -/
-theorem step_policyInv (h : Reachable p s) (hs : step p s op = .ok t) (hstop : t.status ≠ .stopping)
-    (inv : PolicyInv p s) : PolicyInv p t := by
+theorem step_policyInv (h : Reachable p s) (hs : step p s op = .ok t) (hrun : s.status = .running)
+    (hstop : t.status ≠ .stopping) (inv : PolicyInv p s) : PolicyInv p t := by
   have wk := h.wellKeyed
   have wk' := step_wellKeyed wk hs
   have K := (Delivery.Reachable.inv h).kept hs
@@ -522,7 +523,7 @@ theorem step_policyInv (h : Reachable p s) (hs : step p s op = .ok t) (hstop : t
         cases hpl
         exact hpol
   · intro e he tk htk hfail hnb spec hspec
-    rcases step_taskFrom h hs hstop he htk with ⟨-, -, c, -, hst⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
+    rcases step_taskFrom h hs hrun hstop he htk with ⟨-, -, c, -, hst⟩ | ⟨e₀, he₀, hid, hrun, hpl, tk₀, htk₀, hname, hcase⟩
     · rw [hfail] at hst
       by_cases hci : c.input.isSome = true <;> simp [hci] at hst
     · have hs₀ : s.taskSpec p e₀ tk₀.name = .ok spec := by
@@ -560,7 +561,8 @@ theorem reachable_policyInv (h : Reachable p s) : Unstopped s → PolicyInv p s 
   | empty => intro _; exact PolicyInv.empty
   | step op hr hs ih =>
     intro us
-    exact step_policyInv hr hs (not_stopping_of_unstopped (Reachable.step _ hr hs) us) (ih (unstopped_back hs us))
+    exact step_policyInv hr hs (running_of_unstopped hr (unstopped_back hs us) hs) (not_stopping_of_unstopped (Reachable.step _ hr hs) us)
+      (ih (unstopped_back hs us))
 
 end RunConformAux
 end Suimon.Round3

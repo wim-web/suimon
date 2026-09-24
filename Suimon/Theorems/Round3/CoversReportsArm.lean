@@ -55,6 +55,17 @@ theorem ArmSucceeded.cancelOwner {s t : State} (h : ArmSucceeded s)
     · exact h.of_eq rfl
     · exact h
 
+/-- The conclusion after a stop cancels active invocations, which have no arm. -/
+theorem ArmSucceeded.endUnfinished {s : State} (h : ArmSucceeded s)
+    (act : ∀ i ∈ s.invocations, i.status = .active → i.arm = none) : ArmSucceeded s.endUnfinished := by
+  intro i hi harm
+  obtain ⟨i₀, hi₀, rfl⟩ := mem_endUnfinished_invocations.mp hi
+  rw [endInvocation_arm] at harm
+  by_cases hact : i₀.status = .active
+  · exact absurd (act i₀ hi₀ hact) harm
+  · rw [endInvocation_of_ne hact]
+    exact h i₀ hi₀ harm
+
 theorem ArmSucceeded.step {s t : State} {op : Op} (h : ArmSucceeded s) (act : Settle.Active p s)
     (wk : s.WellKeyed) (hs : step p s op = .ok t) : ArmSucceeded t := by
   -- The owner of a running or fetching call is active, so it has no arm.
@@ -169,13 +180,15 @@ theorem ArmSucceeded.step {s t : State} {op : Op} (h : ArmSucceeded s) (act : Se
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact h.of_eq rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact h.of_eq rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact h.of_eq rfl
+    · exact (h.endUnfinished act.activeArm).of_eq rfl
 
 /-- Every reachable state satisfies `ArmSucceeded`. -/
 theorem Reachable.armSucceeded {s : State} (h : Reachable p s) : ArmSucceeded s := by
   induction h with
   | empty => intro i hi; nomatch hi
-  | step op hr hs ih => exact ih.step (Settle.reachable hr).2.1 hr.wellKeyed hs
+  | step op hr hs ih => exact ih.step ((Settle.reachable hr).2.1 (step_source_nonterminal hs)) hr.wellKeyed hs
 
 end Arm
 

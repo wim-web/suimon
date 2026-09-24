@@ -139,6 +139,16 @@ theorem cancelOwner {c : Call} (h : s.cancelOwner c = .ok t) : InvKept s t := by
 
 theorem fail {f : Failure} {policy : Policy} : InvKept s (s.fail f policy) := of_eq (by simp)
 
+/-- The conclusion after a stop cancels the active invocations. -/
+theorem endUnfinished (h : t.invocations = s.endUnfinished.invocations) : InvKept s t := by
+  intro i hi
+  rw [h] at hi
+  obtain ⟨i₀, hi₀, rfl⟩ := mem_endUnfinished_invocations.mp hi
+  by_cases hact : i₀.status = .active
+  · exact Or.inr ⟨⟨i₀, hi₀, by simp, by simp, by simp, by simp, by simp⟩, endInvocation_status_ne⟩
+  · rw [endInvocation_of_ne hact]
+    exact Or.inl hi₀
+
 theorem failCall {c : Call} {status : CallStatus} {cause : Cause} (h : s.failCall c status cause = .ok t) :
     InvKept s t := by
   obtain ⟨f, s', -, hso, rfl⟩ := State.failCall_eq_ok.mp h
@@ -285,7 +295,9 @@ theorem step_invocations {op : Op} (hs : step p s op = .ok t) : ∀ i ∈ t.invo
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact kept (.of_eq rfl)
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact kept (.of_eq rfl)
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact kept (.of_eq rfl)
+    · exact kept (.endUnfinished rfl)
 
 /-! ### Calls -/
 
@@ -745,6 +757,21 @@ theorem ExecCase.of_eq (h : t.executions = s.executions) : ∀ e ∈ t.execution
   rw [h] at he
   exact ExecCase.self he
 
+/-- The conclusion after a stop ends the tasks that have not ended. -/
+theorem ExecCase.endUnfinished (h : t.executions = s.endUnfinished.executions) :
+    ∀ e ∈ t.executions, ExecCase p s t e := by
+  intro e he
+  rw [h] at he
+  obtain ⟨e₀, he₀, rfl⟩ := mem_endUnfinished_executions.mp he
+  refine Or.inl ⟨e₀, he₀, rfl, rfl, rfl, fun hc => Or.inl hc, fun tk htk => ?_⟩
+  rw [endExecution_tasks, List.mem_map] at htk
+  obtain ⟨tk₀, htk₀, rfl⟩ := htk
+  refine ⟨tk₀, htk₀, by simp, ?_⟩
+  by_cases hend : tk₀.status.ended = true
+  · rw [endTask_of_ended hend]
+    exact Or.inl rfl
+  · exact Or.inr (Or.inl endTask_ended)
+
 /-- One task of a stored execution moves. -/
 theorem ExecCase.setTask {e₁ : Execution} {ts ts' : TaskState} (he₁ : e₁ ∈ s.executions) (hts : ts ∈ e₁.tasks)
     (hname : ts'.name = ts.name) (hmove : Moved t (withTask e₁ ts') ts'.name ts.status ts'.status)
@@ -1014,7 +1041,9 @@ theorem step_executions {op : Op} (hs : step p s op = .ok t) : ∀ e ∈ t.execu
     · exact ExecCase.post (ExecCase.of_eq (t := s) rfl) (Post.stop rfl rfl rfl rfl)
     · exact ExecCase.of_eq rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact ExecCase.of_eq rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact ExecCase.of_eq rfl
+    · exact ExecCase.endUnfinished rfl
 
 /-! ### The root run -/
 

@@ -66,6 +66,24 @@ def stop (s : State) : State :=
     executions := s.executions.map fun e => { e with tasks := e.tasks.map fun t =>
       if t.status == .pending || t.status == .ready then { t with status := .notStarted } else t } }
 
+/-- How the conclusion after a stop ends an invocation: cancelled if it is still active (§10.1). --/
+def endInvocation (i : Invocation) : Invocation :=
+  if i.status == .active then { i with status := .cancelled } else i
+
+/-- How the conclusion after a stop ends a task: cancelled if it is still active, and not started if
+    it never started (§10.1). --/
+def endTask (t : TaskState) : TaskState :=
+  if t.status == .active then { t with status := .cancelled }
+  else if t.status == .pending || t.status == .ready then { t with status := .notStarted } else t
+
+/-- The conclusion after a stop ends every invocation and task that has not ended, so that none
+    holds a slot any more (§8.2, §11.3). It publishes no result, delivery or settlement, and leaves
+    runs as they are. --/
+def endUnfinished (s : State) : State :=
+  { s with
+    invocations := s.invocations.map endInvocation
+    executions := s.executions.map fun e => { e with tasks := e.tasks.map endTask } }
+
 /-- The policy is chosen where the failure happened, never again by an enclosing placement (§11.2). --/
 def fail (s : State) (f : Failure) (policy : Policy) : State :=
   let s := { s with failures := s.failures ++ [f] }
@@ -542,7 +560,8 @@ def cancel (s : State) : Result' State := do
   | .stopping => pure { s with cancelled := true }
   | _ => throw "TERMINAL"
 
-/-- The final status (§11.3, §13.3). --/
+/-- The final status (§11.3, §13.3). After a stop, the cancelled calls have all terminated, and what
+    has not ended ends without a result (`State.endUnfinished`). --/
 def conclude (p : Definition) (s : State) : Result' State := do
   require s.started "NOT_STARTED"
   match s.status with
@@ -558,7 +577,7 @@ def conclude (p : Definition) (s : State) : Result' State := do
     pure { s.setRun { r with complete := true } with status }
   | .stopping =>
     require (s.calls.all (·.status.ended)) "CALLS_RUNNING"
-    pure { s with status := if s.failures.isEmpty then .cancelled else .failed }
+    pure { s.endUnfinished with status := if s.failures.isEmpty then .cancelled else .failed }
   | _ => throw "TERMINAL"
 
 end Step

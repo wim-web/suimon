@@ -77,6 +77,7 @@ theorem grows_setExecution {e : Execution} : s.Grows (s.setExecution e) := by co
 theorem grows_setTask {e : Execution} {ts : TaskState} : s.Grows (s.setTask e ts) := by constructor <;> simp
 theorem grows_setTaskResult {r : TaskResult} : s.Grows (s.setTaskResult r) := by constructor <;> simp
 theorem grows_stop : s.Grows s.stop := by constructor <;> simp
+theorem grows_endUnfinished : s.Grows s.endUnfinished := by constructor <;> simp
 theorem grows_fail {f : Failure} {policy : Policy} : s.Grows (s.fail f policy) := by constructor <;> simp
 
 theorem accept_grows {c : Call} {index : Nat} {value : Value} {arm : Option String}
@@ -488,6 +489,17 @@ theorem step_stopping_quiet_of_running {p : Definition} {s t : State} {op : Op} 
       · split at stopping <;> simp at stopping
     · simp [hs'] at running
 
+/-- The conclusion is final (§13.3). --/
+theorem step_conclude_terminal {p : Definition} {s t : State} (hs : step p s .conclude = .ok t) :
+    t.status.terminal = true := by
+  obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+  · simp only
+    split
+    · rfl
+    · split <;> rfl
+  · simp only
+    split <;> rfl
+
 /-- A stopping or final state accepts only the end of a call, the caller's cancel, and the
     conclusion; the first case is a call that was still running or fetching (§11.3). --/
 theorem step_of_status_ne_running {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t)
@@ -496,7 +508,8 @@ theorem step_of_status_ne_running {p : Definition} {s t : State} {op : Op} (hs :
     ((∃ c ∈ s.calls, (c.status = .running ∨ c.status = .fetching) ∧ s.failCall c .lost .lost = .ok t) ∨
      (∃ c ∈ s.calls, c.status = .cancelling ∧ (s.setCall { c with status := .cancelled }).cancelOwner c = .ok t) ∨
      t = { s with cancelled := true } ∨
-     (s.calls.all (·.status.ended) = true ∧ t = { s with status := if s.failures.isEmpty then .cancelled else .failed })) := by
+     (s.calls.all (·.status.ended) = true ∧
+        t = { s.endUnfinished with status := if s.failures.isEmpty then .cancelled else .failed })) := by
   cases op with
   | start input => exact absurd (Step.start_inv hs).2.1 h
   | invoke path name trigger => exact absurd (Step.invoke_inv hs).2.1 h

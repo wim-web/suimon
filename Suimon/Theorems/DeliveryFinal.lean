@@ -11,7 +11,7 @@ theorem Inv.empty (p : Definition) : Inv p {} where
   fresh _ := rfl
   own := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h),
     (fun _ h => nomatch h)⟩
-  dyn := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h)⟩
+  dyn := ⟨(fun _ _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h)⟩
   sett := ⟨(fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h), (fun _ h => nomatch h)⟩
 
 theorem Reachable.inv {p : Definition} {s : State} (h : Reachable p s) : Inv p s := by

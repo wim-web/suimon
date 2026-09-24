@@ -108,6 +108,17 @@ theorem stop (s : State) : Kept s s.stop where
     split <;> rfl
   taskResult r hr := ⟨r, hr, rfl, rfl, rfl, fun _ => rfl⟩
 
+theorem endUnfinished (s : State) : Kept s s.endUnfinished where
+  grows := State.grows_endUnfinished
+  run r hr := ⟨r, hr, rfl, rfl, rfl, rfl, rfl, id⟩
+  invocation i hi :=
+    ⟨endInvocation i, State.mem_endUnfinished_invocations.mpr ⟨i, hi, rfl⟩, by simp, by simp, by simp, by simp, by simp⟩
+  call c hc := ⟨c, hc, rfl, rfl, rfl, rfl, rfl, fun _ => rfl⟩
+  execution e he := by
+    refine ⟨endExecution e, State.mem_endUnfinished_executions.mpr ⟨e, he, rfl⟩, rfl, rfl, rfl, ?_, id⟩
+    simp [endExecution_tasks, Function.comp_def]
+  taskResult r hr := ⟨r, hr, rfl, rfl, rfl, fun _ => rfl⟩
+
 theorem fail (s : State) (f : Failure) (policy : Policy) : Kept s (s.fail f policy) := by
   have h : Kept s { s with failures := s.failures ++ [f] } := of_eq rfl rfl rfl rfl rfl rfl rfl rfl ⟨[f], rfl⟩
   cases policy
@@ -421,7 +432,7 @@ theorem step_kept {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (h
     obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · exact (Kept.setRun wk (run?_eq_some hr).1 true (fun _ => rfl)).trans
         (Kept.of_eq rfl rfl rfl rfl rfl rfl rfl rfl ⟨[], by simp⟩)
-    · exact Kept.of_eq rfl rfl rfl rfl rfl rfl rfl rfl ⟨[], by simp⟩
+    · exact (Kept.endUnfinished s).trans (Kept.of_eq rfl rfl rfl rfl rfl rfl rfl rfl ⟨[], by simp⟩)
 
 /-! ### Lookups that a step keeps -/
 

@@ -110,6 +110,15 @@ theorem execOld_stop {s : State} {x : Execution} (hx : x ∈ s.stop.executions) 
   simp only [Function.comp_apply]
   split <;> rfl
 
+theorem invOld_endUnfinished {s : State} {x : Invocation} (hx : x ∈ s.endUnfinished.invocations) : InvOld s x := by
+  obtain ⟨i, hi, rfl⟩ := State.mem_endUnfinished_invocations.mp hx
+  exact ⟨i, hi, by simp, by simp, by simp, by simp, by simp⟩
+
+theorem execOld_endUnfinished {s : State} {x : Execution} (hx : x ∈ s.endUnfinished.executions) : ExecOld s x := by
+  obtain ⟨e, he, rfl⟩ := State.mem_endUnfinished_executions.mp hx
+  refine ⟨e, he, rfl, rfl, rfl, ?_, id⟩
+  simp [endExecution_tasks, Function.comp_def]
+
 theorem execOld_fail {s : State} {f : Failure} {policy : Policy} {x : Execution}
     (hx : x ∈ (s.fail f policy).executions) : ExecOld s x := by
   cases policy
@@ -302,7 +311,9 @@ theorem step_invocations_back {p : Definition} {s t : State} {op : Op} (hs : ste
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact same rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same rfl
+    · exact Or.inl (invOld_endUnfinished hx)
 
 /-! ### Calls -/
 
@@ -641,7 +652,9 @@ theorem step_executions_back {p : Definition} {s t : State} {op : Op} (hs : step
     · exact Or.inl (execOld_stop hx)
     · exact same rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same rfl
+    · exact Or.inl (execOld_endUnfinished hx)
 
 /-! ### Task results -/
 

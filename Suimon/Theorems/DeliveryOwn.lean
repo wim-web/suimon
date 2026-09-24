@@ -91,12 +91,13 @@ theorem step_own {p : Definition} {s t : State} {op : Op} (inv : Inv p s) (hs : 
         hinvc, by rw [← hpl]; exact hsh, by rw [← hrun]; exact triggerOk_kept K.grows htr.symm htrig, ?_⟩
       rcases step_invocation_change inv.wk hs hi₀ hi hid.symm with rfl | ⟨-, -, -, -, -, hc⟩
       · exact harm
-      · rcases hc with ⟨-, -, -, -, -, -, ha | hbr⟩ | ⟨-, -, -, -, ha, -⟩ | ⟨-, -, -, -, -, ha, -⟩
+      · rcases hc with ⟨-, -, -, -, -, -, ha | hbr⟩ | ⟨-, -, -, -, ha, -⟩ | ⟨-, -, -, -, -, ha, -⟩ | ⟨-, ha, -⟩
         · exact ha ▸ harm
         · obtain ⟨j, arms, w', pl', hw', hpl', hb⟩ := hbr
           rw [hw] at hw'; cases hw'
           rw [hplc] at hpl'; cases hpl'
           exact Or.inr ⟨j, arms, hb⟩
+        · exact ha ▸ harm
         · exact ha ▸ harm
         · exact ha ▸ harm
     · obtain ⟨-, -, r, w, pl, hr, -, hw, hpl, hinvc, hinput, hkey, -, harm, -, -⟩ := hnew

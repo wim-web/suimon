@@ -142,7 +142,7 @@ theorem facts {op : Op} (h : StepCtx p env T s op s') : Facts p env T s s' := by
   exact {
     reach := hreach
     wk := hreach.wellKeyed
-    act := (Settle.reachable hreach).2.1
+    act := (Settle.reachable hreach).2.1 (step_source_nonterminal h.accepted)
     rcS := runConform h.valid hrun us
     pol' := policyConform hreach' h.unstopped
     wkT := hreachT.wellKeyed

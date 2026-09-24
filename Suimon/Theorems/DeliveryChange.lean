@@ -44,11 +44,12 @@ def InvChange (p : Definition) (s t : State) (i₀ i : Invocation) : Prop :=
    (∃ e ∈ s.executions, e.id = i₀.id ∧ e.complete = false ∧ i.arm = i₀.arm ∧
       ∀ e' ∈ t.executions, e'.id = e.id → e'.complete = true) ∨
    (∃ R ∈ s.runs, R.owner = some i₀.id ∧ R.task = none ∧ R.complete = false ∧ i.arm = i₀.arm ∧
-      ∀ R' ∈ t.runs, R'.path = R.path → R'.complete = true))
+      ∀ R' ∈ t.runs, R'.path = R.path → R'.complete = true) ∨
+   (i₀.status = .active ∧ i.arm = i₀.arm ∧ t.status.terminal = true))
 
 open State in
 /-- A step leaves a stored invocation unchanged, or changes it through its own call, execution or
-    sub-run (§10.2). --/
+    sub-run (§10.2), or the conclusion after a stop ends it while it is active (§11.3). --/
 theorem step_invocation_change {p : Definition} {s t : State} {op : Op} (wk : s.WellKeyed) (hs : step p s op = .ok t)
     {i₀ i : Invocation} (hi₀ : i₀ ∈ s.invocations) (hi : i ∈ t.invocations) (hid : i.id = i₀.id) :
     i = i₀ ∨ InvChange p s t i₀ i := by
@@ -239,25 +240,34 @@ theorem step_invocation_change {p : Definition} {s t : State} {op : Op} (wk : s.
       rw [hti] at hi
       rcases eq_or_update (i' := { i₁ with status := st }) wk hi₁m hi₀ rfl hi hid with h | ⟨rfl, rfl⟩
       · exact Or.inl h
-      · exact Or.inr ⟨rfl, rfl, rfl, rfl, rfl, Or.inr (Or.inr ⟨r, hr', by rw [howner, hi₁id], htask, h3, rfl,
-          hruns htr⟩)⟩
+      · exact Or.inr ⟨rfl, rfl, rfl, rfl, rfl, Or.inr (Or.inr (Or.inl ⟨r, hr', by rw [howner, hi₁id], htask, h3, rfl,
+          hruns htr⟩))⟩
     · rcases h with ⟨-, _, -, -, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ | ⟨-, rfl⟩ <;> exact same hi
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact same hi
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same hi
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same hi
+    · obtain ⟨i₁, hi₁, rfl⟩ := mem_endUnfinished_invocations.mp hi
+      obtain rfl := wk.invocation_eq_of_id hi₁ hi₀ (by simpa using hid)
+      by_cases hact : i₁.status = .active
+      · refine Or.inr ⟨by simp, by simp, by simp, by simp, by simp, Or.inr (Or.inr (Or.inr ⟨hact, by simp, ?_⟩))⟩
+        split <;> rfl
+      · exact Or.inl (endInvocation_of_ne hact)
 
 /-! ### Tasks -/
 
 /-- How a step can change a task of a stored execution: through the task's call, which stops, or its
-    run, which completes; by a transform of the task's input or its start, from pending or ready; or by
-    the stop, from pending or ready. --/
+    run, which completes; by a transform of the task's input or its start, from pending or ready; by
+    the stop, or the conclusion after it, from pending or ready; or by the conclusion after a stop,
+    from active once every call ended. --/
 def TaskChange (s t : State) (e₀ : Execution) (tk₀ : TaskState) : Prop :=
   (∃ c ∈ s.calls, c.owner = e₀.id ∧ c.task = some tk₀.name ∧
     ∀ c' ∈ t.calls, c'.id = c.id → c'.status ≠ .running ∧ c'.status ≠ .fetching) ∨
   (∃ R ∈ s.runs, R.owner = some e₀.id ∧ R.task = some tk₀.name ∧ R.complete = false) ∨
   (∃ ts, e₀.tasks.find? (·.name == tk₀.name) = some ts ∧ (ts.status = .pending ∨ ts.status = .ready)) ∨
-  (tk₀.status = .pending ∨ tk₀.status = .ready)
+  (tk₀.status = .pending ∨ tk₀.status = .ready) ∨
+  (tk₀.status = .active ∧ ∀ c ∈ s.calls, c.status.ended = true)
 
 /-- The tasks of an execution after `setTask`. --/
 theorem mem_withTask {e : Execution} {ts tk : TaskState} (h : tk ∈ (withTask e ts).tasks) :
@@ -291,7 +301,7 @@ theorem TasksFrom.stop {s t : State} {e₀ e : Execution} (h : TasksFrom s t e�
     simp only [hp', ↓reduceIte]
     refine ⟨tk₀, htk₀, hname, Or.inr ?_⟩
     rcases hst with hst | hst
-    · exact Or.inr (Or.inr (Or.inr (hst ▸ hp)))
+    · exact Or.inr (Or.inr (Or.inr (Or.inl (hst ▸ hp))))
     · exact hst
   · have hp' : (tk'.status == .pending || tk'.status == .ready) = false := by simpa using hp
     simp only [hp', Bool.false_eq_true, ↓reduceIte]
@@ -543,6 +553,19 @@ theorem step_task_change {p : Definition} {s t : State} {op : Op} (wk : s.WellKe
       exact ((tasksFrom_of_mem (t := s) wk he₀ he' (by simpa using hid)).stop).mono hcalls
     · exact same he
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact same he
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, hended, rfl⟩⟩ := Step.conclude_inv hs
+    · exact same he
+    · obtain ⟨e₁, he₁, rfl⟩ := mem_endUnfinished_executions.mp he
+      obtain rfl := wk.execution_eq_of_id he₁ he₀ (by simpa using hid)
+      intro tk htk
+      rw [endExecution_tasks, List.mem_map] at htk
+      obtain ⟨tk₀, htk₀, rfl⟩ := htk
+      refine ⟨tk₀, htk₀, by simp, ?_⟩
+      rw [endTask_status]
+      split
+      · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨by assumption, fun c hc => List.all_eq_true.mp hended c hc⟩))))
+      · split
+        · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl (by assumption)))))
+        · exact Or.inl rfl
 
 end Suimon.Delivery

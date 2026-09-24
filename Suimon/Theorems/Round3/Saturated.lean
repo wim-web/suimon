@@ -62,6 +62,14 @@ private theorem TasksEnded.setTask {s : State} {e : Execution} {ts : TaskState} 
   · exact hts hc
   · exact h e he hc y hy
 
+/-- The conclusion after a stop ends every task. -/
+private theorem TasksEnded.endUnfinished {s : State} : TasksEnded s.endUnfinished := by
+  intro x hx _ ts hts
+  obtain ⟨e, -, rfl⟩ := mem_endUnfinished_executions.mp hx
+  rw [endExecution_tasks, List.mem_map] at hts
+  obtain ⟨ts₀, -, rfl⟩ := hts
+  exact endTask_ended
+
 private theorem TasksEnded.stop {s : State} (h : TasksEnded s) : TasksEnded s.stop := by
   intro x hx hc
   obtain ⟨e, he, rfl⟩ := mem_stop_executions.mp hx
@@ -221,7 +229,7 @@ private theorem step_tasksEnded {s t : State} {op : Op} (h : TasksEnded s) (hs :
   | conclude =>
     obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · exact h.of_executions rfl
-    · exact h.of_executions rfl
+    · exact TasksEnded.endUnfinished.of_executions rfl
 
 /-- In every reachable state, every task of a completed execution ended. -/
 theorem Saturated.reachable_tasks_ended {s : State} (h : Reachable p s) :

@@ -194,7 +194,8 @@ theorem not_wait_of_inv (own : Own p s) (hw : KeepsWorkflows p s t) {i : Invocat
   rw [he] at hinv
   cases hinv
 
-theorem waitValue_mono (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (f : Facts p s t)
+theorem waitValue_mono (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (hnt : s.status.terminal = false)
+    (f : Facts p s t)
     (hnew : ∀ r ∈ t.results, r ∉ s.results → ∀ w pl, t.workflow? p r.run = some w →
       w.placement? r.placement = some pl → ∀ e, pl.control ≠ .waitStream e) :
     ∀ r ∈ t.results, ∀ w pl i c, t.workflow? p r.run = some w → w.placement? r.placement = some pl →
@@ -202,7 +203,7 @@ theorem waitValue_mono (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (f
         r.value = listValue (deliveredValues (t.deliveriesOn r.run i)) := by
   intro r hr w pl i c hw hpl ⟨e, he⟩ hsh
   by_cases hrs : r ∈ s.results
-  · rcases prov.results r hrs with ⟨x, hx, hxr, hxp, -, -⟩ | ⟨-, -, -, j, hj, -, hjr, hjp, -⟩ |
+  · rcases prov.results hnt r hrs with ⟨x, hx, hxr, hxp, -, -⟩ | ⟨-, -, -, j, hj, -, hjr, hjp, -⟩ |
       ⟨-, -, j, hj, -, hjr, hjp, -⟩ | ⟨j, hj, hjr, hjp, -⟩
     · obtain ⟨w0, pl0, hw0, -, -⟩ := h.closed x hx
       have hw0t := f.workflows _ _ hw0
@@ -218,7 +219,8 @@ theorem waitValue_mono (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (f
       exact absurd he (not_wait_of_inv own f.workflows hj (hjr ▸ hw) (hjp ▸ hpl) e)
   · exact absurd he (hnew r hr hrs w pl hw hpl e)
 
-theorem of_facts (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (wk : s.WellKeyed) (f : Facts p s t)
+theorem of_facts (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (hnt : s.status.terminal = false)
+    (wk : s.WellKeyed) (f : Facts p s t)
     (hsettled : t.settled = s.settled)
     (hnew : ∀ r ∈ t.results, r ∉ s.results → ∀ w pl, t.workflow? p r.run = some w →
       w.placement? r.placement = some pl → ∀ e, pl.control ≠ .waitStream e) :
@@ -226,7 +228,7 @@ theorem of_facts (h : SettledInv p s) (own : Own p s) (prov : Prov p s) (wk : s.
   ended := by rw [hsettled]; exact h.ended_mono wk f
   closed := by rw [hsettled]; exact h.closed_mono f
   noEligible := by rw [hsettled]; exact h.noEligible_mono wk f
-  waitValue := h.waitValue_mono own prov f hnew
+  waitValue := h.waitValue_mono own prov hnt f hnew
 
 end SettledInv
 
@@ -387,6 +389,17 @@ theorem stop : Facts p s s.stop := by
   · obtain ⟨e, he, rfl⟩ := mem_stop_executions.mp he'
     exact ⟨e, he, hid, id⟩
 
+/-- The conclusion after a stop changes only invocations and tasks that have not ended. --/
+theorem endUnfinished : Facts p s s.endUnfinished := by
+  refine { refl (p := p) (s := s) with
+    invocations := fun j hj => ⟨endInvocation j, mem_endUnfinished_invocations.mpr ⟨j, hj, rfl⟩, by simp [invKey]⟩
+    invNew := fun j' hj' => ?_
+    execsNew := fun x hx i hi e' he' hid => ?_ }
+  · obtain ⟨j, hj, rfl⟩ := mem_endUnfinished_invocations.mp hj'
+    exact Or.inl ⟨j, hj, by simp [invKey], fun h => endInvocation_of_ne h⟩
+  · obtain ⟨e, he, rfl⟩ := mem_endUnfinished_executions.mp he'
+    exact ⟨e, he, hid, id⟩
+
 theorem fail {f : Failure} {policy : Policy} : Facts p s (s.fail f policy) := by
   have h' : Facts p s { s with failures := s.failures ++ [f] } := of_records rfl rfl rfl rfl rfl rfl rfl
   cases policy
@@ -493,7 +506,8 @@ theorem armOutcome_nil {x : Settled} (h : x.arms = []) (arm : Option String) : S
 
 /-- The origin of a result of a placement that has not settled: an invocation of the placement,
     through a call, an execution or a sub-workflow run. --/
-theorem resultOrigin (prov : Prov p s) (wk : s.WellKeyed) {r : Result} (hr : r ∈ s.results)
+theorem resultOrigin (prov : Prov p s) (hnt : s.status.terminal = false) (wk : s.WellKeyed) {r : Result}
+    (hr : r ∈ s.results)
     (hnone : s.settled? r.run r.placement = none) :
     ∃ j ∈ s.invocations, j.run = r.run ∧ j.placement = r.placement ∧
       ((∃ c ∈ s.calls, c.task = none ∧ c.owner = j.id ∧
@@ -501,7 +515,7 @@ theorem resultOrigin (prov : Prov p s) (wk : s.WellKeyed) {r : Result} (hr : r �
        ((∃ e ∈ s.executions, e.id = j.id) ∧ (j.status = .succeeded ∨ j.status = .active)) ∨
        (j.status = .succeeded ∧ ∃ pl wf out, placementAt p s j.run j.placement = some pl ∧
           pl.control = .call (.workflow wf out))) := by
-  rcases prov.results r hr with ⟨x, hx, hxr, hxp, -, -⟩ | ⟨c, hc, htc, j, hj, hjo, hjr, hjp, hst⟩ |
+  rcases prov.results hnt r hr with ⟨x, hx, hxr, hxp, -, -⟩ | ⟨c, hc, htc, j, hj, hjo, hjr, hjp, hst⟩ |
     ⟨e, he, j, hj, hje, hjr, hjp, hst⟩ | ⟨j, hj, hjr, hjp, hst, rest⟩
   · rw [← hxr, ← hxp, wk.settled?_of_mem hx] at hnone
     cases hnone
@@ -575,7 +589,8 @@ theorem ctrl_of_call (own : Own p s) (wk : s.WellKeyed) {c : Call} (hc : c ∈ s
   exact ⟨pl3, by rw [← Own.placementAt_of_id wk hi3 hj (hi3o.trans hco)]; exact hpl3, hctrl3⟩
 
 /-- A new settlement has no result on an arm it settles without a value (§7.3, §9, §10.3). --/
-theorem settle_noEligible (h : SettledInv p s) (prov : Prov p s) (own : Own p s) (wk : s.WellKeyed)
+theorem settle_noEligible (h : SettledInv p s) (prov : Prov p s) (hnt : s.status.terminal = false) (own : Own p s)
+    (wk : s.WellKeyed)
     {path : Path} {name : String} {w : Workflow} {pl : Placement} {shape : Workflow.Shape} {kind : Kind}
     {x : Settled} {res : Option Result}
     (hwf : s.workflow? p path = some w) (hpl : w.placement? name = some pl)
@@ -590,7 +605,7 @@ theorem settle_noEligible (h : SettledInv p s) (prov : Prov p s) (own : Own p s)
     (invocationEnded_iff.mp (List.all_eq_true.mp hall j hj)).1
   rw [mem_resultsOf] at hr'
   obtain ⟨hrm, hrr, hrp⟩ := hr'
-  obtain ⟨j, hj, hjr, hjp, horig⟩ := resultOrigin prov wk hrm (by rw [hrr, hrp]; exact hfresh)
+  obtain ⟨j, hj, hjr, hjp, horig⟩ := resultOrigin prov hnt wk hrm (by rw [hrr, hrp]; exact hfresh)
   have hjOf : j ∈ s.invocationsOf path name := mem_invocationsOf.mpr ⟨hj, hjr.trans hrr, hjp.trans hrp⟩
   have hjact := hended j hjOf
   have hpa : placementAt p s j.run j.placement = some pl := by rw [hjr, hjp, hrr, hrp, placementAt_eq hwf, hpl]

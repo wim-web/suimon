@@ -19,13 +19,13 @@ theorem control_ne_concurrency {pl : Placement} {c : Concurrency}
     pl.control ≠ .concurrency c := by
   rcases h with ⟨f, h⟩ | ⟨j, arms, h⟩ <;> rw [h] <;> simp
 
-/-- An invocation that is no longer active has stopped all it owns. --/
+/-- Until the conclusion, an invocation that is no longer active has stopped all it owns. --/
 theorem step_nonActive (inv : Inv p s) (hs : step p s op = .ok t) :
-    ∀ i ∈ t.invocations, i.status ≠ .active →
+    t.status.terminal = false → ∀ i ∈ t.invocations, i.status ≠ .active →
       (∀ c ∈ t.calls, c.owner = i.id → c.task = none → c.status ≠ .running ∧ c.status ≠ .fetching) ∧
       (∀ r ∈ t.runs, r.owner = some i.id → r.task = none → r.complete = true) ∧
       (∀ e ∈ t.executions, e.id = i.id → e.complete = true) := by
-  intro i hi hna
+  intro hnt' i hi hna
   rcases step_invocations_back hs i hi with ⟨i₀, hi₀, hid, -, -, -, -⟩ | hnew
   · have oldCall : ∀ c ∈ t.calls, c.owner = i.id → c.task = none → CallOld s c := fun c hc ho ht =>
       call_of_old_owner hs hc ht hi₀ (ho.trans hid.symm)
@@ -35,7 +35,7 @@ theorem step_nonActive (inv : Inv p s) (hs : step p s op = .ok t) :
       execution_of_old_id hs he hi₀ (heid.trans hid.symm)
     rcases step_invocation_change inv.wk hs hi₀ hi hid.symm with rfl | ⟨-, -, -, -, -, hc⟩
     · -- Unchanged: what it owns was stopped already.
-      obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive i hi₀ hna
+      obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive (step_source_nonterminal hs) i hi₀ hna
       refine ⟨fun c hc ho ht => ?_, fun r hr ho ht => ?_, fun e he heid => ?_⟩
       · obtain ⟨c₀, hc₀, -, cowner, ctask, -, -, crun⟩ := oldCall c hc ho ht
         obtain ⟨h1, h2⟩ := hcalls c₀ hc₀ (cowner.trans ho) (ctask.trans ht)
@@ -44,7 +44,8 @@ theorem step_nonActive (inv : Inv p s) (hs : step p s op = .ok t) :
         exact hcomp (hruns r₀ hr₀ (rowner.trans ho) (rtask.trans ht))
       · obtain ⟨e₀, he₀, eid, -, -, -, hcomp⟩ := oldExec e he heid
         exact hcomp (hexecs e₀ he₀ (eid.trans heid))
-    · rcases hc with ⟨c, hc, hco, hct, hcalls, -, -⟩ | ⟨e, he, heid, -, -, hexec⟩ | ⟨R, hR, hRo, hRt, -, -, hruns⟩
+    · rcases hc with ⟨c, hc, hco, hct, hcalls, -, -⟩ | ⟨e, he, heid, -, -, hexec⟩ | ⟨R, hR, hRo, hRt, -, -, hruns⟩ |
+          ⟨-, -, hterm⟩
       · -- Settled through its call: a function call or branch owns only that call.
         obtain ⟨hcid, pl, hpl, hk⟩ := call_placement inv.own inv.wk hc hct hi₀ hco.symm
         have hkind : (∃ f, pl.control = .call (.function f)) ∨ ∃ j arms, pl.control = .branch j arms := by
@@ -98,6 +99,9 @@ theorem step_nonActive (inv : Inv p s) (hs : step p s op = .ok t) :
             execution_placement inv.own inv.wk he₀ hi₀ (by rw [eid, heid', hid])
           obtain rfl := hpl.unique hpl'
           rw [hwf] at hcc; cases hcc
+      · -- Ended by the conclusion, which is final.
+        rw [hnt'] at hterm
+        cases hterm
   · exact absurd hnew.active hna
 
 /-- A running or fetching task call keeps its task active. --/
@@ -117,7 +121,7 @@ theorem step_taskActive (inv : Inv p s) (hs : step p s op = .ok t) :
     obtain ⟨tk₀, htk₀, tname, hst⟩ := step_task_change inv.wk hs he₀ he hid tk htk
     rcases hst with hst | hch
     · rw [hst]; exact A tk₀ htk₀ (tname.trans hname)
-    · rcases hch with ⟨c', hc', hc'o, hc't, hc's⟩ | ⟨R, hR, hRo, hRt, -⟩ | ⟨ts, hts, hp⟩ | hp
+    · rcases hch with ⟨c', hc', hc'o, hc't, hc's⟩ | ⟨R, hR, hRo, hRt, -⟩ | ⟨ts, hts, hp⟩ | hp | ⟨-, hended⟩
       · -- The task's call stopped; it is this call.
         have e1 := task_body_function inv.own inv.wk hc' hc't he₀ hc'o.symm
         have e2 := task_body_function inv.own inv.wk hc₀ (ctask.trans htask) he₀ he₀id
@@ -133,6 +137,9 @@ theorem step_taskActive (inv : Inv p s) (hs : step p s op = .ok t) :
         rcases hp with hp | hp <;> rw [hp] at this <;> cases this
       · have := A tk₀ htk₀ (tname.trans hname)
         rcases hp with hp | hp <;> rw [hp] at this <;> cases this
+      · -- The conclusion after a stop comes once no call runs.
+        have := hended c₀ hc₀
+        rcases hrun₀ with h | h <;> rw [h] at this <;> cases this
   · rcases hcase with ⟨ht, -⟩ | ⟨name', e₁, ts, spec, f, ht, hkey, he₁, -, hts, -, -, -, hmem, -⟩
     · rw [htask] at ht; cases ht
     · rw [htask] at ht
@@ -249,10 +256,12 @@ theorem arm_kept (inv : Inv p s) (hs : step p s op = .ok t) {i i' : Invocation} 
     (hnb : ∀ j arms, pl.control ≠ .branch j arms) : i'.arm = i.arm := by
   rcases step_invocation_change inv.wk hs hi hi' hid with rfl | ⟨-, -, -, -, -, hc⟩
   · rfl
-  · rcases hc with ⟨-, -, -, -, -, -, ha | ⟨j, arms, w, pl', hw, hpl', hb⟩⟩ | ⟨-, -, -, -, ha, -⟩ | ⟨-, -, -, -, -, ha, -⟩
+  · rcases hc with ⟨-, -, -, -, -, -, ha | ⟨j, arms, w, pl', hw, hpl', hb⟩⟩ | ⟨-, -, -, -, ha, -⟩ | ⟨-, -, -, -, -, ha, -⟩ |
+        ⟨-, ha, -⟩
     · exact ha
     · obtain rfl := hpl.unique ⟨w, hw, hpl'⟩
       exact absurd hb (hnb j arms)
+    · exact ha
     · exact ha
     · exact ha
 

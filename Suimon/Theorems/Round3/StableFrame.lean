@@ -69,6 +69,11 @@ theorem stop : ExecsFrom s s.stop := by
   obtain ⟨e₀, he₀, rfl⟩ := mem_stop_executions.mp he
   exact ⟨e₀, he₀, rfl, hc⟩
 
+theorem endUnfinished : ExecsFrom s s.endUnfinished := by
+  intro e he hc
+  obtain ⟨e₀, he₀, rfl⟩ := mem_endUnfinished_executions.mp he
+  exact ⟨e₀, he₀, rfl, hc⟩
+
 theorem fail {f : Failure} {policy : Policy} : ExecsFrom s (s.fail f policy) := by
   cases policy
   · rw [fail_stop]; exact (of_eq rfl).trans stop
@@ -183,7 +188,9 @@ theorem step_execsFrom (hs : step p s op = .ok t) : ExecsFrom s t ∨ ∃ eid, o
     · exact Or.inl (ExecsFrom.stop.trans (ExecsFrom.of_eq rfl))
     · exact Or.inl (ExecsFrom.of_eq rfl)
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact Or.inl (ExecsFrom.of_eq rfl)
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact Or.inl (ExecsFrom.of_eq rfl)
+    · exact Or.inl (ExecsFrom.endUnfinished.trans (ExecsFrom.of_eq rfl))
 
 /-- A complete execution after a step was complete before it, or this step closed it. -/
 theorem exec_complete_cases (hs : step p s op = .ok t) {e : Execution} (he : e ∈ t.executions)

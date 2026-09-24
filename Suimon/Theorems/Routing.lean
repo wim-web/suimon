@@ -238,6 +238,12 @@ theorem failCall {c : Call} {status : CallStatus} {cause : Cause} (h : s.failCal
   obtain ⟨_, _, -, hso, rfl⟩ := State.failCall_eq_ok.mp h
   exact (InvocationsKept.of_eq rfl).trans ((settleOwner hso).trans (.of_eq State.fail_invocations))
 
+/-- Ending the unfinished invocations changes only their status. --/
+theorem endUnfinished (h : t.invocations = s.endUnfinished.invocations) : InvocationsKept s t := fun x hx => by
+  rw [h] at hx
+  obtain ⟨y, hy, rfl⟩ := State.mem_endUnfinished_invocations.mp hx
+  exact ⟨y, hy, by simp, by simp, by simp⟩
+
 end InvocationsKept
 
 open State in
@@ -332,7 +338,9 @@ theorem step_invocations {p : Definition} {s t : State} {op : Op} (hs : step p s
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs <;> exact .of_eq rfl
   | conclude =>
-    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs <;> exact .of_eq rfl
+    obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    · exact .of_eq rfl
+    · exact .endUnfinished rfl
 
 /-! ### Deliveries -/
 

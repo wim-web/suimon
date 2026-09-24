@@ -132,6 +132,18 @@ theorem stop_exec_keys : s.stop.executions.map execKey = s.executions.map execKe
   intro e _
   simp [execKey, stopExecution_names]
 
+theorem endUnfinished_inv_keys : s.endUnfinished.invocations.map invKey = s.invocations.map invKey := by
+  simp only [endUnfinished_invocations, List.map_map]
+  apply List.map_congr_left
+  intro i _
+  simp [invKey]
+
+theorem endUnfinished_exec_keys : s.endUnfinished.executions.map execKey = s.executions.map execKey := by
+  simp only [endUnfinished_executions, List.map_map]
+  apply List.map_congr_left
+  intro e _
+  simp [execKey, endExecution_tasks, Function.comp_def]
+
 end Keys
 
 /-- Members of lists with the same keys correspond. --/
@@ -269,6 +281,9 @@ theorem setTaskResult {r : TaskResult} : SameKeys p s (s.setTaskResult r) := of_
 
 theorem stop : SameKeys p s s.stop :=
   ⟨KeepsWorkflows.of_runs rfl, stop_call_keys, rfl, stop_exec_keys, rfl⟩
+
+theorem endUnfinished : SameKeys p s s.endUnfinished :=
+  ⟨KeepsWorkflows.of_runs rfl, rfl, endUnfinished_inv_keys, endUnfinished_exec_keys, rfl⟩
 
 theorem fail {f : Failure} {policy : Policy} : SameKeys p s (s.fail f policy) := by
   cases policy

@@ -184,7 +184,8 @@ theorem decided_of_running {p : Definition} {s t : State} {r : Run} {w : Workflo
 
 /-- The conclusion from a stopping state: failed with a failure on record, otherwise cancelled (§11.3). --/
 theorem decided_of_stopping {p : Definition} {s t : State} (reason : s.failures ≠ [] ∨ s.cancelled = true)
-    (ht : t = { s with status := if s.failures.isEmpty then .cancelled else .failed }) : Decided p t := by
+    (ht : t = { s.endUnfinished with status := if s.failures.isEmpty then .cancelled else .failed }) :
+    Decided p t := by
   subst ht
   by_cases hf : s.failures = []
   · have hc : s.cancelled = true := reason.resolve_left (· hf)
@@ -227,6 +228,71 @@ theorem Reachable.final_kept {p : Definition} {s t : State} {op : Op} (h : Reach
   have _ := h
   intro hs
   rcases step_source_status hs with h | h <;> simp [h, Status.terminal] at done
+
+/-- What the conclusion after a stop leaves once every call ended: no invocation is active, every task
+    has ended, and no task holds a slot of its concurrency (§8.2, §11.3). --/
+theorem endUnfinished_ended {s : State} (hended : s.calls.all (·.status.ended) = true) (status : Status) :
+    (∀ i ∈ ({ s.endUnfinished with status } : State).invocations, i.status ≠ .active) ∧
+    ∀ e ∈ ({ s.endUnfinished with status } : State).executions, ∀ ts ∈ e.tasks,
+      ts.status.ended = true ∧ ({ s.endUnfinished with status } : State).holdsSlot e ts = false := by
+  refine ⟨fun i hi => ?_, fun e he ts hts => ?_⟩
+  · obtain ⟨i₀, -, rfl⟩ := State.mem_endUnfinished_invocations.mp hi
+    exact State.endInvocation_status_ne
+  · obtain ⟨e₀, -, rfl⟩ := State.mem_endUnfinished_executions.mp he
+    rw [State.endExecution_tasks, List.mem_map] at hts
+    obtain ⟨ts₀, -, rfl⟩ := hts
+    refine ⟨State.endTask_ended, ?_⟩
+    -- Every call ended, so none is cancelling.
+    have hquiet : ∀ c ∈ s.calls, c.status ≠ .cancelling := fun c hc hcan => by
+      have := List.all_eq_true.mp hended c hc
+      rw [hcan] at this
+      cases this
+    simp only [State.holdsSlot, Bool.or_eq_false_iff, beq_eq_false_iff_ne, List.any_eq_false,
+      Bool.and_eq_true, beq_iff_eq, not_and]
+    exact ⟨State.endTask_status_ne_active, fun c hc _ hcan => hquiet c hc hcan⟩
+
+/-- The conclusion after a stop leaves nothing running: no invocation is active, every task has ended,
+    and no task holds a slot of its concurrency (§8.2, §11.3). --/
+theorem step_conclude_stopping {p : Definition} {s t : State} (hs : step p s .conclude = .ok t)
+    (stopping : s.status = .stopping) :
+    (∀ i ∈ t.invocations, i.status ≠ .active) ∧
+    ∀ e ∈ t.executions, ∀ ts ∈ e.tasks, ts.status.ended = true ∧ t.holdsSlot e ts = false := by
+  obtain ⟨-, ⟨h, -⟩ | ⟨-, hended, rfl⟩⟩ := Step.conclude_inv hs
+  · rw [h] at stopping; cases stopping
+  · exact endUnfinished_ended hended _
+
+/-- In a final state reached through a stop, which the root run did not complete, nothing is running:
+    no invocation is active, every task has ended, and no task holds a slot (§8.2, §11.3). A final
+    state accepts no operation, so it is the conclusion of a stopping state; the conclusion from a
+    running state completes the root run. --/
+theorem Reachable.stopped_final {p : Definition} {s : State} (h : Reachable p s) (final : s.status.terminal = true)
+    (stopped : (s.run? []).any (·.complete) = false) :
+    (∀ i ∈ s.invocations, i.status ≠ .active) ∧
+    ∀ e ∈ s.executions, ∀ ts ∈ e.tasks, ts.status.ended = true ∧ s.holdsSlot e ts = false := by
+  cases h with
+  | empty => simp [Status.terminal] at final
+  | @step s0 _ op _ hs =>
+    by_cases running : s0.status = .running
+    · rcases FinalStatus.step_of_running hs running with (h | ⟨h, -⟩) | rfl
+      · rw [h] at final; simp [Status.terminal] at final
+      · rw [h] at final; simp [Status.terminal] at final
+      · -- The conclusion from a running state completes the root run.
+        obtain ⟨-, ⟨-, r, w, hr, -, -, rfl⟩ | ⟨h, -⟩⟩ := Step.conclude_inv hs
+        · exfalso
+          have hroot : (s0.setRun { r with complete := true }).run? [] = some { r with complete := true } := by
+            rw [State.run?_setRun]
+            simp [(State.run?_eq_some hr).2, hr]
+          change ((s0.setRun { r with complete := true }).run? []).any (·.complete) = false at stopped
+          rw [hroot] at stopped
+          cases stopped
+        · rw [h] at running; cases running
+    · obtain ⟨hstop, -, hcases⟩ := step_of_status_ne_running hs running
+      rcases hcases with ⟨c, -, -, hf⟩ | ⟨c, -, -, ho⟩ | rfl | ht
+      · rcases State.failCall_status hf with h | h <;> rw [h] at final <;> simp [hstop, Status.terminal] at final
+      · rw [(State.cancelOwner_update ho).status] at final; simp [hstop, Status.terminal] at final
+      · simp [hstop, Status.terminal] at final
+      · obtain ⟨hended, rfl⟩ := ht
+        exact endUnfinished_ended hended _
 
 /-- The workflow ends normally only after every placement of the root run settled (§13.3). --/
 theorem step_conclude_running {p : Definition} {s t : State} (hs : step p s .conclude = .ok t)

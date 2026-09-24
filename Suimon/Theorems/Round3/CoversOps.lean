@@ -46,16 +46,23 @@ theorem covers_cancel (h : StepCtx p env T s .cancel s') : Covers p T s' := by
   · have cov := h.covers
     exact CoversOpsAux.covers_mk h cov.runs cov.invocations cov.calls cov.executions cov.results cov.taskResults
       cov.deliveries rfl fun e he hc => ⟨e, he, rfl, hc⟩
+/-- The conclusion after a stop is final without the root run completing, so it never leads to an
+    unstopped state. -/
 theorem covers_conclude (h : StepCtx p env T s .conclude s') : Covers p T s' := by
   have cov := h.covers
-  obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv h.accepted
+  obtain ⟨tr, hrun⟩ := h.run
+  obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨hstop, -, rfl⟩⟩ := Step.conclude_inv h.accepted
   · refine CoversOpsAux.covers_mk h (fun x hx => ?_) cov.invocations cov.calls cov.executions cov.results
       cov.taskResults cov.deliveries rfl fun e he hc => ⟨e, he, rfl, hc⟩
     rcases State.mem_setRun_runs hx with rfl | hx
     · exact cov.runs r (State.run?_eq_some hr).1
     · exact cov.runs x hx
-  · exact CoversOpsAux.covers_mk h cov.runs cov.invocations cov.calls cov.executions cov.results cov.taskResults
-      cov.deliveries rfl fun e he hc => ⟨e, he, rfl, hc⟩
+  · exfalso
+    rcases h.unstopped with hs | hd
+    · revert hs
+      simp only
+      split <;> simp
+    · exact RunConformAux.not_done_of_reachable hrun.reachable (Or.inr hstop) hd
 /-- `invoke` adds an invocation `T` has: `Saturated.invoked` finds it for the same trigger, whose input is
     the same by `InputStable` (the trigger's delivery is the same record); its call, run or execution is
     created with it in both runs. -/

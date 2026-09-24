@@ -49,6 +49,8 @@ theorem setTaskResult (h : s.WellKeyed) (r : TaskResult) : (s.setTaskResult r).W
   { h with taskResults := by simpa using h.taskResults }
 theorem stop (h : s.WellKeyed) : s.stop.WellKeyed :=
   { h with calls := by simpa using h.calls, executions := by simpa using h.executions }
+theorem endUnfinished (h : s.WellKeyed) : s.endUnfinished.WellKeyed :=
+  { h with invocations := by simpa using h.invocations, executions := by simpa using h.executions }
 theorem fail (h : s.WellKeyed) (f : Failure) (policy : Policy) : (s.fail f policy).WellKeyed := by
   have h' : ({ s with failures := s.failures ++ [f] } : State).WellKeyed := h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
   cases policy
@@ -252,7 +254,7 @@ theorem step_wellKeyed {p : Definition} {s t : State} {op : Op} (h : s.WellKeyed
   | conclude =>
     obtain ⟨-, ⟨-, _, _, -, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · exact (h.setRun _).of_records rfl rfl rfl rfl rfl rfl rfl rfl
-    · exact h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
+    · exact h.endUnfinished.of_records rfl rfl rfl rfl rfl rfl rfl rfl
 
 theorem Reachable.wellKeyed {p : Definition} {s : State} (h : Reachable p s) : s.WellKeyed := by
   induction h with
@@ -393,6 +395,11 @@ theorem step_source_status {p : Definition} {s t : State} {op : Op} (hs : step p
   · exact Or.inl h
   · exact Or.inr (step_of_status_ne_running hs h).1
 
+/-- The state an operation is accepted in has not concluded. --/
+theorem step_source_nonterminal {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :
+    s.status.terminal = false := by
+  rcases step_source_status hs with h | h <;> simp [h, Status.terminal]
+
 /-- While stopping, no call is running or fetching. --/
 def State.Quiet (s : State) : Prop :=
   s.status = .stopping → ∀ c ∈ s.calls, c.status ≠ .running ∧ c.status ≠ .fetching
@@ -447,7 +454,7 @@ theorem step_after_stop {p : Definition} {s t : State} {op : Op} (quiet : s.Quie
     · simp
     · exact quiet c' hc'
   · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, quiet⟩
-  · exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, quiet⟩
+  · exact ⟨rfl, rfl, rfl, rfl, rfl, by simp, rfl, rfl, by simp, quiet⟩
 
 /-- The status moves only forward: a stop is never undone, and a final status is kept. --/
 theorem step_status {p : Definition} {s t : State} {op : Op} (hs : step p s op = .ok t) :

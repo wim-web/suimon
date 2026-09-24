@@ -179,10 +179,11 @@ theorem empty : Prov p {} where
   callRun := by simp
   completeSettled := by simp
 
-/-- Only the records matter. --/
+/-- Only the records matter, and whether the workflow concluded. --/
 theorem of_records (h : Prov p s) (hr : t.runs = s.runs) (hi : t.invocations = s.invocations)
     (hc : t.calls = s.calls) (he : t.executions = s.executions) (hres : t.results = s.results)
-    (htr : t.taskResults = s.taskResults) (hd : t.deliveries = s.deliveries) (hs : t.settled = s.settled) :
+    (htr : t.taskResults = s.taskResults) (hd : t.deliveries = s.deliveries) (hs : t.settled = s.settled)
+    (hst : t.status.terminal = false → s.status.terminal = false) :
     Prov p t := by
   have hw : SameWorkflows p s t := SameWorkflows.of_runs hr
   have hpa : ∀ path name, placementAt p t path name = placementAt p s path name := fun path name => by
@@ -196,7 +197,7 @@ theorem of_records (h : Prov p s) (hr : t.runs = s.runs) (hi : t.invocations = s
       rw [hi] at hi'
       obtain ⟨w, hw', ht⟩ := h.invTrigger i hi'
       exact ⟨w, by rw [hw]; exact hw', (htrig w i).mpr ht⟩
-    results := fun r hr' => by rw [hres] at hr'; exact (hres' r).mpr (h.results r hr')
+    results := fun hnt r hr' => by rw [hres] at hr'; exact (hres' r).mpr (h.results (hst hnt) r hr')
     skipped := by rw [he, htr]; exact h.skipped
     taskResultSrc := by rw [htr, hc, hr]; exact h.taskResultSrc
     deliveries := fun d hd' => by
@@ -214,12 +215,12 @@ theorem of_records (h : Prov p s) (hr : t.runs = s.runs) (hi : t.invocations = s
       simp only [State.settled?, hs] at this ⊢
       exact this }
 
-theorem stop (h : Prov p s) (hcc : ExecsResolved p s) : Prov p s.stop := by
+theorem stop (h : Prov p s) (hnt : s.status.terminal = false) (hcc : ExecsResolved p s) : Prov p s.stop := by
   have hk : SameKeys p s s.stop := SameKeys.stop
   have hp : Persists p s s.stop := Persists.of_sameKeys hk (fun _ h => h) (fun tr htr => ⟨tr, htr, rfl⟩)
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun _ r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := by
       intro e he name ts hts hsk tr htr hid
       obtain ⟨e0, he0, rfl⟩ := mem_stop_executions.mp he
@@ -237,11 +238,11 @@ theorem stop (h : Prov p s) (hcc : ExecsResolved p s) : Prov p s.stop := by
     callRun := h.callRun
     completeSettled := h.completeSettled }
 
-theorem fail (h : Prov p s) (hcc : ExecsResolved p s) {f : Failure} {policy : Policy} :
-    Prov p (s.fail f policy) := by
-  have h' : Prov p { s with failures := s.failures ++ [f] } := h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
+theorem fail (h : Prov p s) (hnt : s.status.terminal = false) (hcc : ExecsResolved p s) {f : Failure}
+    {policy : Policy} : Prov p (s.fail f policy) := by
+  have h' : Prov p { s with failures := s.failures ++ [f] } := h.of_records rfl rfl rfl rfl rfl rfl rfl rfl id
   cases policy
-  · exact h'.stop hcc
+  · exact h'.stop hnt hcc
   · exact h'
 
 /-- A call changes status. --/
@@ -250,7 +251,7 @@ theorem setCall (h : Prov p s) (hcc : ExecsResolved p s) {c' : Call} (hk : SameK
   have hp : Persists p s (s.setCall c') := Persists.of_sameKeys hk (fun _ h => h) (fun tr htr => ⟨tr, htr, rfl⟩)
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := by
       intro tr htr
@@ -267,9 +268,9 @@ theorem setCall (h : Prov p s) (hcc : ExecsResolved p s) {c' : Call} (hk : SameK
 theorem appendResult (h : Prov p s) {r : Result} (hr : ResultOk p s r) :
     Prov p { s with results := s.results ++ [r] } where
   invTrigger := h.invTrigger
-  results := fun x hx => by
+  results := fun hnt x hx => by
     rcases List.mem_append.mp hx with hx | hx
-    · exact h.results x hx
+    · exact h.results hnt x hx
     · rw [List.mem_singleton.mp hx]; exact hr
   skipped := h.skipped
   taskResultSrc := h.taskResultSrc
@@ -291,7 +292,7 @@ theorem appendTaskResult (h : Prov p s) (hcc : ExecsResolved p s) {tr : TaskResu
       fun x hx => ⟨x, List.mem_append_left _ hx, rfl⟩, KeepsWorkflows.refl⟩
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := by
       intro e he name ts hts hskd x hx hid
       rcases List.mem_append.mp hx with hx | hx
@@ -316,7 +317,7 @@ theorem setTaskResult (h : Prov p s) (hcc : ExecsResolved p s) {r : TaskResult} 
       fun x hx => exists_of_map_eq hkeys hx, KeepsWorkflows.refl⟩
   exact {
     invTrigger := h.invTrigger
-    results := fun x hx => (h.results x hx).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt x hx => (h.results hnt x hx).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := by
       intro e he name ts hts hsk x hx hid
       obtain ⟨x0, hx0, hk⟩ := exists_of_map_eq hkeys.symm hx
@@ -362,7 +363,7 @@ theorem appendSettled (h : Prov p s) (hcc : ExecsResolved p s) {x : Settled} :
     invTrigger := fun i hi => by
       obtain ⟨w, hw, ht⟩ := h.invTrigger i hi
       exact ⟨w, hw, ht.mono rfl (List.prefix_refl _)⟩
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := h.taskResultSrc
     deliveries := h.deliveries
@@ -379,7 +380,7 @@ theorem setTask (h : Prov p s) (hcc : ExecsResolved p s) (wk : s.WellKeyed) {e :
   have hp : Persists p s (s.setTask e ts) := Persists.of_sameKeys hk (fun _ h => h) (fun tr htr => ⟨tr, htr, rfl⟩)
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := by
       intro x hx name ts' hts' hsk' tr htr hid
       rcases mem_replace hx with rfl | ⟨hx, -⟩
@@ -406,7 +407,7 @@ theorem setExecution (h : Prov p s) (hcc : ExecsResolved p s) (wk : s.WellKeyed)
   have hp : Persists p s (s.setExecution e') := Persists.of_sameKeys hk' (fun _ h => h) (fun tr htr => ⟨tr, htr, rfl⟩)
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := by
       intro x hx name ts hts hsk tr htr hid
       rcases mem_replace hx with rfl | ⟨hx, -⟩
@@ -444,7 +445,7 @@ theorem setRun (h : Prov p s) (hcc : ExecsResolved p s) (wk : s.WellKeyed) {r r'
     invTrigger := fun i hi => by
       obtain ⟨w, hw', ht⟩ := h.invTrigger i hi
       exact ⟨w, by rw [hw]; exact hw', ht⟩
-    results := fun r hr => (h.results r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun i hi _ _ => ⟨i, hi, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := by
       intro tr htr
@@ -478,7 +479,7 @@ theorem appendInvocation (h : Prov p s) (hcc : ExecsResolved p s) {i : Invocatio
       rcases List.mem_append.mp hx with hx | hx
       · exact h.invTrigger x hx
       · rw [List.mem_singleton.mp hx]; exact htrig
-    results := fun r hr => (h.results r hr).transfer hcc hp fun j hj _ _ =>
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun j hj _ _ =>
       ⟨j, List.mem_append_left _ hj, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := h.taskResultSrc
@@ -495,7 +496,7 @@ theorem appendCall (h : Prov p s) (hcc : ExecsResolved p s) {c : Call} : Prov p 
       fun tr htr => ⟨tr, htr, rfl⟩, KeepsWorkflows.refl⟩
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := fun tr htr => by
       rcases h.taskResultSrc tr htr with ⟨x, hx, rest⟩ | hrun
@@ -512,7 +513,7 @@ theorem appendExecution (h : Prov p s) (hcc : ExecsResolved p s) {e : Execution}
       fun tr htr => ⟨tr, htr, rfl⟩, KeepsWorkflows.refl⟩
   exact {
     invTrigger := h.invTrigger
-    results := fun r hr => (h.results r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
     skipped := fun x hx name ts hts hskd tr htr hid => by
       rcases List.mem_append.mp hx with hx | hx
       · exact h.skipped x hx name ts hts hskd tr htr hid
@@ -534,7 +535,7 @@ theorem appendRun (h : Prov p s) (hcc : ExecsResolved p s)
     invTrigger := fun i hi => by
       obtain ⟨w, hw', ht⟩ := h.invTrigger i hi
       exact ⟨w, hw _ _ hw', ht⟩
-    results := fun r hr => (h.results r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun j hj _ _ => ⟨j, hj, rfl, Compat.refl⟩
     skipped := h.skipped
     taskResultSrc := fun tr htr => by
       rcases h.taskResultSrc tr htr with hcall | ⟨x, hx, rest⟩
@@ -573,7 +574,7 @@ theorem setInvocation (h : Prov p s) (hcc : ExecsResolved p s) (wk : s.WellKeyed
       · obtain ⟨w, hw, ht⟩ := h.invTrigger i hi
         exact ⟨w, by rw [hk.2.1]; exact hw, ht.mono (invKey_eq.mpr hk) (List.prefix_refl _)⟩
       · exact h.invTrigger x hx
-    results := fun r hr => (h.results r hr).transfer hcc hp fun j hj _ _ => by
+    results := fun hnt r hr => (h.results hnt r hr).transfer hcc hp fun j hj _ _ => by
       by_cases hji : j.id = i.id
       · have := wk.invocation_eq_of_id hj hi hji
         subst this
@@ -602,6 +603,56 @@ theorem settleCallOwner (h : Prov p s) (hcc : ExecsResolved p s) (own : Own p s)
     rw [← Own.placementAt_of_id wk hj hi (hjo.trans hio.symm), hpl'] at hpl
     cases hpl
     rcases hctrl' with ⟨_, _, h', -⟩ | ⟨_, _, h', -⟩ <;> rw [hctrl] at h' <;> cases h'
+
+theorem endExecution_find? {e : Execution} {name : String} :
+    (endExecution e).tasks.find? (·.name == name) = (e.tasks.find? (·.name == name)).map endTask := by
+  simp only [endExecution_tasks, List.find?_map]
+  congr 1
+  congr 1
+  funext t
+  simp
+
+/-- The conclusion after a stop ends what has not ended, without a result. The workflow is final
+    then, so the origin of results is no longer claimed: the invocation of an open execution ends
+    cancelled with the results it gave. --/
+theorem endUnfinished (h : Prov p s) {status : Status} (hterm : status.terminal = true) :
+    Prov p { s.endUnfinished with status } := by
+  have hw : SameWorkflows p s { s.endUnfinished with status } := SameWorkflows.of_runs rfl
+  have hpa : ∀ path name, placementAt p { s.endUnfinished with status } path name = placementAt p s path name :=
+    fun path name => by simp only [placementAt, hw path]
+  exact {
+    invTrigger := fun i hi => by
+      obtain ⟨i0, hi0, rfl⟩ := mem_endUnfinished_invocations.mp hi
+      obtain ⟨w, hw', ht⟩ := h.invTrigger i0 hi0
+      exact ⟨w, by rw [hw]; simpa using hw', ht.mono (by simp [invKey]) (List.prefix_refl _)⟩
+    results := fun hnt => by simp [hterm] at hnt
+    skipped := by
+      intro e he name ts hts hsk tr htr hid
+      obtain ⟨e0, he0, rfl⟩ := mem_endUnfinished_executions.mp he
+      rw [endExecution_find?] at hts
+      obtain ⟨ts0, hts0, rfl⟩ := Option.map_eq_some_iff.mp hts
+      refine h.skipped e0 he0 name ts0 hts0 ?_ tr htr hid
+      rw [endTask_status] at hsk
+      split at hsk
+      · cases hsk
+      · split at hsk
+        · cases hsk
+        · exact hsk
+    taskResultSrc := h.taskResultSrc
+    deliveries := fun d hd => by
+      obtain ⟨w, hw', rest⟩ := h.deliveries d hd
+      exact ⟨w, by rw [hw]; exact hw', rest⟩
+    callRun := fun i hi hst pl hpl hctrl => by
+      obtain ⟨i0, hi0, rfl⟩ := mem_endUnfinished_invocations.mp hi
+      have hst0 : i0.status = .succeeded := by
+        rw [endInvocation_status] at hst
+        split at hst
+        · cases hst
+        · exact hst
+      rw [hpa, endInvocation_run, endInvocation_placement] at hpl
+      obtain ⟨r, hr, rest⟩ := h.callRun i0 hi0 hst0 pl hpl hctrl
+      exact ⟨r, hr, by simpa using rest⟩
+    completeSettled := h.completeSettled }
 
 theorem root {m : String} {input : Option Value} :
     Prov p { started := true, runs := [{ path := [], workflow := m, input }] } where
@@ -664,6 +715,7 @@ theorem afterCancel (h : Prov p s) (own : Own p s) (wk : s.WellKeyed) {c : Call}
 theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed) (h0 : s = {} ∨ s.started = true)
     {op : Op} (hs : step p s op = .ok t) : Prov p t := by
   have hcc : ExecsResolved p s := own.execsResolved
+  have hnt := step_source_nonterminal hs
   cases op with
   | start input =>
     obtain ⟨hns, -, _, -, -, rfl⟩ := Step.start_inv hs
@@ -796,6 +848,7 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
     obtain ⟨-, -, c, hc, hrun, hf⟩ := Step.failed_inv hs
     obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
     exact (h.afterCall act own wk (call?_eq_some hc).1 hrun (by simp) (by simp) hso).fail
+      (by rw [(settleOwner_update hso).status, setCall_status]; exact hnt)
       (settleOwner_resolved own wk (call?_eq_some hc).1 hso)
   | timedOut id element =>
     obtain ⟨-, -, c, hc, hcond, hf⟩ := Step.timedOut_inv hs
@@ -805,11 +858,13 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
       · exact h1
     obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
     exact (h.afterCall act own wk (call?_eq_some hc).1 hrun (by simp) (by simp) hso).fail
+      (by rw [(settleOwner_update hso).status, setCall_status]; exact hnt)
       (settleOwner_resolved own wk (call?_eq_some hc).1 hso)
   | lost id =>
     obtain ⟨-, -, c, hc, ⟨hrun, hf⟩ | ⟨-, ho⟩⟩ := Step.lost_inv hs
     · obtain ⟨_, _, -, hso, rfl⟩ := failCall_eq_ok.mp hf
       exact (h.afterCall act own wk (call?_eq_some hc).1 hrun (by simp) (by simp) hso).fail
+        (by rw [(settleOwner_update hso).status, setCall_status]; exact hnt)
         (settleOwner_resolved own wk (call?_eq_some hc).1 hso)
     · exact h.afterCancel own wk (call?_eq_some hc).1 ho
   | terminated id =>
@@ -825,7 +880,7 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
     obtain ⟨-, -, w, c, tid, target, hdt, -, -, rfl⟩ := Step.transformFailed_inv hs
     obtain ⟨hw, hc, ⟨r, hr, h1, h2, h3⟩, -⟩ := Step.deliveryTarget_eq_ok.mp hdt
     have hr' := result?_eq_some hr
-    refine (h.appendDelivery ⟨w, hw, c, hc, r, hr'.1, hr'.2, h1, h2, ?_⟩).fail hcc
+    refine (h.appendDelivery ⟨w, hw, c, hc, r, hr'.1, hr'.2, h1, h2, ?_⟩).fail hnt hcc
     rcases h3 with h3 | h3 <;> simp [h3]
   | taskInput eid name value =>
     obtain ⟨-, -, e, ts, spec, he, -, -, -, -, rfl⟩ := Step.taskInput_inv hs
@@ -833,7 +888,8 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
   | taskInputFailed eid name =>
     obtain ⟨-, -, e, ts, spec, tid, he, -, -, -, -, rfl⟩ := Step.taskInputFailed_inv hs
     exact (h.setTask hcc wk (execution?_eq_some he).1 (ts := { ts with status := .failed })
-      (fun hsk => by simp at hsk)).fail (hcc.of_sameKeys (SameKeys.setTask wk.executions (execution?_eq_some he).1))
+      (fun hsk => by simp at hsk)).fail hnt
+      (hcc.of_sameKeys (SameKeys.setTask wk.executions (execution?_eq_some he).1))
   | beginTask eid name =>
     obtain ⟨-, -, e, cc, ts, spec, he, -, -, -, -, -, -, hcases⟩ := Step.beginTask_inv hs
     have h1 := h.setTask hcc wk (execution?_eq_some he).1 (ts := { ts with status := .active })
@@ -879,7 +935,7 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
     · exact h1
   | taskOutputFailed eid name index =>
     obtain ⟨-, -, _, _, r, -, -, -, -, -, rfl⟩ := Step.taskOutputFailed_inv hs
-    exact (h.setTaskResult hcc (r := { r with output := .failed })).fail hcc
+    exact (h.setTaskResult hcc (r := { r with output := .failed })).fail hnt hcc
   | settle path name =>
     obtain ⟨-, -, r, w, pl, shape, kind, x, result, -, -, -, -, -, -, -, hout, hcases⟩ := Step.settle_inv hs
     have h1 := h.appendSettled hcc (x := x)
@@ -1023,8 +1079,8 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
       · exact h1.setTask hcc1 wk1 he'.1 (fun hsk => by simp at hsk)
   | cancel =>
     obtain ⟨-, ⟨-, rfl⟩ | ⟨-, rfl⟩⟩ := Step.cancel_inv hs
-    · exact (h.stop hcc).of_records rfl rfl rfl rfl rfl rfl rfl rfl
-    · exact h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
+    · exact (h.stop hnt hcc).of_records rfl rfl rfl rfl rfl rfl rfl rfl id
+    · exact h.of_records rfl rfl rfl rfl rfl rfl rfl rfl (fun _ => hnt)
   | conclude =>
     obtain ⟨-, ⟨-, r, w, hr, hw, hall, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
     · have hr' : s.run? r.path = some r := by rw [(run?_eq_some hr).2]; exact hr
@@ -1036,8 +1092,8 @@ theorem step (h : Prov p s) (act : Active p s) (own : Own p s) (wk : s.WellKeyed
         rw [(run?_eq_some hr).2]
         exact List.all_eq_true.mp hall pl hpl
       exact (h.setRun hcc wk hr' (r' := { r with complete := true }) rfl (fun _ => rfl) (fun _ => hsettled)).of_records
-        rfl rfl rfl rfl rfl rfl rfl rfl
-    · exact h.of_records rfl rfl rfl rfl rfl rfl rfl rfl
+        rfl rfl rfl rfl rfl rfl rfl rfl (fun _ => hnt)
+    · exact h.endUnfinished (by split <;> rfl)
 
 end Prov
 

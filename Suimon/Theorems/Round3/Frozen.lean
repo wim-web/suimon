@@ -33,7 +33,17 @@ theorem step_frozen {op : Op} (valid : p.validate = .ok ()) (h : Reachable p s) 
   have wk := inv.wk
   have K := inv.kept hs
   obtain ⟨dt, rt⟩ := FrozenAux.reachable_tasks h
-  have good := FrozenAux.step_good inv (Limit.reachable_inv h) dt rt hs
+  have rt := rt (step_source_nonterminal hs)
+  -- Ended tasks and complete executions whose tasks ended stay, until and at the conclusion.
+  have good : (∀ e ∈ s.executions, e.complete = true → (∀ tk ∈ e.tasks, tk.status.ended = true) →
+        e ∈ t.executions) ∧
+      (∀ e ∈ s.executions, ∀ tk ∈ e.tasks, tk.status.ended = true →
+        ∃ e' ∈ t.executions, e'.id = e.id ∧ tk ∈ e'.tasks) := by
+    cases ht : t.status.terminal
+    · have g := FrozenAux.step_good inv (Limit.reachable_inv h) dt rt hs ht
+      exact ⟨g.done, g.tasks⟩
+    · obtain ⟨htasks, hdone, -⟩ := FrozenAux.step_final dt hs ht
+      exact ⟨hdone, htasks⟩
   have trs := FrozenAux.step_taskResults hs
   -- A pending result of a task in the output of a complete execution cannot exist.
   have outputs : ∀ e ∈ s.executions, e.complete = true → ∀ r₁ ∈ s.taskResults, r₁.execution = e.id →
@@ -45,7 +55,7 @@ theorem step_frozen {op : Op} (valid : p.validate = .ok ()) (h : Reachable p s) 
     obtain ⟨cc, hcc, hfind⟩ := State.taskSpec_eq_ok.mp hspec
     have hname : spec.name = r₁.task := by simpa using List.find?_some hfind
     exact (inv.dyn.execDone e₁ he hc).2.2 cc hcc r₁ hr₁ hre ⟨spec, List.mem_of_find?_eq_some hfind, hname, hout⟩ hp₁
-  refine ⟨?_, ?_, fun e he hc => good.done e he hc (dt e he hc), good.tasks, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, fun e he hc => good.1 e he hc (dt e he hc), good.2, ?_, ?_, ?_, ?_⟩
   · -- An invocation that is no longer active is left as it is (`Delivery.frozen`).
     intro i hi hna
     obtain ⟨i', hi', hid, -⟩ := K.invocation i hi

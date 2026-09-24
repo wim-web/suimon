@@ -2,7 +2,7 @@ import Suimon.Step
 
 /-! Reusable lemmas about the building blocks of the operational rules in `Suimon/Step.lean`: the
     `Except` combinators, lookups by key, and the state updates `setRun`, `setInvocation`, `setCall`,
-    `setExecution`, `setTask`, `setTaskResult`, `stop` and `fail`. -/
+    `setExecution`, `setTask`, `setTaskResult`, `stop`, `endUnfinished` and `fail`. -/
 
 namespace Suimon
 
@@ -462,6 +462,140 @@ theorem execution?_stop {id : String} : s.stop.execution? id = (s.execution? id)
   simp only [execution?, stop_executions, List.find?_map]
   rfl
 end stop
+
+/-! ### `endUnfinished` -/
+
+section endUnfinished
+@[simp] theorem endUnfinished_status : s.endUnfinished.status = s.status := rfl
+@[simp] theorem endUnfinished_started : s.endUnfinished.started = s.started := rfl
+@[simp] theorem endUnfinished_cancelled : s.endUnfinished.cancelled = s.cancelled := rfl
+@[simp] theorem endUnfinished_runs : s.endUnfinished.runs = s.runs := rfl
+@[simp] theorem endUnfinished_calls : s.endUnfinished.calls = s.calls := rfl
+@[simp] theorem endUnfinished_results : s.endUnfinished.results = s.results := rfl
+@[simp] theorem endUnfinished_taskResults : s.endUnfinished.taskResults = s.taskResults := rfl
+@[simp] theorem endUnfinished_deliveries : s.endUnfinished.deliveries = s.deliveries := rfl
+@[simp] theorem endUnfinished_settled : s.endUnfinished.settled = s.settled := rfl
+@[simp] theorem endUnfinished_failures : s.endUnfinished.failures = s.failures := rfl
+
+/-- The execution `endUnfinished` leaves in place of `e`. --/
+def endExecution (e : Execution) : Execution := { e with tasks := e.tasks.map endTask }
+
+theorem endUnfinished_invocations : s.endUnfinished.invocations = s.invocations.map endInvocation := rfl
+theorem endUnfinished_executions : s.endUnfinished.executions = s.executions.map endExecution := rfl
+
+section
+variable {i : Invocation}
+@[simp] theorem endInvocation_id : (endInvocation i).id = i.id := by unfold endInvocation; split <;> rfl
+@[simp] theorem endInvocation_run : (endInvocation i).run = i.run := by unfold endInvocation; split <;> rfl
+@[simp] theorem endInvocation_placement : (endInvocation i).placement = i.placement := by
+  unfold endInvocation; split <;> rfl
+@[simp] theorem endInvocation_trigger : (endInvocation i).trigger = i.trigger := by
+  unfold endInvocation; split <;> rfl
+@[simp] theorem endInvocation_input : (endInvocation i).input = i.input := by unfold endInvocation; split <;> rfl
+@[simp] theorem endInvocation_arm : (endInvocation i).arm = i.arm := by unfold endInvocation; split <;> rfl
+
+theorem endInvocation_status :
+    (endInvocation i).status = if i.status = .active then .cancelled else i.status := by
+  unfold endInvocation
+  by_cases h : i.status = .active <;> simp [h]
+
+theorem endInvocation_of_ne (h : i.status ≠ .active) : endInvocation i = i := by simp [endInvocation, h]
+
+/-- No invocation is active after the conclusion. --/
+theorem endInvocation_status_ne : (endInvocation i).status ≠ .active := by
+  rw [endInvocation_status]
+  split <;> simp_all
+end
+
+section
+variable {t : TaskState}
+@[simp] theorem endTask_name : (endTask t).name = t.name := by unfold endTask; split <;> (try split) <;> rfl
+@[simp] theorem endTask_input : (endTask t).input = t.input := by unfold endTask; split <;> (try split) <;> rfl
+
+theorem endTask_status : (endTask t).status =
+    if t.status = .active then .cancelled
+    else if t.status = .pending ∨ t.status = .ready then .notStarted else t.status := by
+  unfold endTask
+  by_cases h : t.status = .active
+  · simp [h]
+  · by_cases h' : t.status = .pending ∨ t.status = .ready
+    · rcases h' with h' | h' <;> simp [h']
+    · have h'' : (t.status == .pending || t.status == .ready) = false := by simpa using h'
+      simp [h, h'', h']
+
+theorem endTask_of_ended (h : t.status.ended = true) : endTask t = t := by
+  cases t with
+  | mk name input status => cases status <;> simp_all [endTask, TaskStatus.ended]
+
+theorem endTask_status_ne_active : (endTask t).status ≠ .active := by
+  rw [endTask_status]
+  split
+  · simp
+  · split
+    · simp
+    · assumption
+
+/-- Every task has ended after the conclusion. --/
+theorem endTask_ended : (endTask t).status.ended = true := by
+  rw [endTask_status]
+  split
+  · rfl
+  · split
+    · rfl
+    · rename_i h h'
+      cases hs : t.status <;> simp_all [TaskStatus.ended]
+end
+
+section
+variable {e : Execution}
+@[simp] theorem endExecution_id : (endExecution e).id = e.id := rfl
+@[simp] theorem endExecution_run : (endExecution e).run = e.run := rfl
+@[simp] theorem endExecution_placement : (endExecution e).placement = e.placement := rfl
+@[simp] theorem endExecution_input : (endExecution e).input = e.input := rfl
+@[simp] theorem endExecution_complete : (endExecution e).complete = e.complete := rfl
+theorem endExecution_tasks : (endExecution e).tasks = e.tasks.map endTask := rfl
+end
+
+@[simp] theorem endUnfinished_invocations_map_id :
+    s.endUnfinished.invocations.map (·.id) = s.invocations.map (·.id) := by
+  simp [endUnfinished_invocations, Function.comp_def]
+@[simp] theorem endUnfinished_invocations_length : s.endUnfinished.invocations.length = s.invocations.length :=
+  List.length_map ..
+@[simp] theorem endUnfinished_executions_map_id :
+    s.endUnfinished.executions.map (·.id) = s.executions.map (·.id) := by
+  simp [endUnfinished_executions, Function.comp_def]
+@[simp] theorem endUnfinished_executions_length : s.endUnfinished.executions.length = s.executions.length :=
+  List.length_map ..
+
+theorem mem_endUnfinished_invocations {i : Invocation} :
+    i ∈ s.endUnfinished.invocations ↔ ∃ i' ∈ s.invocations, endInvocation i' = i := List.mem_map
+theorem mem_endUnfinished_executions {e : Execution} :
+    e ∈ s.endUnfinished.executions ↔ ∃ e' ∈ s.executions, endExecution e' = e := List.mem_map
+
+theorem invocation?_endUnfinished {id : String} :
+    s.endUnfinished.invocation? id = (s.invocation? id).map endInvocation := by
+  simp only [invocation?, endUnfinished_invocations, List.find?_map]
+  have : ((fun x : Invocation => x.id == id) ∘ endInvocation) = fun x => x.id == id := by funext i; simp
+  rw [this]
+
+theorem execution?_endUnfinished {id : String} :
+    s.endUnfinished.execution? id = (s.execution? id).map endExecution := by
+  simp only [execution?, endUnfinished_executions, List.find?_map]
+  rfl
+
+/-- When every call has ended, as the conclusion after a stop requires, none is running or fetching. --/
+theorem calls_quiet_of_ended (h : s.calls.all (·.status.ended) = true) :
+    ∀ c ∈ s.calls, c.status ≠ .running ∧ c.status ≠ .fetching := by
+  intro c hc
+  have := List.all_eq_true.mp h c hc
+  cases hst : c.status <;> simp_all [CallStatus.ended]
+
+theorem run?_endUnfinished {path : Path} : s.endUnfinished.run? path = s.run? path := rfl
+theorem call?_endUnfinished {id : String} : s.endUnfinished.call? id = s.call? id := rfl
+theorem result?_endUnfinished {id : ResultId} : s.endUnfinished.result? id = s.result? id := rfl
+theorem settled?_endUnfinished {path : Path} {name : String} :
+    s.endUnfinished.settled? path name = s.settled? path name := rfl
+end endUnfinished
 
 /-! ### `fail` -/
 

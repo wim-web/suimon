@@ -166,7 +166,23 @@ theorem stop (hP : ∀ x : TaskState, P x.status → P (stopTask x).status) (h :
     exact List.mem_map_of_mem hx
   · rw [stopTask_name, hn]
 
+theorem endUnfinished (hP : ∀ x : TaskState, P x.status → P (endTask x).status) (h : TaskHas P s id name) :
+    TaskHas P s.endUnfinished id name := by
+  obtain ⟨e, he, hid, x, hx, hn, hp⟩ := h
+  refine ⟨endExecution e, mem_endUnfinished_executions.mpr ⟨e, he, rfl⟩, hid, endTask x, ?_, ?_, hP x hp⟩
+  · rw [endExecution_tasks]
+    exact List.mem_map_of_mem hx
+  · rw [endTask_name, hn]
+
 end TaskHas
+
+theorem begun_endTask (x : TaskState) (h : Begun x.status) : Begun (endTask x).status := by
+  rw [endTask_status]
+  split
+  · simp [Begun]
+  · split
+    · simp [Begun]
+    · exact h
 
 theorem begun_stopTask (x : TaskState) (h : Begun x.status) : Begun (stopTask x).status := by
   rw [stopTask_of_begun h]
@@ -355,6 +371,34 @@ theorem stop (h : Inv s) : Inv s.stop where
   execRuns := by
     intro e' he'
     obtain ⟨e, he, rfl⟩ := mem_stop_executions.mp he'
+    exact h.execRuns e he
+
+/-- Ending the unfinished tasks keeps the invariant once no call runs, as after a stop. --/
+theorem endUnfinished (h : Inv s) (quiet : ∀ c ∈ s.calls, c.status ≠ .running ∧ c.status ≠ .fetching) :
+    Inv s.endUnfinished where
+  execIds := by rw [endUnfinished_executions_map_id]; exact h.execIds
+  callIds := h.callIds
+  coherent := by
+    intro e' he' x hx y hy hxy
+    obtain ⟨e, he, rfl⟩ := mem_endUnfinished_executions.mp he'
+    rw [endExecution_tasks, List.mem_map] at hx hy
+    obtain ⟨x0, hx0, rfl⟩ := hx
+    obtain ⟨y0, hy0, rfl⟩ := hy
+    simp only [endTask_name] at hxy
+    rw [h.coherent e he x0 hx0 y0 hy0 hxy]
+  keys := h.keys
+  calls := fun c hc name hn => (h.calls c hc name hn).endUnfinished begun_endTask
+  runs := fun r hr o name ho hn => (h.runs r hr o name ho hn).endUnfinished begun_endTask
+  apart := h.apart
+  active := by
+    intro c hc hst
+    rcases hst with hst | hst
+    · exact absurd hst (quiet c hc).1
+    · exact absurd hst (quiet c hc).2
+  results := fun r hr => (h.results r hr).endUnfinished fun _ _ => trivial
+  execRuns := by
+    intro e' he'
+    obtain ⟨e, he, rfl⟩ := mem_endUnfinished_executions.mp he'
     exact h.execRuns e he
 
 theorem fail (h : Inv s) {f : Failure} {policy : Policy} : Inv (s.fail f policy) := by
@@ -784,9 +828,9 @@ theorem step_inv {p : Definition} {s t : State} {op : Op} (h : Inv s) (h0 : s = 
     · exact h.stop.of_eq rfl rfl rfl rfl
     · exact h.of_eq rfl rfl rfl rfl
   | conclude =>
-    obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
+    obtain ⟨-, ⟨-, r, _, hr, -, -, rfl⟩ | ⟨-, hended, rfl⟩⟩ := Step.conclude_inv hs
     · exact (h.setRun (r' := { r with complete := true }) (run?_eq_some hr).1 rfl rfl).of_eq rfl rfl rfl rfl
-    · exact h.of_eq rfl rfl rfl rfl
+    · exact (h.endUnfinished (calls_quiet_of_ended hended)).of_eq rfl rfl rfl rfl
 
 theorem reachable_inv {p : Definition} {s : State} (h : Reachable p s) : Inv s := by
   induction h with

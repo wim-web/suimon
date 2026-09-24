@@ -513,9 +513,10 @@ theorem root {m : String} {input : Option Value} :
   completeOutputs := by simp
   activeArm := by simp
 
-/-- Every step keeps what keeps owners active. --/
+/-- Every step keeps what keeps owners active, until the conclusion: after a stop, the conclusion ends
+    the invocations of open executions and runs (`State.endUnfinished`). --/
 theorem step (h : Active p s) (own : Own p s) (wk : s.WellKeyed) (h0 : s = {} ∨ s.started = true) {op : Op}
-    (hs : step p s op = .ok t) : Active p t := by
+    (hs : step p s op = .ok t) (ht : t.status.terminal = false) : Active p t := by
   have hcc : ∀ e ∈ s.executions, ∃ cc, s.concurrencyOf p e = .ok cc :=
     fun e he => (own.exec_concurrency he).imp fun _ h => h.1
   cases op with
@@ -731,10 +732,8 @@ theorem step (h : Active p s) (own : Own p s) (wk : s.WellKeyed) (h0 : s = {} �
     · exact h.stop.of_records rfl rfl rfl rfl rfl
     · exact h.of_records rfl rfl rfl rfl rfl
   | conclude =>
-    obtain ⟨-, ⟨-, r, w, hr, -, -, rfl⟩ | ⟨-, -, rfl⟩⟩ := Step.conclude_inv hs
-    · have hr' : s.run? r.path = some r := by rw [(run?_eq_some hr).2]; exact hr
-      exact (h.setRun_complete hr').of_records rfl rfl rfl rfl rfl
-    · exact h.of_records rfl rfl rfl rfl rfl
+    rw [step_conclude_terminal hs] at ht
+    cases ht
 
 end Active
 

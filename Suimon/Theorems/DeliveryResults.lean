@@ -157,7 +157,7 @@ theorem no_second_result (inv : Inv p s) (hs : step p s op = .ok t) {w : Workflo
         · exact absurd hkd (hnofun f d hf hd)
         · exact absurd hco (hnoconc c hc)
     have hna : i'.status ≠ .active := by rw [hsucc]; simp
-    obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive i' hi' hna
+    obtain ⟨hcalls, hruns, hexecs⟩ := inv.dyn.nonActive (step_source_nonterminal hs) i' hi' hna
     rcases step_results_back hs r hr with h | ⟨-, -, -, hcase⟩
     · exact hnew h
     rcases hcase with ⟨c, hc, i, hi, hct, hst', -, -, hio, hir, hip, -⟩ |

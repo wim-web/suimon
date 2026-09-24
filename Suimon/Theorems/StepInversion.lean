@@ -695,7 +695,7 @@ theorem Step.conclude_inv (h : Step.conclude p s = .ok t) :
                 (fun pl => (s.settled? [] pl.name).any (·.outcome == .skipped)) then .skipped
             else .succeeded }) ∨
      (s.status = .stopping ∧ s.calls.all (·.status.ended) = true ∧
-        t = { s with status := if s.failures.isEmpty then .cancelled else .failed })) := by
+        t = { s.endUnfinished with status := if s.failures.isEmpty then .cancelled else .failed })) := by
   unfold Step.conclude at h
   simp only [bind_eq_ok, require_eq_ok, exists_unit_iff] at h
   obtain ⟨h1, h⟩ := h
