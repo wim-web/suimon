@@ -100,6 +100,10 @@ theorem need_eq_ok {α} {value : Option α} {message : String} {a : α} :
 
 end Validate
 
+theorem Definition.validateTypes_eq_ok {at_ : String} {types : List ValueType} {u : Unit} :
+    Definition.validateTypes at_ types = .ok u ↔ ∀ t ∈ types, t.name ≠ "" := by
+  simp [Definition.validateTypes, Validate.check_eq_ok]
+
 theorem nodup_of_unique {α} [BEq α] [LawfulBEq α] : ∀ {xs : List α}, unique xs = true → xs.Nodup
   | [], _ => List.nodup_nil
   | a :: as, h => by
@@ -234,8 +238,8 @@ theorem Workflow.outputKind?_eq_bind {p : Definition} {w : Workflow} (hu : (w.pl
 /-- Reduces a successful validator computation to its conditions. --/
 local macro "validate_simp" " at " h:ident : tactic =>
   `(tactic| simp only [Static.except_bind_eq_ok, Static.except_pure_eq_ok, Static.except_throw_eq_ok,
-    Validate.check_eq_ok, Validate.need_eq_ok, exists_const, and_true, true_and, Bool.false_eq_true,
-    ↓reduceIte, false_and, and_false, exists_false] at $h:ident)
+    Validate.check_eq_ok, Validate.need_eq_ok, Definition.validateTypes_eq_ok, exists_const, and_true,
+    true_and, Bool.false_eq_true, ↓reduceIte, false_and, and_false, exists_false] at $h:ident)
 
 /-- What `validatePlacement` guarantees about one placement. --/
 structure PlacementChecked (p : Definition) (w : Workflow) (pl : Placement) : Prop where
@@ -270,7 +274,7 @@ theorem Definition.validatePlacement_ok {p : Definition} {w : Workflow} {pl : Pl
       exact ⟨hkind, fun _ => by simpa using hcount, by simp, by simp, by simp⟩
   | waitStream element =>
     validate_simp at h
-    obtain ⟨a, -, h⟩ := h
+    obtain ⟨-, a, -, h⟩ := h
     split at h <;> validate_simp at h
     · obtain ⟨hcount, hwait, hkind, -⟩ := h
       exact ⟨hkind, fun _ => by simp only [beq_iff_eq] at hcount; dsimp only; omega, by simp,
@@ -279,14 +283,14 @@ theorem Definition.validatePlacement_ok {p : Definition} {w : Workflow} {pl : Pl
       exact ⟨hkind, fun _ => by simpa using hcount, by simp, fun _ _ => by simpa using hwait, by simp⟩
   | merge element =>
     validate_simp at h
-    obtain ⟨-, a, -, u, hloop, hkind, -⟩ := h
+    obtain ⟨-, -, a, -, u, hloop, hkind, -⟩ := h
     refine ⟨hkind, fun hne => absurd rfl (hne element), fun _ _ c hc => ?_, by simp, by simp⟩
     have := Static.forIn_yield_ok hloop c hc
     validate_simp at this
     simpa using this
   | concurrency c =>
     validate_simp at h
-    obtain ⟨hlimit, -, hunique, hany, u, hloop, a, -, h⟩ := h
+    obtain ⟨-, hlimit, -, -, hunique, hany, u, hloop, a, -, h⟩ := h
     have hconc : 0 < c.limit ∧ (c.tasks.map (·.name)).Nodup ∧ c.tasks.any (·.output.isSome) = true ∧
         ∀ task ∈ c.tasks, ∃ at_, p.validateTask at_ c task = .ok () :=
       ⟨by simpa using hlimit, nodup_of_unique hunique, hany,
@@ -396,12 +400,20 @@ structure DefinitionChecked (p : Definition) : Prop where
   callsAcyclic : p.callsAcyclic = true
   workflows : ∀ w ∈ p.workflows, WorkflowChecked p w
 
-theorem Definition.validate_ok {p : Definition} (h : p.validate = .ok ()) : DefinitionChecked p := by
+/-- Validation checks every declared workflow. --/
+theorem Definition.validateWorkflow_of_validate {p : Definition} (h : p.validate = .ok ()) {w : Workflow}
+    (hw : w ∈ p.workflows) : p.validateWorkflow w = .ok () := by
   unfold Definition.validate at h
   validate_simp at h
-  obtain ⟨hf, hj, ht, hd, hw, hm, hcalls, u, hloop⟩ := h
+  obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, u, hloop⟩ := h
+  exact Static.forIn_yield_ok hloop w hw
+
+theorem Definition.validate_ok {p : Definition} (h : p.validate = .ok ()) : DefinitionChecked p := by
+  have hworkflows := fun w hw => validateWorkflow_ok (validateWorkflow_of_validate h (w := w) hw)
+  unfold Definition.validate at h
+  validate_simp at h
+  obtain ⟨hf, hj, ht, hd, hw, hm, hcalls, -⟩ := h
   exact ⟨nodup_of_unique hf, nodup_of_unique hj, nodup_of_unique ht, by simpa using hd,
-    nodup_of_unique hw, hm, hcalls,
-    fun w hw => validateWorkflow_ok (Static.forIn_yield_ok hloop w hw)⟩
+    nodup_of_unique hw, hm, hcalls, hworkflows⟩
 
 end Suimon

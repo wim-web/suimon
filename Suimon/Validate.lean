@@ -55,12 +55,18 @@ def validateBody (p : Definition) (at_ : String) : Body → Except String (Optio
     check (w.isEndpoint output) s!"{at_}: {output} is not an endpoint of workflow {id}"
     return w.input.map (·.valueType)
 
+/-- A type is written by its name, which the definition file cannot leave empty. --/
+def validateTypes (at_ : String) (types : List ValueType) : Except String Unit :=
+  check (types.all (!·.name.isEmpty)) s!"{at_}: empty type name"
+
 /-- Timeouts are for function calls and branch judges; element timeouts only for Stream functions. --/
 def validateTimeout (at_ : String) (timeout : Timeout) (function : Option Contract) (judge : Bool) :
     Except String Unit := do
   if timeout.isEmpty then return
   check (function.isSome || judge) s!"{at_}: a timeout is only for a function call or a branch judge"
   check (timeout.callMs.all (· > 0) && timeout.elementMs.all (· > 0)) s!"{at_}: a timeout must be positive"
+  check (timeout.callMs.all (· ≤ maxNat) && timeout.elementMs.all (· ≤ maxNat))
+    s!"{at_}: a timeout must be at most {maxNat}"
   if timeout.elementMs.isSome then
     check (function.any (·.kind == .stream)) s!"{at_}: an element timeout is only for a Stream function"
 
@@ -112,6 +118,7 @@ def validateConnection (p : Definition) (w : Workflow) (c : Connection) : Except
 
 def validateEntry (p : Definition) (w : Workflow) (e : Entry) : Except String Unit := do
   let at_ := s!"{w.id}: entry {e.placement}"
+  validateTypes at_ [e.valueType]
   let placement ← need (w.placement? e.placement) s!"{at_}: unknown placement"
   check (!(placement.control matches .merge _)) s!"{at_}: Merge cannot be the entry"
   let expected ← need (p.inputType placement.control) s!"{at_}: unknown reference"
@@ -129,12 +136,17 @@ def validatePlacement (p : Definition) (w : Workflow) (pl : Placement) : Except 
       check (arms.any fun arm => (w.outgoing pl.name).any (·.arm == some arm))
         s!"{at_}: at least one arm needs a connection"
       pure (some j.input)
-    | .waitStream element => pure (some element)
+    | .waitStream element => do
+      validateTypes at_ [element]
+      pure (some element)
     | .merge element => do
+      validateTypes at_ [element]
       check (!incoming.isEmpty) s!"{at_}: Merge needs input connections"
       pure (some element)
     | .concurrency c => do
+      validateTypes at_ (c.input.toList ++ [c.element])
       check (c.limit > 0) s!"{at_}: limit must be positive"
+      check (c.limit ≤ maxNat) s!"{at_}: limit must be at most {maxNat}"
       check (!c.tasks.isEmpty) s!"{at_}: concurrency needs tasks"
       check (unique (c.tasks.map (·.name))) s!"{at_}: duplicate task name"
       check (c.tasks.any (·.output.isSome)) s!"{at_}: at least one task must be in the output"
@@ -171,7 +183,20 @@ def validateWorkflow (p : Definition) (w : Workflow) : Except String Unit := do
     if w.isEndpoint pl.name then
       check (w.outputKind? p pl.name == some .single) s!"{at_}: endpoint {pl.name} must be Single"
 
-/-- Structural checks of §14. `run` executes only definitions accepted here. --/
+def validateFunction (f : FunctionDecl) : Except String Unit := do
+  check (!f.id.isEmpty) "empty function id"
+  validateTypes s!"function {f.id}" (f.input.toList ++ [f.output.element])
+
+def validateJudge (j : JudgeDecl) : Except String Unit := do
+  check (!j.id.isEmpty) "empty judge id"
+  validateTypes s!"judge {j.id}" [j.input]
+
+def validateTransform (t : TransformDecl) : Except String Unit := do
+  check (!t.id.isEmpty) "empty transform id"
+  validateTypes s!"transform {t.id}" [t.input, t.output]
+
+/-- Structural checks of §14, and what the definition file can express: identifiers and type names
+    are not empty, and numbers are at most `maxNat`. `run` executes only definitions accepted here. --/
 def validate (p : Definition) : Except String Unit := do
   check (unique (p.functions.map (·.id))) "duplicate function id"
   check (unique (p.judges.map (·.id))) "duplicate judge id"
@@ -181,6 +206,9 @@ def validate (p : Definition) : Except String Unit := do
   check (unique (p.workflows.map (·.id))) "duplicate workflow id"
   check (p.workflow? p.main).isSome s!"unknown main workflow {p.main}"
   check p.callsAcyclic "workflows call each other in a cycle"
+  for f in p.functions do validateFunction f
+  for j in p.judges do validateJudge j
+  for t in p.transforms do validateTransform t
   for w in p.workflows do p.validateWorkflow w
 
 end Definition

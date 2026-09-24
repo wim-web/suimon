@@ -194,10 +194,6 @@ where
     | 0 => some m
     | e + 1 => if m % 10 = 0 then strip (m / 10) e else none
 
-/-- The largest number a definition may contain: implementations hold limits and timeouts in 64 bits,
-    and a larger value would change when an implementation reads it. --/
-def maxNat : Nat := 18446744073709551615
-
 def natField? (json : Json) (key : String) (at_ : String) : Except String (Option Nat) :=
   (field? json key).mapM fun value => match nat? value with
     | some n => if n ≤ maxNat then pure n else throw s!"{at_}.{key}: must be at most {maxNat}"

@@ -51,7 +51,7 @@ type ljNumber struct {
 // notation, so 2.0 and 20e-1 are 2. Trailing zeros are stripped rather than computing
 // 10^exponent, which takes at most one step per digit of the mantissa whatever the exponent. ok is
 // false for a number that is not a natural number; large is true for a natural number above
-// 2^64-1 (Codec.maxNat), which a definition rejects.
+// 2^64-1 (maxNat), which a definition rejects.
 func (n ljNumber) nat() (value uint64, ok, large bool) {
 	if n.mantissa.Sign() == 0 {
 		return 0, true, false

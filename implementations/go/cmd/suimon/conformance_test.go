@@ -306,6 +306,13 @@ var texts = map[string]string{
 	"body type":             `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"function"},"policy":"stop"}]}]}`,
 	"subworkflow body":      `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"subworkflow","workflow":"v","output":"o","x":1},"policy":"stop"}]}]}`,
 	"not an object":         `[1,2]`,
+	// Empty identifiers and type names, which validation also rejects in a definition built in code.
+	"empty function id":  `{"main":"w","functions":[{"id":"","output":{"single":"A"}}]}`,
+	"empty judge id":     `{"main":"w","judges":[{"id":"","input":"A"}]}`,
+	"empty transform id": `{"main":"w","transforms":[{"id":"","input":"A","output":"A"}]}`,
+	"empty list type":    `{"main":"w","transforms":[{"id":"t","input":"A","output":{"list":""}}]}`,
+	"empty entry type":   `{"main":"w","workflows":[{"id":"w","input":{"type":"","placement":"a"},"placements":[]}]}`,
+	"empty element type": `{"main":"w","workflows":[{"id":"w","placements":[{"name":"a","node":{"type":"waitStream","element":""},"policy":"stop"}]}]}`,
 }
 
 // limitDefinition is a valid definition whose concurrency limit is the JSON number limit.

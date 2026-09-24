@@ -1143,15 +1143,15 @@ func TestRuntimeRegistry(t *testing.T) {
 		t.Error(err)
 	}
 	// A definition built in code must survive recording, which the definition file cannot express an
-	// empty id for; validation does not reject an empty id nothing refers to.
+	// empty id for: validation rejects it, and an unchecked engine does not record it.
 	unrecordable := load(t, "merge")
 	unrecordable.Functions = append(unrecordable.Functions, FunctionDecl{Output: Contract{Type: Named("T")}})
-	for label, newEngine := range map[string]func(*Definition, *Registry) (*Engine, error){
-		"NewEngine": NewEngine, "NewUncheckedEngine": NewUncheckedEngine} {
-		if _, err := newEngine(unrecordable, mustRegistry(t, full...)); err == nil ||
-			!strings.HasPrefix(err.Error(), "suimon: the definition cannot be recorded: ") {
-			t.Errorf("%s: an empty function id: %v", label, err)
-		}
+	if _, err := NewEngine(unrecordable, mustRegistry(t, full...)); err == nil || err.Error() != "empty function id" {
+		t.Errorf("NewEngine: an empty function id: %v", err)
+	}
+	if _, err := NewUncheckedEngine(unrecordable, mustRegistry(t, full...)); err == nil ||
+		!strings.HasPrefix(err.Error(), "suimon: the definition cannot be recorded: ") {
+		t.Errorf("NewUncheckedEngine: an empty function id: %v", err)
 	}
 	invalid := load(t, "merge")
 	invalid.Main = "nope"

@@ -14,11 +14,8 @@ local macro "calm_validate_simp" " at " h:ident : tactic =>
 variable {p : Definition}
 
 theorem validateWorkflow_of_valid (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
-    p.validateWorkflow w = .ok () := by
-  unfold Definition.validate at valid
-  calm_validate_simp at valid
-  obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
-  exact Static.forIn_yield_ok hloop w hw
+    p.validateWorkflow w = .ok () :=
+  Definition.validateWorkflow_of_validate valid hw
 
 theorem validatePlacement_of_workflow {w : Workflow} (h : p.validateWorkflow w = .ok ()) {pl : Placement}
     (hpl : pl ∈ w.placements) : p.validatePlacement w pl = .ok () := by

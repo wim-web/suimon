@@ -168,11 +168,8 @@ local macro "close_validate_simp" " at " h:ident : tactic =>
     ↓reduceIte, false_and, and_false, exists_false] at $h:ident)
 
 theorem validateWorkflow_of_valid (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
-    p.validateWorkflow w = .ok () := by
-  unfold Definition.validate at valid
-  close_validate_simp at valid
-  obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
-  exact Static.forIn_yield_ok hloop w hw
+    p.validateWorkflow w = .ok () :=
+  Definition.validateWorkflow_of_validate valid hw
 
 theorem validatePlacement_of_valid (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
     {pl : Placement} (hpl : pl ∈ w.placements) : p.validatePlacement w pl = .ok () := by

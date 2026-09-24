@@ -1,6 +1,7 @@
 package suimon
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -296,6 +297,93 @@ func TestValidateSettings(t *testing.T) {
 			mapPlacement("sales", func(pl *Placement) { pl.Timeout = Timeout{ElementMs: ptr[uint64](10)} })))
 	rejected(t, "zero timeout", "a timeout must be positive", mapWorkflow(load(t, "branch"), "shipping",
 		mapPlacement("paid", func(pl *Placement) { pl.Timeout = Timeout{CallMs: ptr[uint64](0)} })))
+}
+
+// What the definition file can express, for a definition built in code: identifiers and type names are
+// not empty. Validation rejects the others with the messages of the Lean tests, and their canonical
+// form does not decode. Placements without connections reach the checks of their placement. The Lean
+// tests also reject a limit or a timeout above 2^64-1, which a uint64 cannot hold.
+func TestValidateUnexpressible(t *testing.T) {
+	orphan := func(p *Definition, control Control) *Definition {
+		return mapWorkflow(p, p.Main, func(w *Workflow) {
+			w.Placements = append(w.Placements, Placement{Name: "orphan", Control: control, Policy: PolicyStop})
+		})
+	}
+	with := func(p *Definition, f func(*Definition)) *Definition { f(p); return p }
+	// loadConfig is a concurrency whose task runs loadConfig of standalone, changed by f.
+	loadConfig := func(f func(*Concurrency)) Control {
+		c := Concurrency{Limit: 1, Output: CollectList, Element: Named("Config"),
+			Tasks: []TaskSpec{{Name: "config", Body: FunctionBody("loadConfig"), Output: ptr("config"), Policy: PolicyStop}}}
+		f(&c)
+		return ConcurrencyControl{c}
+	}
+	cases := []struct {
+		label, want string
+		p           *Definition
+	}{
+		{"empty function id", "empty function id", with(load(t, "merge"), func(p *Definition) {
+			p.Functions = append(p.Functions, FunctionDecl{Output: Contract{KindSingle, Named("T")}})
+		})},
+		{"empty judge id", "empty judge id", with(load(t, "branch"), func(p *Definition) {
+			p.Judges = append(p.Judges, JudgeDecl{Input: Named("T")})
+		})},
+		{"empty transform id", "empty transform id", with(load(t, "merge"), func(p *Definition) {
+			p.Transforms = append(p.Transforms, TransformDecl{Input: Named("T"), Output: Named("T")})
+		})},
+		{"function type", "function f: empty type name", with(load(t, "merge"), func(p *Definition) {
+			p.Functions = append(p.Functions, FunctionDecl{ID: "f", Input: ptr(Named("")), Output: Contract{KindSingle, Named("T")}})
+		})},
+		{"function output type", "function f: empty type name", with(load(t, "merge"), func(p *Definition) {
+			p.Functions = append(p.Functions, FunctionDecl{ID: "f", Output: Contract{KindStream, ListOf(Named(""))}})
+		})},
+		{"judge type", "judge j: empty type name", with(load(t, "branch"), func(p *Definition) {
+			p.Judges = append(p.Judges, JudgeDecl{ID: "j", Input: ListOf(Named(""))})
+		})},
+		{"transform type", "transform t: empty type name", with(load(t, "merge"), func(p *Definition) {
+			p.Transforms = append(p.Transforms, TransformDecl{ID: "t", Input: Named("T"), Output: Named("")})
+		})},
+		{"entry type", "users: entry fetchAllUsers: empty type name", mapWorkflow(load(t, "users"), "users",
+			func(w *Workflow) { w.Input = &Entry{Type: Named(""), Placement: "fetchAllUsers"} })},
+		{"waitStream element", "shipping.orphan: empty type name", orphan(load(t, "branch"), WaitStreamControl{Named("")})},
+		{"Merge element", "shipping.orphan: empty type name", orphan(load(t, "branch"), MergeControl{ListOf(Named(""))})},
+		{"concurrency element", "w.orphan: empty type name", orphan(standalone(nil),
+			loadConfig(func(c *Concurrency) { c.Element = Named("") }))},
+		{"concurrency input", "w.orphan: empty type name", orphan(standalone(nil),
+			loadConfig(func(c *Concurrency) { c.Input = ptr(Named("")) }))},
+	}
+	for _, c := range cases {
+		if err := c.p.Validate(); err == nil || err.Error() != c.want {
+			t.Errorf("%s: got %v, want %q", c.label, err, c.want)
+		}
+		data, err := c.p.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseDefinition(data); err == nil {
+			t.Errorf("%s: the canonical form decoded", c.label)
+		}
+	}
+	recordable := func(label string, p *Definition) {
+		t.Helper()
+		accepted(t, label, p)
+		data, err := p.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q, err := ParseDefinition(data); err != nil || !reflect.DeepEqual(p, q) {
+			t.Errorf("%s: the canonical form reads back as %+v, %v", label, q, err)
+		}
+	}
+	recordable("largest numbers", mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(
+		func(c *Concurrency) {
+			c.Limit = math.MaxUint64
+			mapTask("orders", func(task *TaskSpec) { task.Timeout = Timeout{CallMs: ptr[uint64](math.MaxUint64)} })(c)
+		}))))
+	// A function or judge may be named discard; only a transform may not.
+	discardFunction := standalone(nil)
+	discardFunction.Functions = []FunctionDecl{{ID: DiscardName, Output: Contract{KindSingle, Named("Config")}}}
+	recordable("discard as a function", mapWorkflow(discardFunction, "w", mapPlacement("c", mapConcurrency(
+		mapTask("config", func(task *TaskSpec) { task.Body = FunctionBody(DiscardName) })))))
 }
 
 func TestDecodeRejections(t *testing.T) {

@@ -6,8 +6,9 @@ import (
 	"slices"
 )
 
-// Validate performs the structural checks of §14 and returns the first failed check, with the
-// message and in the order of Suimon/Validate.lean. run executes only definitions accepted here.
+// Validate performs the structural checks of §14, and those of what the definition file can express,
+// and returns the first failed check, with the message and in the order of Suimon/Validate.lean. run
+// executes only definitions accepted here.
 func (p *Definition) Validate() error { return p.validate(p.derive()) }
 
 // validate is Validate with the kinds of d, a derivation of p.
@@ -34,6 +35,21 @@ func (p *Definition) validate(d *derivation) error {
 	}
 	if !p.callsAcyclic() {
 		return errors.New("workflows call each other in a cycle")
+	}
+	for i := range p.Functions {
+		if err := validateFunction(&p.Functions[i]); err != nil {
+			return err
+		}
+	}
+	for i := range p.Judges {
+		if err := validateJudge(&p.Judges[i]); err != nil {
+			return err
+		}
+	}
+	for i := range p.Transforms {
+		if err := validateTransform(&p.Transforms[i]); err != nil {
+			return err
+		}
 	}
 	for i := range p.Workflows {
 		w := &p.Workflows[i]
@@ -163,6 +179,16 @@ func (p *Definition) validateBody(at string, b Body) (*ValueType, error) {
 	return ptr(w.Input.Type), nil
 }
 
+// validateTypes: a type is written by its name, which the definition file cannot leave empty.
+func validateTypes(at string, types ...ValueType) error {
+	for _, t := range types {
+		if t.Name == "" {
+			return fmt.Errorf("%s: empty type name", at)
+		}
+	}
+	return nil
+}
+
 // validateTimeout: timeouts are for function calls and branch judges; element timeouts only for
 // Stream functions. function is the contract of the called function, nil for other placements.
 func validateTimeout(at string, timeout Timeout, function *Contract, judge bool) error {
@@ -175,6 +201,7 @@ func validateTimeout(at string, timeout Timeout, function *Contract, judge bool)
 	if (timeout.CallMs != nil && *timeout.CallMs == 0) || (timeout.ElementMs != nil && *timeout.ElementMs == 0) {
 		return fmt.Errorf("%s: a timeout must be positive", at)
 	}
+	// Lean then checks that a timeout is at most 2^64-1 (maxNat), which a uint64 always is.
 	if timeout.ElementMs != nil && (function == nil || function.Kind != KindStream) {
 		return fmt.Errorf("%s: an element timeout is only for a Stream function", at)
 	}
@@ -300,6 +327,9 @@ func (p *Definition) validateConnection(w *Workflow, c *Connection) error {
 
 func (p *Definition) validateEntry(w *Workflow, e *Entry) error {
 	at := fmt.Sprintf("%s: entry %s", w.ID, e.Placement)
+	if err := validateTypes(at, e.Type); err != nil {
+		return err
+	}
 	pl, ok := w.placement(e.Placement)
 	if !ok {
 		return fmt.Errorf("%s: unknown placement", at)
@@ -318,6 +348,31 @@ func (p *Definition) validateEntry(w *Workflow, e *Entry) error {
 		return fmt.Errorf("%s: the entry cannot have an input connection", at)
 	}
 	return nil
+}
+
+func validateFunction(f *FunctionDecl) error {
+	if f.ID == "" {
+		return errors.New("empty function id")
+	}
+	types := []ValueType{f.Output.Type}
+	if f.Input != nil {
+		types = []ValueType{*f.Input, f.Output.Type}
+	}
+	return validateTypes("function "+f.ID, types...)
+}
+
+func validateJudge(j *JudgeDecl) error {
+	if j.ID == "" {
+		return errors.New("empty judge id")
+	}
+	return validateTypes("judge "+j.ID, j.Input)
+}
+
+func validateTransform(t *TransformDecl) error {
+	if t.ID == "" {
+		return errors.New("empty transform id")
+	}
+	return validateTypes("transform "+t.ID, t.Input, t.Output)
 }
 
 // validatePlacement checks pl, a placement of w, whose kinds are k.
@@ -354,17 +409,31 @@ func (p *Definition) validatePlacement(w *Workflow, k kindTable, pl *Placement) 
 		}
 		expected = ptr(j.Input)
 	case WaitStreamControl:
+		if err := validateTypes(at, c.Element); err != nil {
+			return err
+		}
 		expected = ptr(c.Element)
 	case MergeControl:
+		if err := validateTypes(at, c.Element); err != nil {
+			return err
+		}
 		if len(incoming) == 0 {
 			return fmt.Errorf("%s: Merge needs input connections", at)
 		}
 		expected = ptr(c.Element)
 	case ConcurrencyControl:
 		spec := &c.Spec
+		types := []ValueType{spec.Element}
+		if spec.Input != nil {
+			types = []ValueType{*spec.Input, spec.Element}
+		}
+		if err := validateTypes(at, types...); err != nil {
+			return err
+		}
 		if spec.Limit == 0 {
 			return fmt.Errorf("%s: limit must be positive", at)
 		}
+		// Lean then checks that the limit is at most 2^64-1 (maxNat), which a uint64 always is.
 		if len(spec.Tasks) == 0 {
 			return fmt.Errorf("%s: concurrency needs tasks", at)
 		}

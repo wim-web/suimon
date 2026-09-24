@@ -24,6 +24,23 @@ def rejected (label : String) (fragment : String) (p : Definition) : IO Unit :=
   | .ok () => throw (IO.userError s!"{label}: accepted, expected an error with '{fragment}'")
   | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got: {e}"
 
+/-- Validation rejects `p` with exactly `message`, and the canonical form of `p` does not decode: the
+    definition file cannot express it. --/
+def unexpressible (label : String) (message : String) (p : Definition) : IO Unit := do
+  match p.validate with
+  | .ok () => throw (IO.userError s!"{label}: accepted, expected '{message}'")
+  | .error e => ensure (e == message) s!"{label}: expected '{message}', got: {e}"
+  match Codec.definition (Codec.definitionJson p) with
+  | .ok _ => throw (IO.userError s!"{label}: the canonical form decoded")
+  | .error _ => pure ()
+
+/-- Validation accepts `p`, and its canonical form decodes back to it. --/
+def recordable (label : String) (p : Definition) : IO Unit := do
+  accepted label p
+  match Codec.definition (Codec.definitionJson p) with
+  | .ok q => ensure (q == p) s!"{label}: JSON round trip changed the definition"
+  | .error e => throw (IO.userError s!"{label}: JSON round trip failed: {e}")
+
 def decodeRejected (label : String) (fragment : String) (text : String) : IO Unit :=
   match Codec.parse text >>= Codec.definition with
   | .ok _ => throw (IO.userError s!"{label}: decoded, expected an error with '{fragment}'")
@@ -163,10 +180,7 @@ def run : IO Unit := do
   let branch ← load "branch"
   let merge ← load "merge"
   for (label, p) in [("users", users), ("branch", branch), ("merge", merge)] do
-    accepted label p
-    match Codec.definition (Codec.definitionJson p) with
-    | .ok q => ensure (q == p) s!"{label}: JSON round trip changed the definition"
-    | .error e => throw (IO.userError s!"{label}: JSON round trip failed: {e}")
+    recordable label p
 
   ensure (kinds users "users" == [("fetchAllUsers", some .stream), ("perUser", some .stream), ("all", some .single)])
     "users: Stream input to a List concurrency is a Stream of lists"
@@ -288,6 +302,53 @@ def run : IO Unit := do
   rejected "zero timeout" "a timeout must be positive" <| branch |>
     mapWorkflow "shipping" (mapPlacement "paid" fun pl => { pl with timeout := { callMs := some 0 } })
 
+  -- What the definition file can express, for a definition built in code: identifiers and type names
+  -- are not empty, and numbers are at most `maxNat`. Placements without connections reach the checks
+  -- of their placement.
+  let orphan := fun (control : Control) (p : Definition) => p |> mapWorkflow p.main fun w =>
+    { w with placements := w.placements ++ [{ name := "orphan", control, policy := .stop }] }
+  unexpressible "empty function id" "empty function id"
+    { merge with functions := merge.functions ++ [{ id := "", output := .single (.named "T") }] }
+  unexpressible "empty judge id" "empty judge id" { branch with judges := branch.judges ++ [{ id := "", input := .named "T" }] }
+  unexpressible "empty transform id" "empty transform id"
+    { merge with transforms := merge.transforms ++ [{ id := "", input := .named "T", output := .named "T" }] }
+  unexpressible "function type" "function f: empty type name"
+    { merge with functions := merge.functions ++ [{ id := "f", input := some (.named ""), output := .single (.named "T") }] }
+  unexpressible "function output type" "function f: empty type name"
+    { merge with functions := merge.functions ++ [{ id := "f", output := .stream (.list (.named "")) }] }
+  unexpressible "judge type" "judge j: empty type name"
+    { branch with judges := branch.judges ++ [{ id := "j", input := .list (.named "") }] }
+  unexpressible "transform type" "transform t: empty type name"
+    { merge with transforms := merge.transforms ++ [{ id := "t", input := .named "T", output := .named "" }] }
+  unexpressible "entry type" "users: entry fetchAllUsers: empty type name" <| users |> mapWorkflow "users" fun w =>
+    { w with input := some { valueType := .named "", placement := "fetchAllUsers" } }
+  unexpressible "waitStream element" "shipping.orphan: empty type name" (orphan (.waitStream (.named "")) branch)
+  unexpressible "Merge element" "shipping.orphan: empty type name" (orphan (.merge (.list (.named ""))) branch)
+  let loadConfig : Concurrency := {
+    limit := 1
+    output := .list
+    element := .named "Config"
+    tasks := [{ name := "config", body := .function "loadConfig", output := some "config", policy := .stop }] }
+  unexpressible "concurrency element" "w.orphan: empty type name"
+    (orphan (.concurrency { loadConfig with element := .named "" }) (standalone none))
+  unexpressible "concurrency input" "w.orphan: empty type name"
+    (orphan (.concurrency { loadConfig with input := some (.named "") }) (standalone none))
+  unexpressible "large limit" "users.perUser: limit must be at most 18446744073709551615" <| users |>
+    mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency fun c => { c with limit := maxNat + 1 }))
+  unexpressible "large timeout" "shipping.paid: a timeout must be at most 18446744073709551615" <| branch |>
+    mapWorkflow "shipping" (mapPlacement "paid" fun pl => { pl with timeout := { callMs := some (maxNat + 1) } })
+  unexpressible "large element timeout" "shipping.list: a timeout must be at most 18446744073709551615" <| branch |>
+    mapWorkflow "shipping" (mapPlacement "list" fun pl => { pl with timeout := { elementMs := some (maxNat + 1) } })
+  unexpressible "large task timeout" "users.perUser task orders: a timeout must be at most 18446744073709551615" <|
+    users |> mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency (mapTask "orders" fun t =>
+      { t with timeout := { callMs := some (maxNat + 1) } })))
+  recordable "largest numbers" <| users |> mapWorkflow "users" (mapPlacement "perUser" (mapConcurrency fun c =>
+    mapTask "orders" (fun t => { t with timeout := { callMs := some maxNat } }) { c with limit := maxNat }))
+  -- A function or judge may be named discard; only a transform may not.
+  recordable "discard as a function" <| { standalone none with
+    functions := [{ id := "discard", output := .single (.named "Config") }] } |> mapWorkflow "w"
+      (mapPlacement "c" (mapConcurrency (mapTask "config" fun t => { t with body := .function "discard" })))
+
   -- Decoding
   let base := "{\"main\":\"w\",\"workflows\":[{\"id\":\"w\",\"placements\":[{\"name\":\"a\",\"node\":{\"type\":\"merge\",\"element\":\"T\"}"
   decodeRejected "unknown field" "unknown field retries" (base ++ ",\"policy\":\"stop\",\"retries\":1}]}]}")
@@ -322,9 +383,9 @@ def run : IO Unit := do
   for text in ["2.5", "-1", "1e-1", "1e-1000000000"] do
     decodeRejected s!"limit {text}" "node.limit: expected a natural number" (concurrency text)
   rejected "limit 0.0" "limit must be positive" (← decoded "limit 0.0" (concurrency "0.0"))
-  -- A number above `Codec.maxNat` is rejected, and a huge exponent is not expanded.
+  -- A number above `maxNat` is rejected, and a huge exponent is not expanded.
   let largest ← decoded "limit 2^64-1" (concurrency "18446744073709551615")
-  ensure (limits largest == [Codec.maxNat]) s!"limit 2^64-1: got {limits largest}"
+  ensure (limits largest == [maxNat]) s!"limit 2^64-1: got {limits largest}"
   for text in ["18446744073709551616", "1.8446744073709551616e19", "1e20", "7e100", "1e1000000000"] do
     decodeRejected s!"limit {text}" "node.limit: must be at most 18446744073709551615" (concurrency text)
   rejected "limit 0e1000000000" "limit must be positive"

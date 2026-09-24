@@ -14,6 +14,11 @@ def ValueType.render : ValueType → String
 
 instance : ToString ValueType := ⟨ValueType.render⟩
 
+/-- The name a type is built from: `List<List<T>>` is built from `T`. --/
+def ValueType.name : ValueType → String
+  | .named name => name
+  | .list element => element.name
+
 /-- The output contract of one call: `single` returns one value, `stream` yields values. --/
 inductive Contract where
   | single (value : ValueType)
@@ -44,5 +49,9 @@ def Contract.element : Contract → ValueType
   | .single value | .stream value => value
 
 def Timeout.isEmpty (t : Timeout) : Bool := t.callMs.isNone && t.elementMs.isNone
+
+/-- The largest number a definition may contain: implementations hold limits and timeouts in 64 bits,
+    and a larger value would change when an implementation reads it. --/
+def maxNat : Nat := 18446744073709551615
 
 end Suimon

@@ -1205,11 +1205,8 @@ local macro "vsimp" " at " h:ident : tactic =>
 
 /-- Validation checks every declared workflow. -/
 theorem validateWorkflow_of_validate (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows) :
-    p.validateWorkflow w = .ok () := by
-  unfold Definition.validate at valid
-  vsimp at valid
-  obtain ⟨-, -, -, -, -, -, -, u, hloop⟩ := valid
-  exact Static.forIn_yield_ok hloop w hw
+    p.validateWorkflow w = .ok () :=
+  Definition.validateWorkflow_of_validate valid hw
 
 /-- Validation checks every placement of a declared workflow. -/
 theorem validatePlacement_of_validate (valid : p.validate = .ok ()) {w : Workflow} (hw : w ∈ p.workflows)
