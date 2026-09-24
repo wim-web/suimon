@@ -96,6 +96,46 @@ def randomWalks (label : String) (p : Definition) (cfg : Explore.Config) (seeds 
     else if s.cancelled then
       ensure (s.status == .cancelled) s!"{label} seed {seed}: cancelled without failures must be cancelled"
 
+/-- How the random walks of the default exploration mix disruptive operations with the others. --/
+structure Mixing where
+  walks : Nat := 0
+  /-- Walks that pick two disruptive operations at most 4 steps apart. --/
+  near : Nat := 0
+  /-- Walks that cancel after a stop. --/
+  cancelAfterStop : Nat := 0
+  /-- Choices between disruptive operations and others, and those that took a disruptive one. --/
+  choices : Nat := 0
+  disrupted : Nat := 0
+
+/-- Adds the walks of the first `seeds` seeds of `p` to `m`. --/
+def mixing (p : Definition) (seeds : Nat) (m : Mixing) : Mixing := Id.run do
+  let cfg : Explore.Config := {}
+  let mut m := m
+  for seed in List.range seeds do
+    let mut s : State := {}
+    let mut rng : UInt64 := .ofNat (seed + 1)
+    let mut last : Option Nat := none
+    let mut near := false
+    let mut cancelAfterStop := false
+    for i in List.range 5000 do
+      let choices := Explore.accepted p cfg s
+      if choices.isEmpty then break
+      rng := Explore.nextSeed rng
+      let some (op, next) := Explore.pick cfg s rng choices | break
+      let disruptive := Explore.disruptive cfg s op
+      if choices.any (Explore.disruptive cfg s ·.1) && choices.any (!Explore.disruptive cfg s ·.1) then
+        m := { m with choices := m.choices + 1, disrupted := m.disrupted + if disruptive then 1 else 0 }
+      if disruptive then
+        near := near || last.any (i ≤ · + 4)
+        last := some i
+      cancelAfterStop := cancelAfterStop || (op == .cancel && s.status == .stopping)
+      s := next
+    m := { m with
+      walks := m.walks + 1
+      near := m.near + (if near then 1 else 0)
+      cancelAfterStop := m.cancelAfterStop + (if cancelAfterStop then 1 else 0) }
+  return m
+
 /-- One function, whose failure stops the workflow. --/
 def singleStopText : String :=
   "{\"main\": \"w\", \"functions\": [{\"id\": \"f\", \"output\": {\"single\": \"T\"}}], \"workflows\": [" ++
@@ -175,6 +215,15 @@ def run : IO Unit := do
     randomWalks label p {} 200
     randomWalks s!"{label} without failures" p { failures := false, cancel := false } 50
     randomWalks s!"{label} without cancellation" p { cancel := false } 50
+  -- Random walks pick two disruptive operations close together, and cancel after a stop, though
+  -- they pick about one disruptive operation in 40 choices between both kinds. The remainders of a
+  -- linear congruential generator, whose low bits cycle, kept disruptive operations 8 steps apart:
+  -- none of these walks did either.
+  let m := [users, branch, merge].foldl (fun m p => mixing p 300 m) {}
+  ensure (100 * m.near ≥ m.walks && 500 * m.cancelAfterStop ≥ m.walks && 32 * m.disrupted ≤ m.choices &&
+      m.choices ≤ 50 * m.disrupted)
+    (s!"mixing: of {m.walks} walks, {m.near} pick two disruptive operations at most 4 steps apart and " ++
+      s!"{m.cancelAfterStop} cancel after a stop; {m.disrupted} of {m.choices} choices take a disruptive operation")
 
   -- §8.5: each user gets one list from the profile sub-workflow and the orders call.
   let s := drive users (succeed 2 fun _ _ => "")
