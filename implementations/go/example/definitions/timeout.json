@@ -14,7 +14,7 @@
       "input": {"type": "Request", "placement": "produce"},
       "placements": [
         {"name": "produce", "node": {"type": "function", "function": "produce"}, "policy": "stop"},
-        {"name": "lookup", "node": {"type": "function", "function": "lookup"}, "policy": "continue", "timeout": {"callMs": 1000}},
+        {"name": "lookup", "node": {"type": "function", "function": "lookup"}, "policy": "continue", "timeout": {"callMs": 2000}},
         {"name": "collect", "node": {"type": "waitStream", "element": "Done"}, "policy": "stop"}
       ],
       "connections": [

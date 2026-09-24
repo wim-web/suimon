@@ -32,3 +32,12 @@ it('chooses the scenario in the header, and keeps the left pane for the workflow
   // Both sides of the comparison have a lane before either has run.
   expect(html.match(/not run yet/g)).toHaveLength(2);
 });
+
+it('chooses the unit of the next run in the left pane, 600ms by default', () => {
+  const html = renderToStaticMarkup(<Playground scenarios={scenarios} />);
+  const unit = part(part(html, '<aside class="sui-sidebar"', '</aside>'), '<select id="run-unit"', '</select>');
+  expect(unit).toContain('<option value="200">200ms · fast</option><option value="600" selected="">600ms · normal</option><option value="1000">1000ms · slow</option>');
+  // Before a run, both lanes of the comparison are for the chosen unit.
+  const timeline = part(html, '<section class="app-timeline"', '</section>');
+  expect(timeline.match(/unit <b>600ms<\/b>/g)).toHaveLength(2);
+});

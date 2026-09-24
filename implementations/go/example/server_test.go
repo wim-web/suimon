@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	assets := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>ui</title>")}}
-	srv := httptest.NewServer(newServer(context.Background(), scenarios, testUnit).handler(assets))
+	srv := httptest.NewServer(newServer(context.Background(), scenarios).handler(assets))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -101,11 +102,13 @@ func TestServerScenarios(t *testing.T) {
 	}
 }
 
+// The runs of the tests have the unit testUnit, "unitMs":10, unless a test says otherwise.
+
 func TestServerRun(t *testing.T) {
 	srv := newTestServer(t)
-	id := startTestRun(t, srv, `{"scenario":"branch","input":{"id":"B-9","amount":2000}}`)
+	id := startTestRun(t, srv, `{"scenario":"branch","input":{"id":"B-9","amount":2000},"unitMs":10}`)
 	p := pollUntilDone(t, srv, id)
-	if p.Scenario != "branch" || p.Offset != 0 || len(p.Records) == 0 || len(p.Spans) != 2 {
+	if p.Scenario != "branch" || p.UnitMs != 10 || p.Offset != 0 || len(p.Records) == 0 || len(p.Spans) != 2 {
 		t.Errorf("unexpected progress: %+v", p)
 	}
 	// The record starts with the header, which holds the definition of the scenario, validated by
@@ -148,7 +151,7 @@ func TestServerRun(t *testing.T) {
 
 func TestServerEvents(t *testing.T) {
 	srv := newTestServer(t)
-	id := startTestRun(t, srv, `{"scenario":"stream"}`)
+	id := startTestRun(t, srv, `{"scenario":"stream","unitMs":10}`)
 	res, err := http.Get(srv.URL + "/api/runs/" + id + "/events")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +189,7 @@ func TestServerEvents(t *testing.T) {
 
 func TestServerCancelAndErrors(t *testing.T) {
 	srv := newTestServer(t)
-	id := startTestRun(t, srv, `{"scenario":"timeout"}`)
+	id := startTestRun(t, srv, `{"scenario":"timeout","unitMs":10}`)
 	if status, _ := call(t, "GET", srv.URL+"/api/runs/"+id+"/report", ""); status != http.StatusConflict {
 		t.Errorf("report of a running run: %d", status)
 	}
@@ -200,14 +203,46 @@ func TestServerCancelAndErrors(t *testing.T) {
 		method, path, body string
 		status             int
 	}{
-		{"POST", "/api/runs", `{"scenario":"nope"}`, http.StatusNotFound},
-		{"POST", "/api/runs", `{"scenario":"stream","extra":1}`, http.StatusBadRequest},
-		{"POST", "/api/runs", `{"scenario":"stream"} {}`, http.StatusBadRequest},
+		{"POST", "/api/runs", `{"scenario":"nope","unitMs":10}`, http.StatusNotFound},
+		{"POST", "/api/runs", `{"scenario":"stream","unitMs":10,"extra":1}`, http.StatusBadRequest},
+		{"POST", "/api/runs", `{"scenario":"stream","unitMs":10} {}`, http.StatusBadRequest},
 		{"GET", "/api/runs/r999", "", http.StatusNotFound},
 		{"GET", "/api/runs/" + id + "?after=x", "", http.StatusBadRequest},
 	} {
 		if status, data := call(t, c.method, srv.URL+c.path, c.body); status != c.status {
 			t.Errorf("%s %s %s: %d %s, want %d", c.method, c.path, c.body, status, data, c.status)
+		}
+	}
+}
+
+func TestServerUnit(t *testing.T) {
+	srv := newTestServer(t)
+	// The run takes the unit of the request: orderSize waits half a unit, approve one.
+	id := startTestRun(t, srv, `{"scenario":"branch","unitMs":60}`)
+	p := pollUntilDone(t, srv, id)
+	if p.UnitMs != 60 || len(p.Spans) != 2 {
+		t.Errorf("unit %dms, %d spans; want 60ms, orderSize and approve", p.UnitMs, len(p.Spans))
+	}
+	for _, s := range p.Spans {
+		if d, want := *s.EndMs-s.StartMs, map[string]float64{"orderSize": 30, "approve": 60}[s.Function]; d < want-0.01 {
+			t.Errorf("%s took %.1fms, want at least %.0fms", s.Function, d, want)
+		}
+	}
+	// The bounds are accepted.
+	for _, unit := range []int64{10, 1000} {
+		id := startTestRun(t, srv, fmt.Sprintf(`{"scenario":"stop","unitMs":%d}`, unit))
+		if status, _ := call(t, "POST", srv.URL+"/api/runs/"+id+"/cancel", ""); status != http.StatusNoContent {
+			t.Errorf("cancel: %d", status)
+		}
+		if p := pollUntilDone(t, srv, id); p.UnitMs != unit {
+			t.Errorf("unit %dms, want %dms", p.UnitMs, unit)
+		}
+	}
+	// The unit is required: an integer number of milliseconds within the bounds.
+	for _, unit := range []string{``, `,"unitMs":null`, `,"unitMs":9`, `,"unitMs":1001`, `,"unitMs":-600`, `,"unitMs":600.5`, `,"unitMs":"600"`} {
+		body := `{"scenario":"stream"` + unit + `}`
+		if status, data := call(t, "POST", srv.URL+"/api/runs", body); status != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want %d", body, status, data, http.StatusBadRequest)
 		}
 	}
 }

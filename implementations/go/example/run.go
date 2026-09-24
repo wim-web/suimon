@@ -80,11 +80,12 @@ func (r *run) signal() {
 	r.mu.Unlock()
 }
 
-// progress is what a client sees of a run: the record lines from offset on, the state they
+// progress is what a client sees of a run: its unit, the record lines from offset on, the state they
 // establish, the spans of user code, and the time since the start of the run, which stops at its end.
 type progress struct {
 	ID         string          `json:"id"`
 	Scenario   string          `json:"scenario"`
+	UnitMs     int64           `json:"unitMs"`
 	Definition json.RawMessage `json:"definition"`
 	State      json.RawMessage `json:"state"`
 	Offset     int             `json:"offset"`
@@ -114,9 +115,9 @@ func (r *run) progress(offset int) (progress, <-chan struct{}, error) {
 	if err != nil {
 		return progress{}, nil, err
 	}
-	return progress{ID: r.id, Scenario: r.scenario.ID, Definition: r.scenario.Definition, State: state, Offset: offset,
-		Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(), ElapsedMs: elapsed, Done: done,
-		Error: runErr}, changed, nil
+	return progress{ID: r.id, Scenario: r.scenario.ID, UnitMs: r.env.unit.Milliseconds(), Definition: r.scenario.Definition,
+		State: state, Offset: offset, Records: append([]string{}, lines[offset:]...), Spans: r.env.snapshot(),
+		ElapsedMs: elapsed, Done: done, Error: runErr}, changed, nil
 }
 
 // wait waits for the run to finish.

@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { expect, it } from 'vitest';
-import { applyProgress, parseProgress, parseReport, parseScenarios } from '../src/api';
+import { afterEach, expect, it, vi } from 'vitest';
+import { applyProgress, parseProgress, parseReport, parseScenarios, startRun } from '../src/api';
 
 // branch.progress.json is the response of GET /api/runs/{id} for a finished run of the branch
-// scenario, as the Go server wrote it: its records start with the header.
+// scenario with a unit of 10ms, as the Go server wrote it: its records start with the header.
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/branch.progress.json', import.meta.url), 'utf8')) as Record<string, unknown>;
 const definition = JSON.parse(readFileSync(new URL('../../definitions/branch.json', import.meta.url), 'utf8')) as unknown;
 
@@ -17,6 +17,7 @@ it('parses the scenarios with their definitions', () => {
 it('accumulates the records of progress messages and rejects a gap', () => {
   const full = parseProgress(fixture);
   expect(full.done).toBe(true);
+  expect(full.unitMs).toBe(10);
   expect(full.state.status).toBe('succeeded');
   expect(full.state.settled.find(s => s.placement === 'review')?.outcome).toBe('skipped');
   const head = parseProgress({ ...fixture, done: false, records: full.records.slice(0, 4) });
@@ -28,9 +29,27 @@ it('accumulates the records of progress messages and rejects a gap', () => {
   expect(view.records.length).toBe(full.records.length - 1);
   expect(view.records[0]).toMatchObject({ seq: 1, op: { type: 'start' } });
   expect(view.done).toBe(true);
+  expect(view.unitMs).toBe(10);
   expect(() => applyProgress(applyProgress(null, head), { ...tail, offset: 5 })).toThrow(/record 5/);
   // A new run starts over.
   expect(applyProgress(view, { ...head, id: 'other' }).lines).toHaveLength(4);
+});
+
+it('requires the unit of the run in a progress message', () => {
+  expect(() => parseProgress({ ...fixture, unitMs: undefined })).toThrow(/progress\.unitMs/);
+});
+
+afterEach(() => { vi.unstubAllGlobals(); });
+
+it('sends the unit with each run request', async () => {
+  const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: 'r1' }), { status: 201 }));
+  vi.stubGlobal('fetch', fetch);
+  expect(await startRun('stream', { names: ['alpha'] }, 600)).toBe('r1');
+  await startRun('merge', undefined, 1000);
+  expect(fetch.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body as string)])).toEqual([
+    ['/api/runs', 'POST', { scenario: 'stream', input: { names: ['alpha'] }, unitMs: 600 }],
+    ['/api/runs', 'POST', { scenario: 'merge', unitMs: 1000 }],
+  ]);
 });
 
 it('parses a report', () => {

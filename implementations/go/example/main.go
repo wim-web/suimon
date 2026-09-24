@@ -1,6 +1,7 @@
 // Command example is a playground for the suimon Go runtime: a few definitions (definitions/*.json)
 // run with Go functions whose I/O is simulated with sleeps. Without -ui it runs one scenario and
-// prints the spans of user code and the report; with -ui it serves the browser UI and its API.
+// prints the spans of user code and the report; with -ui it serves the browser UI and its API, and
+// each run chooses its unit of simulated I/O.
 package main
 
 import (
@@ -24,10 +25,10 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8080", "listen address for -ui")
 	uiDir := flag.String("ui-dir", "example/ui/dist", "the built UI (relative to the working directory)")
 	name := flag.String("scenario", "stream", "the scenario to run without -ui")
-	unit := flag.Duration("unit", defaultUnit, "one unit of simulated I/O (10ms to 400ms; the timeout scenario allows 1s per call)")
+	unit := flag.Duration("unit", defaultUnit, fmt.Sprintf("one unit of simulated I/O without -ui (%v to %v)", minUnit, maxUnit))
 	flag.Parse()
-	if *unit < 10*time.Millisecond || *unit > 400*time.Millisecond {
-		log.Fatal("-unit must be between 10ms and 400ms")
+	if !*ui && (*unit < minUnit || *unit > maxUnit) {
+		log.Fatalf("-unit must be between %v and %v", minUnit, maxUnit)
 	}
 	scenarios, err := loadScenarios()
 	if err != nil {
@@ -36,7 +37,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if *ui {
-		if err := serve(ctx, scenarios, *listen, *uiDir, *unit); err != nil {
+		if err := serve(ctx, scenarios, *listen, *uiDir); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -46,7 +47,7 @@ func main() {
 	}
 }
 
-func serve(ctx context.Context, scenarios []*scenario, address, dir string, unit time.Duration) error {
+func serve(ctx context.Context, scenarios []*scenario, address, dir string) error {
 	assets, err := uiAssets(dir)
 	if err != nil {
 		return err
@@ -56,7 +57,7 @@ func serve(ctx context.Context, scenarios []*scenario, address, dir string, unit
 		return err
 	}
 	fmt.Printf("suimon playground: http://%s\n", listener.Addr())
-	srv := &http.Server{Handler: newServer(ctx, scenarios, unit).handler(assets), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: newServer(ctx, scenarios).handler(assets), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

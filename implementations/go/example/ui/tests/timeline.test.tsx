@@ -4,12 +4,14 @@ import { Timeline } from '../src/Timeline';
 
 it('marks the first downstream start in each lane, and shows a lane that has not run', () => {
   const html = renderToStaticMarkup(<Timeline highlight="process" lanes={[
-    { key: 'stream', label: 'Stream', run: { label: 'Stream', elapsedMs: 400, done: true, spans: [
+    { key: 'stream', label: 'Stream', unitMs: 50, run: { label: 'Stream', elapsedMs: 400, done: true, spans: [
       { function: 'produce', detail: '2 items', startMs: 0, endMs: 100, marks: [50, 100], outcome: 'ok' },
       { function: 'process', detail: 'alpha', startMs: 51, endMs: 151, marks: [], outcome: 'ok' },
     ] } },
-    { key: 'batch', label: 'Batch', run: null },
+    { key: 'batch', label: 'Batch', unitMs: 50, run: null },
   ]} />);
+  // Both lanes are for runs with the same unit.
+  expect(html.match(/unit <b>50ms<\/b>/g)).toHaveLength(2);
   expect(html).toContain('first process at <b>51ms</b>');
   expect(html).toContain('user code done at <b>151ms</b>');
   expect(html).toContain('not run yet');

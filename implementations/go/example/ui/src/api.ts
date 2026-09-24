@@ -5,8 +5,8 @@ import type { Definition, ExecutionRecord, JsonValue, RuntimeState } from '@suim
 
 export interface Scenario { id: string; title: string; description: string; definition: Definition; input?: JsonValue; compare?: string }
 export interface Span { function: string; detail: string; startMs: number; endMs: number | null; marks: number[]; outcome: 'running' | 'ok' | 'error' | 'cancelled' }
-/** One progress message: the records from `offset` on, and the state they establish. */
-export interface Progress { id: string; scenario: string; state: RuntimeState; offset: number; records: string[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
+/** One progress message: the unit of simulated I/O of the run, the records from `offset` on, and the state they establish. */
+export interface Progress { id: string; scenario: string; unitMs: number; state: RuntimeState; offset: number; records: string[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
 export interface FailureReport { run: string[]; placement: string; task?: string; cause: string; error?: string }
 /** outputs holds the JSON text of each endpoint value. */
 export interface Report { status: string; outputs: Record<string, string>; endpoints: Record<string, string>; failures: FailureReport[] }
@@ -55,7 +55,7 @@ export function parseSpan(value: unknown, at: string): Span {
 export function parseProgress(value: unknown): Progress {
   const o = object(value, 'progress');
   const progress: Progress = {
-    id: string(o.id, 'progress.id'), scenario: string(o.scenario, 'progress.scenario'), state: parseState(o.state),
+    id: string(o.id, 'progress.id'), scenario: string(o.scenario, 'progress.scenario'), unitMs: number(o.unitMs, 'progress.unitMs'), state: parseState(o.state),
     offset: number(o.offset, 'progress.offset'), records: array(o.records, 'progress.records').map((r, i) => string(r, `progress.records[${i}]`)),
     spans: array(o.spans, 'progress.spans').map((s, i) => parseSpan(s, `progress.spans[${i}]`)),
     elapsedMs: number(o.elapsedMs, 'progress.elapsedMs'), done: o.done === true,
@@ -81,7 +81,7 @@ export function parseReport(value: unknown): Report {
 }
 
 /** The accumulated view of one run: every line so far, the header first, and the records after it, parsed. */
-export interface RunView { id: string; scenario: string; state: RuntimeState; lines: string[]; records: ExecutionRecord[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
+export interface RunView { id: string; scenario: string; unitMs: number; state: RuntimeState; lines: string[]; records: ExecutionRecord[]; spans: Span[]; elapsedMs: number; done: boolean; error?: string }
 
 /**
  * Applies one progress message. Its records must continue the lines received so far, or start
@@ -94,7 +94,7 @@ export function applyProgress(previous: RunView | null, p: Progress): RunView {
   const all = p.records.length || !base ? [...lines, ...p.records] : lines;
   // parseRecords checks the header, the first line, and the sequence from 1, so the whole record is parsed again.
   const view: RunView = {
-    id: p.id, scenario: p.scenario, state: p.state, lines: all, records: all === lines && base ? base.records : parseRecords(all),
+    id: p.id, scenario: p.scenario, unitMs: p.unitMs, state: p.state, lines: all, records: all === lines && base ? base.records : parseRecords(all),
     spans: p.spans, elapsedMs: p.elapsedMs, done: p.done,
   };
   if (p.error !== undefined) view.error = p.error;
@@ -110,8 +110,9 @@ export async function loadScenarios(signal?: AbortSignal): Promise<Scenario[]> {
   return parseScenarios(await json(await fetch('/api/scenarios', { signal })));
 }
 
-export async function startRun(scenario: string, input: JsonValue | undefined): Promise<string> {
-  const body = input === undefined ? { scenario } : { scenario, input };
+/** Starts a run of the scenario in which one unit of simulated I/O is `unitMs` milliseconds. */
+export async function startRun(scenario: string, input: JsonValue | undefined, unitMs: number): Promise<string> {
+  const body = input === undefined ? { scenario, unitMs } : { scenario, input, unitMs };
   const o = object(await json(await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })), 'run');
   return string(o.id, 'run.id');
 }

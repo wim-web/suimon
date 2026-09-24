@@ -17,7 +17,9 @@ import (
 // The JSON API of the playground:
 //
 //	GET  /api/scenarios            the scenarios with their definitions and default inputs
-//	POST /api/runs                 {"scenario": id, "input": value?} starts a run; returns {"id": ...}
+//	POST /api/runs                 {"scenario": id, "input": value?, "unitMs": u} starts a run whose
+//	                               unit of simulated I/O is u milliseconds (minUnit to maxUnit);
+//	                               returns {"id": ...}
 //	GET  /api/runs/{id}?after=n    the progress, with the record lines from n on
 //	GET  /api/runs/{id}/events     the same progress as server-sent events, until the run is done
 //	GET  /api/runs/{id}/report     the report of a finished run (409 while it runs)
@@ -30,7 +32,6 @@ const maxRuns = 50
 type server struct {
 	ctx       context.Context
 	scenarios []*scenario
-	unit      time.Duration
 
 	mu    sync.Mutex
 	next  int
@@ -38,8 +39,8 @@ type server struct {
 	order []string
 }
 
-func newServer(ctx context.Context, scenarios []*scenario, unit time.Duration) *server {
-	return &server{ctx: ctx, scenarios: scenarios, unit: unit, runs: map[string]*run{}}
+func newServer(ctx context.Context, scenarios []*scenario) *server {
+	return &server{ctx: ctx, scenarios: scenarios, runs: map[string]*run{}}
 }
 
 func (s *server) handler(assets fs.FS) http.Handler {
@@ -72,11 +73,16 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Scenario string          `json:"scenario"`
 		Input    json.RawMessage `json:"input"`
+		UnitMs   int64           `json:"unitMs"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || dec.Decode(new(any)) != io.EOF {
-		http.Error(w, "expected one JSON object {scenario, input?}", http.StatusBadRequest)
+		http.Error(w, "expected one JSON object {scenario, input?, unitMs}", http.StatusBadRequest)
+		return
+	}
+	if req.UnitMs < minUnit.Milliseconds() || req.UnitMs > maxUnit.Milliseconds() {
+		http.Error(w, fmt.Sprintf("unitMs must be an integer from %d to %d", minUnit.Milliseconds(), maxUnit.Milliseconds()), http.StatusBadRequest)
 		return
 	}
 	sc := s.scenario(req.Scenario)
@@ -95,7 +101,7 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 	s.next++
 	id := "r" + strconv.Itoa(s.next)
 	s.mu.Unlock()
-	run, err := startRun(s.ctx, id, sc, input, s.unit)
+	run, err := startRun(s.ctx, id, sc, input, time.Duration(req.UnitMs)*time.Millisecond)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

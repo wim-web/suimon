@@ -16,8 +16,8 @@ import (
 )
 
 // The scenarios: each is a definition in definitions/ run with the functions bound below. Durations
-// are multiples of one unit of simulated I/O, taken from the context of the execution, so that one
-// registry and one engine per definition serve every run.
+// are multiples of one unit of simulated I/O, chosen for each run and taken from the context of the
+// execution, so that one registry and one engine per definition serve every run.
 
 //go:embed definitions/*.json
 var definitionFiles embed.FS
@@ -43,7 +43,7 @@ var scenarioList = []struct {
 	{"branch", "Branch and Merge", "orderSize sends the order to review (amount of 1000 or more) or approve. The other arm is skipped, and decide merges whatever arrives without waiting for it.", `{"id":"A-100","amount":120}`, ""},
 	{"merge", "Merge", "Three lookups with different latencies run in parallel after load; summary waits for all of them and returns one list.", `{"id":"u-1"}`, ""},
 	{"limit", "Concurrency limit", "A concurrency with four lookup tasks and limit 2: at most two tasks run at a time, the others wait for a slot.", `{"id":"u-1"}`, ""},
-	{"timeout", "Timeout", "lookup has callMs 1000 and policy continue. The call for \"stuck\" hangs, times out and is recorded as a failure; the other items still reach collect.", `{"names":["alpha","stuck","charlie"]}`, ""},
+	{"timeout", "Timeout", "lookup takes one unit, at most 1000ms, and has callMs 2000 and policy continue. The call for \"stuck\" hangs, times out after 2000ms and is recorded as a failure; the other items still reach collect.", `{"names":["alpha","stuck","charlie"]}`, ""},
 	{"stop", "Stop policy", "charge fails and its policy is stop: the workflow stops, and the running ship call is cancelled.", `{"id":"A-200","amount":80}`, ""},
 }
 
@@ -305,6 +305,14 @@ func ship(ctx context.Context, o order) (_ struct{}, err error) {
 }
 
 // The environment of one run: the unit of delay, and the spans of user code for the timeline.
+
+// minUnit and maxUnit bound the unit of a run. The delays scale with the unit, but the timeouts of
+// the definitions do not: at maxUnit, a lookup of the timeout scenario (one unit) still ends well
+// within its callMs (2000).
+const (
+	minUnit = 10 * time.Millisecond
+	maxUnit = time.Second
+)
 
 type envKey struct{}
 

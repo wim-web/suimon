@@ -4,11 +4,15 @@ import { WorkflowWorkbench, formatPayload } from '@suimon/ui-kit';
 import type { JsonValue } from '@suimon/ui-kit';
 import { applyProgress, cancelRun, followRun, loadReport, loadScenarios, startRun } from './api';
 import type { Progress, Report, RunView, Scenario } from './api';
+import { latestRun, runKey, timelineLanes } from './lanes';
 import { Timeline } from './Timeline';
-import type { TimelineLane } from './Timeline';
 
 /** The function whose start times the stream and batch scenarios compare. */
 const downstream = 'process';
+
+/** The choices of one unit of simulated I/O for a run, in milliseconds. */
+const units = [{ ms: 200, label: '200ms · fast' }, { ms: 600, label: '600ms · normal' }, { ms: 1000, label: '1000ms · slow' }] as const;
+const defaultUnit = 600;
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -35,9 +39,12 @@ export function App() {
 /** The playground for the scenarios of the server, of which there is at least one. */
 export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
   const [selected, setSelected] = useState(scenarios[0]!.id);
+  const [unit, setUnit] = useState<number>(defaultUnit);
   const [inputs, setInputs] = useState<Record<string, string>>(() => Object.fromEntries(scenarios.map(s => [s.id, s.input === undefined ? '' : JSON.stringify(s.input, null, 2)])));
-  /** The latest run of each scenario. */
+  /** The latest run of each scenario with each unit, by runKey. */
   const [runs, setRuns] = useState<Record<string, RunView>>({});
+  /** The unit of the latest run of each scenario. */
+  const [latest, setLatest] = useState<Record<string, number>>({});
   const [reports, setReports] = useState<Record<string, Report>>({});
   const [error, setError] = useState('');
   const [timeline, setTimeline] = useState(true);
@@ -55,14 +62,16 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
   }, [selected]);
 
   const onProgress = useCallback((p: Progress) => {
+    const key = runKey(p.scenario, p.unitMs);
     setRuns(previous => {
-      try { return { ...previous, [p.scenario]: applyProgress(previous[p.scenario] ?? null, p) }; }
+      try { return { ...previous, [key]: applyProgress(previous[key] ?? null, p) }; }
       catch (e) {
         // Stop following: later messages cannot continue a record that missed one.
         followers.current.get(p.id)?.(); followers.current.delete(p.id);
         queueMicrotask(() => setError(message(e))); return previous;
       }
     });
+    setLatest(previous => previous[p.scenario] === p.unitMs ? previous : { ...previous, [p.scenario]: p.unitMs });
     if (p.done) {
       followers.current.delete(p.id);
       if (p.error) setError(p.error);
@@ -71,7 +80,7 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
   }, []);
 
   const scenario = scenarios.find(s => s.id === selected) ?? scenarios[0]!;
-  const current = runs[scenario.id];
+  const current = latestRun(runs, latest, scenario.id);
   const running = current !== undefined && !current.done;
 
   async function run() {
@@ -82,16 +91,11 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
       catch { setError('The input is not valid JSON.'); return; }
     }
     try {
-      const id = await startRun(scenario.id, input);
+      const id = await startRun(scenario.id, input, unit);
       followers.current.set(id, followRun(id, onProgress, e => { followers.current.delete(id); setError(message(e)); }));
     } catch (e) { setError(message(e)); }
   }
 
-  const compared = scenario.compare ? scenarios.filter(s => s.id === scenario.id || s.id === scenario.compare) : [scenario];
-  const lanes: TimelineLane[] = compared.map(s => {
-    const r = runs[s.id];
-    return { key: s.id, label: s.title, run: r ? { label: s.title, spans: r.spans, elapsedMs: r.elapsedMs, done: r.done } : null };
-  });
   const report = current ? reports[current.id] : undefined;
 
   return <WorkflowWorkbench key={scenario.id} definition={scenario.definition} state={current?.state} records={current?.records}
@@ -107,12 +111,19 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
     </>}
     notice={<>
       {error && <div className="app-error" role="alert">{error}</div>}
-      {timeline && <Timeline lanes={lanes} highlight={scenario.compare ? downstream : undefined} />}
+      {timeline && <Timeline lanes={timelineLanes(scenarios, scenario, runs, latest, unit)} highlight={scenario.compare ? downstream : undefined} />}
     </>}
     sidebarContent={<div className="app-side">
       <section className="sui-sidebar-section">
         <div className="sui-sidebar-group"><span>Scenario</span></div>
         <p className="app-description">{scenario.description}</p>
+      </section>
+      <section className="sui-sidebar-section">
+        <label className="sui-sidebar-group" htmlFor="run-unit"><span>Unit</span>
+          <select id="run-unit" className="app-select" value={unit} disabled={running} onChange={event => setUnit(Number(event.target.value))}>
+            {units.map(u => <option key={u.ms} value={u.ms}>{u.label}</option>)}
+          </select></label>
+        <p className="app-description">Each simulated I/O call waits a multiple of this unit.</p>
       </section>
       {scenario.input !== undefined && <section className="sui-sidebar-section">
         <label className="sui-sidebar-group" htmlFor="scenario-input"><span>Input</span></label>
