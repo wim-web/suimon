@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { RunView, Scenario } from '../src/api';
-import { latestRun, runKey, timelineLanes } from '../src/lanes';
+import { latestRun, runKey, shownUnit, timelineLanes } from '../src/lanes';
 
 // timelineLanes reads the id, title and compare of a scenario, and the unit, spans and times of a run.
 const scenario = (id: string, compare?: string) => ({ id, title: id, description: '', compare }) as Scenario;
@@ -26,4 +26,13 @@ it('shows the runs with the chosen unit before the scenario has run', () => {
   expect(lanes('stream', { batch: 200 }, 600)).toEqual([['stream', 600, null], ['batch', 600, 'batch@600']]);
   expect(lanes('stream', { batch: 200 }, 200)).toEqual([['stream', 200, null], ['batch', 200, 'batch@200']]);
   expect(lanes('merge', {}, 1000)).toEqual([['merge', 1000, null]]);
+});
+
+it('shows the unit of the run in progress, not the choice for the next run', () => {
+  // Stream runs at 600ms; the user switched to Batch, chose 200ms, and came back to Stream.
+  const inProgress = { ...run('stream@600', 600), done: false } as RunView;
+  expect(shownUnit(inProgress, 200)).toBe(600);
+  // Once the run ends, or before any run, the select shows the choice for the next run.
+  expect(shownUnit(run('stream@600', 600), 200)).toBe(200);
+  expect(shownUnit(undefined, 200)).toBe(200);
 });

@@ -6,6 +6,12 @@ import type { TimelineLane } from './Timeline';
 export const runKey = (scenario: string, unitMs: number) => `${scenario}@${unitMs}`;
 
 /** The latest run of the scenario, if it has run; `latest` holds the unit of the latest run of each scenario. */
+/** The unit the unit select shows for a scenario: that of its run while the run is in progress, the
+    choice for the next run otherwise. */
+export function shownUnit(current: RunView | undefined, next: number): number {
+  return current !== undefined && !current.done ? current.unitMs : next;
+}
+
 export function latestRun(runs: Readonly<Record<string, RunView>>, latest: Readonly<Record<string, number>>, scenario: string): RunView | undefined {
   const unitMs = latest[scenario];
   return unitMs === undefined ? undefined : runs[runKey(scenario, unitMs)];

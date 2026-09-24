@@ -4,7 +4,7 @@ import { WorkflowWorkbench, formatPayload } from '@suimon/ui-kit';
 import type { JsonValue } from '@suimon/ui-kit';
 import { applyProgress, cancelRun, followRun, loadReport, loadScenarios, startRun } from './api';
 import type { Progress, Report, RunView, Scenario } from './api';
-import { latestRun, runKey, timelineLanes } from './lanes';
+import { latestRun, runKey, timelineLanes, shownUnit } from './lanes';
 import { Timeline } from './Timeline';
 
 /** The function whose start times the stream and batch scenarios compare. */
@@ -120,7 +120,7 @@ export function Playground({ scenarios }: { scenarios: readonly Scenario[] }) {
       </section>
       <section className="sui-sidebar-section">
         <label className="sui-sidebar-group" htmlFor="run-unit"><span>Unit</span>
-          <select id="run-unit" className="app-select" value={unit} disabled={running} onChange={event => setUnit(Number(event.target.value))}>
+          <select id="run-unit" className="app-select" value={shownUnit(current, unit)} disabled={running} onChange={event => setUnit(Number(event.target.value))}>
             {units.map(u => <option key={u.ms} value={u.ms}>{u.label}</option>)}
           </select></label>
         <p className="app-description">Each simulated I/O call waits a multiple of this unit.</p>
