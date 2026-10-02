@@ -1,7 +1,10 @@
 import { parseDefinition, parseRecords, parseState } from '@suimon/ui-kit';
 import type { Definition, ExecutionRecord, JsonValue, RuntimeState } from '@suimon/ui-kit';
+import { wasmRequest } from './wasm';
 
-/* The JSON API of the example server (implementations/go/example/server.go). */
+/* Both transports use the handlers in implementations/go/example/server.go. */
+const inBrowser = import.meta.env.MODE === 'wasm';
+const request = (path: string, init?: RequestInit) => inBrowser ? wasmRequest(path, init) : fetch(path, init);
 
 export interface Scenario { id: string; title: string; description: string; definition: Definition; input?: JsonValue; compare?: string }
 export interface Span { function: string; detail: string; startMs: number; endMs: number | null; marks: number[]; outcome: 'running' | 'ok' | 'error' | 'cancelled' }
@@ -107,27 +110,28 @@ async function json(response: Response): Promise<unknown> {
 }
 
 export async function loadScenarios(signal?: AbortSignal): Promise<Scenario[]> {
-  return parseScenarios(await json(await fetch('/api/scenarios', { signal })));
+  return parseScenarios(await json(await request('/api/scenarios', { signal })));
 }
 
 /** Starts a run of the scenario in which one unit of simulated I/O is `unitMs` milliseconds. */
 export async function startRun(scenario: string, input: JsonValue | undefined, unitMs: number): Promise<string> {
   const body = input === undefined ? { scenario, unitMs } : { scenario, input, unitMs };
-  const o = object(await json(await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })), 'run');
+  const o = object(await json(await request('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })), 'run');
   return string(o.id, 'run.id');
 }
 
 export async function loadReport(id: string): Promise<Report> {
-  return parseReport(await json(await fetch(`/api/runs/${encodeURIComponent(id)}/report`)));
+  return parseReport(await json(await request(`/api/runs/${encodeURIComponent(id)}/report`)));
 }
 
 export async function cancelRun(id: string): Promise<void> {
-  const response = await fetch(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+  const response = await request(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   if (!response.ok) throw new Error(await response.text());
 }
 
-/** Follows a run through server-sent events until it is done; returns a function that stops. */
+/** Follows a run until it is done; returns a function that stops. */
 export function followRun(id: string, onProgress: (p: Progress) => void, onError: (error: Error) => void): () => void {
+  if (inBrowser) return pollRun(id, onProgress, onError);
   const source = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
   const stop = () => source.close();
   source.onmessage = event => {
@@ -139,5 +143,25 @@ export function followRun(id: string, onProgress: (p: Progress) => void, onError
   };
   source.addEventListener('failure', event => { stop(); onError(new Error(String(JSON.parse((event as MessageEvent<string>).data)))); });
   source.onerror = () => { if (source.readyState === EventSource.CLOSED) onError(new Error('the event stream closed')); };
+  return stop;
+}
+
+function pollRun(id: string, onProgress: (p: Progress) => void, onError: (error: Error) => void): () => void {
+  const controller = new AbortController();
+  let offset = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => { controller.abort(); clearTimeout(timer); };
+  async function poll() {
+    try {
+      const p = parseProgress(await json(await request(`/api/runs/${encodeURIComponent(id)}?after=${offset}`, { signal: controller.signal })));
+      if (controller.signal.aborted) return;
+      offset = p.offset + p.records.length;
+      onProgress(p);
+      if (!p.done && !controller.signal.aborted) timer = setTimeout(() => void poll(), 100);
+    } catch (error) {
+      if (!controller.signal.aborted) { stop(); onError(error instanceof Error ? error : new Error(String(error))); }
+    }
+  }
+  void poll();
   return stop;
 }

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+go_bin="${GO:-go}"
+assets="$repo_root/implementations/go/example/ui/public/wasm"
+mkdir -p "$assets"
+GOOS=js GOARCH=wasm "$go_bin" -C "$repo_root/implementations/go" build -trimpath -ldflags='-s -w' -o "$assets/playground.wasm" ./example
+# The JS support file must come from the toolchain that compiled the module.
+go_root="$("$go_bin" -C "$repo_root/implementations/go" env GOROOT)"
+support="$go_root/lib/wasm/wasm_exec.js"
+if [[ ! -f "$support" ]]; then
+  support="$go_root/misc/wasm/wasm_exec.js"
+fi
+cp "$support" "$assets/wasm_exec.js"
