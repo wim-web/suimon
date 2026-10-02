@@ -41,6 +41,8 @@ type scenario struct {
 // processes bravo while it fetches the rest, finishes after 5.5 units and Batch after 7.8.
 const compareInput = `{"names":["bravo","charlie","echo","hotel","lima"]}`
 
+const defaultUnit = 250 * time.Millisecond
+
 var scenarioList = []struct {
 	id, title, description, input, compare string
 }{

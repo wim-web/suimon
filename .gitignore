@@ -3,5 +3,6 @@
 ui-kit/dist/
 node_modules/
 implementations/go/example/ui/dist/
+implementations/go/example/ui/public/wasm/
 *.test
 /implementations/go/suimon

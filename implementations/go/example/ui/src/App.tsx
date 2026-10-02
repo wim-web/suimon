@@ -23,7 +23,7 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController();
     loadScenarios(controller.signal).then(list => {
-      if (!list.length) throw new Error('The server has no scenarios.');
+      if (!list.length) throw new Error('No scenarios are available.');
       setScenarios(list);
     }).catch(e => { if (!controller.signal.aborted) setError(message(e)); });
     return () => controller.abort();

@@ -1,3 +1,5 @@
+//go:build !js
+
 // Command example is a playground for the suimon Go runtime: a few definitions (definitions/*.json)
 // run with Go functions whose I/O is simulated with sleeps. Without -ui it runs one scenario and
 // prints the spans of user code and the report; with -ui it serves the browser UI and its API, and
@@ -17,8 +19,6 @@ import (
 	"strings"
 	"time"
 )
-
-const defaultUnit = 250 * time.Millisecond
 
 func main() {
 	ui := flag.Bool("ui", false, "serve the browser UI and the JSON API")
