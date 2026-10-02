@@ -1,7 +1,9 @@
 import type { Definition, RuntimeState } from '../types';
 import { findPlacement, findWorkflow, incoming } from './definition';
 import { jsonTokens } from './parse';
-import { findExecution, findRun, samePath, taskOutputValue } from './status';
+import { connectionKey, createRuntimeIndex } from './runtime-index';
+import type { RuntimeIndex } from './runtime-index';
+import { findExecution, findRun, taskOutputValue } from './status';
 
 /**
  * Payload strings by value identity, plus the members of lists the engine builds itself (waitStream,
@@ -15,30 +17,30 @@ export type ResolvedValue =
   | { kind: 'missing'; id: string };
 
 /** Members of the engine-built list values of the state. */
-function lists(definition: Definition, state: RuntimeState): Map<string, string[]> {
+function lists(definition: Definition, state: RuntimeState, index: RuntimeIndex): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const result of state.results) {
-    const run = findRun(state, result.run), workflow = run && findWorkflow(definition, run.workflow);
+    const run = findRun(state, result.run, index), workflow = run && findWorkflow(definition, run.workflow);
     const placement = findPlacement(workflow, result.placement);
     if (!workflow || !placement) continue;
     const node = placement.node;
-    const delivered = (index: number) => state.deliveries.filter(d => samePath(d.run, result.run) && d.connection === index)
+    const delivered = (connection: number) => (index.deliveriesByConnection.get(connectionKey(result.run, connection)) ?? [])
       .flatMap(d => typeof d.outcome === 'object' ? [d.outcome.value.v] : []);
     if (node.type === 'waitStream') found.set(result.value, incoming(workflow, placement.name).flatMap(c => delivered(c.index)));
     else if (node.type === 'merge') found.set(result.value, incoming(workflow, placement.name).flatMap(c => delivered(c.index).slice(0, 1)));
     else if (node.type === 'concurrency' && node.output === 'list') {
       // A List result names the execution that produced it; its members are the transformed outputs.
-      const execution = findExecution(state, result.producer);
+      const execution = findExecution(state, result.producer, index);
       if (!execution) continue;
       const included = new Set(node.tasks.filter(t => t.outputTransform).map(t => t.name));
-      found.set(result.value, state.taskResults.filter(t => t.execution === execution.id && included.has(t.task)).flatMap(t => taskOutputValue(t.output) ?? []));
+      found.set(result.value, (index.taskResultsByExecution.get(execution.id) ?? []).filter(t => included.has(t.task)).flatMap(t => taskOutputValue(t.output) ?? []));
     }
   }
   return found;
 }
 
-export function valueIndex(definition: Definition, state?: RuntimeState, payloads: Record<string, string> = {}): ValueIndex {
-  return { payloads: new Map(Object.entries(payloads)), lists: state ? lists(definition, state) : new Map() };
+export function valueIndex(definition: Definition, state?: RuntimeState, payloads: Record<string, string> = {}, index: RuntimeIndex | undefined = state ? createRuntimeIndex(state) : undefined): ValueIndex {
+  return { payloads: new Map(Object.entries(payloads)), lists: state ? lists(definition, state, index!) : new Map() };
 }
 
 export function resolveValue(index: ValueIndex | undefined, id: string, depth = 0): ResolvedValue {

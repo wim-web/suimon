@@ -9,6 +9,7 @@ import { WorkflowWorkbench } from '../src/components/WorkflowWorkbench';
 import { parseRecordLog, parseRecords } from '../src/lib/parse';
 import { recordTransitions, recordValues } from '../src/lib/records';
 import { runTree } from '../src/lib/status';
+import { PayloadText } from '../src/components/ValueView';
 import { valueIndex } from '../src/lib/values';
 import { definition, recordText, records, state } from './helpers';
 
@@ -26,7 +27,8 @@ it('inspects a placement with its definition, connections, invocations and resul
   expect(html).toContain('result');
   expect(html).not.toContain('payload not provided');
   const entry = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="fetchAllUsers" state={s} run={[]} values={values} />);
-  expect(entry).toContain('&lt;tenant&gt;');
+  expect(entry).not.toContain('&lt;tenant&gt;');
+  expect(entry).toContain('8 characters');
   expect(entry).not.toContain('<tenant>');
   expect(entry).toContain('Stream&lt;User&gt;');
   const endpoint = renderToStaticMarkup(<PlacementInspector definition={p} workflow="users" placement="all" />);
@@ -70,17 +72,19 @@ it('lists runs as a tree and records with their commit state and relation', () =
   expect(torn).toContain('never committed');
 });
 
-it('shows a record with its fields and payloads as text', () => {
+it('shows record fields while keeping payloads closed', () => {
   const html = renderToStaticMarkup(<RecordInspector transition={{ seq: 7, committed: false, op: { type: 'returned', call: 'c', value: 'v' }, values: { v: '<b>done</b>' } }} relation={{ run: [], placement: 'ship' }} />);
   expect(html).toContain('uncommitted');
-  expect(html).toContain('&lt;b&gt;done&lt;/b&gt;');
+  expect(html).not.toContain('&lt;b&gt;done&lt;/b&gt;');
+  expect(html).not.toContain('<pre>');
   expect(html).not.toContain('<b>done</b>');
   expect(html).toContain('ship');
 });
 
 it('shows a payload with its numbers as written', () => {
-  const html = renderToStaticMarkup(<RecordInspector transition={{ seq: 1, committed: true, op: { type: 'start', input: 'v' }, values: { v: '{"id":9007199254740993}' } }} />);
-  expect(html).toContain('&quot;id&quot;: 9007199254740993');
+  const html = renderToStaticMarkup(<PayloadText payload='{"id":9007199254740993}' />);
+  expect(html).toContain('&quot;id&quot;: ');
+  expect(html).toContain('9007199254740993');
   expect(html).not.toContain('9007199254740992');
 });
 

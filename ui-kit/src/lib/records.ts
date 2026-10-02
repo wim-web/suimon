@@ -1,6 +1,7 @@
 import type { Definition, ExecutionRecord, Op, Path, RuntimeState, Transition } from '../types';
 import { findWorkflow } from './definition';
 import { dictionary } from './dictionary';
+import type { RuntimeIndex } from './runtime-index';
 import { findExecution, findInvocation, findRun, runOwner, samePath } from './status';
 
 /** Op records with whether their commit followed; an op without its commit is uncommitted. */
@@ -46,14 +47,14 @@ export interface RecordRelation {
   childRun?: Path;
 }
 
-function callRelation(state: RuntimeState | undefined, id: string): RecordRelation {
-  const call = state?.calls.find(c => c.id === id);
+function callRelation(state: RuntimeState | undefined, id: string, index?: RuntimeIndex): RecordRelation {
+  const call = index ? index.calls.get(id) : state?.calls.find(c => c.id === id);
   if (!state || !call) return {};
   if (call.task !== null) {
-    const execution = findExecution(state, call.owner);
+    const execution = findExecution(state, call.owner, index);
     return execution ? { run: execution.run, placement: execution.placement, task: call.task } : {};
   }
-  const invocation = findInvocation(state, call.owner);
+  const invocation = findInvocation(state, call.owner, index);
   return invocation ? { run: invocation.run, placement: invocation.placement } : {};
 }
 
@@ -61,9 +62,9 @@ function callRelation(state: RuntimeState | undefined, id: string): RecordRelati
  * Relates an op to a run and placement. invoke and settle name them; call, task and execution ops
  * are resolved through the state, so they stay unrelated when the state does not know the call yet.
  */
-export function recordRelation(op: Op, definition: Definition, state?: RuntimeState): RecordRelation {
+export function recordRelation(op: Op, definition: Definition, state?: RuntimeState, index?: RuntimeIndex): RecordRelation {
   const workflowOf = (run: Path) => {
-    const found = state && findRun(state, run);
+    const found = state && findRun(state, run, index);
     return findWorkflow(definition, found ? found.workflow : run.length ? '' : definition.main);
   };
   switch (op.type) {
@@ -77,16 +78,16 @@ export function recordRelation(op: Op, definition: Definition, state?: RuntimeSt
       return c ? { run: op.run, placement: c.target, source: c.source, connection: op.connection } : { run: op.run, connection: op.connection };
     }
     case 'taskInput': case 'taskInputFailed': case 'beginTask': case 'taskOutput': case 'taskOutputFailed': case 'closeExecution': {
-      const execution = state && findExecution(state, op.execution);
+      const execution = state && findExecution(state, op.execution, index);
       if (!execution) return {};
       return { run: execution.run, placement: execution.placement, ...(op.type === 'closeExecution' ? {} : { task: op.task }) };
     }
     case 'closeRun': {
-      const run = state && findRun(state, op.run), owner = run && runOwner(state, run);
+      const run = state && findRun(state, op.run, index), owner = run && runOwner(state, run, index);
       return owner ? { run: owner.run, placement: owner.placement, childRun: op.run, ...(owner.task ? { task: owner.task } : {}) } : { childRun: op.run };
     }
     case 'cancel': case 'conclude': return { run: [] };
-    default: return callRelation(state, op.call);
+    default: return callRelation(state, op.call, index);
   }
 }
 

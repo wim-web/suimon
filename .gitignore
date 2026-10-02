@@ -6,3 +6,6 @@ implementations/go/example/ui/dist/
 implementations/go/example/ui/public/wasm/
 *.test
 /implementations/go/suimon
+ui-kit/test-results/
+ui-kit/playwright-report/
+ui-kit/.bench-dist/

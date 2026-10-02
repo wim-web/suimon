@@ -7,6 +7,7 @@ import { lookup } from '../lib/dictionary';
 import { recordTransitions, recordValues, filterTransitions } from '../lib/records';
 import type { RecordFilter, RecordRelation } from '../lib/records';
 import { childRuns, findRun, pathKey, runLabel, runOverlay, runOwner, runTree, samePath } from '../lib/status';
+import { createRuntimeIndex } from '../lib/runtime-index';
 import { valueIndex } from '../lib/values';
 import { FailureList } from './FailureList';
 import { PlacementInspector } from './PlacementInspector';
@@ -53,19 +54,20 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
   const [filter, setFilter] = useState<RecordFilter>({});
   const view: View = controlledRun && 'run' in localView ? { run: controlledRun } : localView;
 
+  const runtimeIndex = useMemo(() => state ? createRuntimeIndex(state) : undefined, [state]);
   const transitions = useMemo(() => recordTransitions(records), [records]);
-  const relations = useMemo(() => relationsOf(transitions, definition, state), [transitions, definition, state]);
-  const values = useMemo(() => valueIndex(definition, state, recordValues(transitions)), [definition, state, transitions]);
-  const tree = useMemo(() => state ? runTree(state) : [], [state]);
+  const relations = useMemo(() => relationsOf(transitions, definition, state, runtimeIndex), [transitions, definition, state, runtimeIndex]);
+  const values = useMemo(() => valueIndex(definition, state, recordValues(transitions), runtimeIndex), [definition, state, transitions, runtimeIndex]);
+  const tree = useMemo(() => state ? runTree(state, runtimeIndex) : [], [state, runtimeIndex]);
   const labels = useMemo(() => new Map(tree.map(node => [pathKey(node.run.path), runLabel(node)])), [tree]);
   const labelOf = useCallback((path: string[]) => labels.get(pathKey(path)) ?? (path.length ? 'unknown run' : 'root'), [labels]);
 
-  const currentRun = 'run' in view && state ? findRun(state, view.run) ?? findRun(state, []) : undefined;
+  const currentRun = 'run' in view && state ? findRun(state, view.run, runtimeIndex) ?? findRun(state, [], runtimeIndex) : undefined;
   const runPath = currentRun?.path ?? null;
   const workflowId = currentRun?.workflow ?? ('workflow' in view ? view.workflow : definition.main);
   const workflow = findWorkflow(definition, workflowId) ?? findWorkflow(definition, definition.main)!;
   const workflowPresentations = lookup(presentations, workflow.id);
-  const overlay = useMemo(() => state && runPath ? runOverlay(definition, state, runPath) : null, [definition, state, runPath]);
+  const overlay = useMemo(() => state && runPath ? runOverlay(definition, state, runPath, runtimeIndex) : null, [definition, state, runPath, runtimeIndex]);
 
   const selectRun = useCallback((path: Path) => {
     setView({ run: path }); onRunChange?.(path);
@@ -80,28 +82,28 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
     if (state && runPath) {
       const owners = task ? state.executions.filter(e => samePath(e.run, runPath) && e.placement === placement).map(e => e.id)
         : state.invocations.filter(i => samePath(i.run, runPath) && i.placement === placement).map(i => i.id);
-      const runs = owners.flatMap(owner => childRuns(state, owner, task ?? null));
+      const runs = owners.flatMap(owner => childRuns(state, owner, task ?? null, runtimeIndex));
       if (runs.length === 1) { selectRun(runs[0]!.path); return; }
       if (runs.length > 1) { selectPlacement(placement); return; }
     }
     setView(previous => 'workflow' in previous && !runPath ? { ...previous, workflow: called, trail: [...previous.trail, called] }
       : { workflow: called, trail: runPath ? [called] : [workflowId, called], ...(runPath ? { from: runPath } : {}) });
     setSelectedPlacement(null); setSelectedSeq(null); setHighlight(null);
-  }, [state, runPath, workflowId, selectRun, selectPlacement]);
+  }, [state, runtimeIndex, runPath, workflowId, selectRun, selectPlacement]);
   const openTrail = useCallback((length: number) => {
     setView(previous => 'workflow' in previous ? { ...previous, workflow: previous.trail[length - 1]!, trail: previous.trail.slice(0, length) } : previous);
     setSelectedPlacement(null); setSelectedSeq(null); setHighlight(null);
   }, []);
   const visible = useMemo(() => filterTransitions(transitions, relations, filter), [transitions, relations, filter]);
   const selectRecord = useCallback((transition: Transition, relation: RecordRelation = relations.get(transition.seq) ?? {}) => {
-    if (relation.run && state && findRun(state, relation.run) && !(runPath && samePath(relation.run, runPath))) { setView({ run: relation.run }); onRunChange?.(relation.run); }
+    if (relation.run && state && findRun(state, relation.run, runtimeIndex) && !(runPath && samePath(relation.run, runPath))) { setView({ run: relation.run }); onRunChange?.(relation.run); }
     setSelectedSeq(transition.seq); setSelectedPlacement(relation.placement ?? null); setHighlight(relation); setInspector(true);
     onSelectRecord?.(transition, relation);
-  }, [relations, state, runPath, onRunChange, onSelectRecord]);
+  }, [relations, state, runtimeIndex, runPath, onRunChange, onSelectRecord]);
   const selectFailure = useCallback((failure: Failure) => {
-    if (state && findRun(state, failure.run)) { setView({ run: failure.run }); onRunChange?.(failure.run); }
+    if (state && findRun(state, failure.run, runtimeIndex)) { setView({ run: failure.run }); onRunChange?.(failure.run); }
     setSelectedPlacement(failure.placement); setSelectedSeq(null); setHighlight(null); setInspector(true);
-  }, [state, onRunChange]);
+  }, [state, runtimeIndex, onRunChange]);
 
   const currentRecord = selectedSeq === null ? undefined : transitions.find(t => t.seq === selectedSeq);
   const position = currentRecord ? visible.indexOf(currentRecord) : -1;
@@ -109,8 +111,8 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
   if (state && currentRun) {
     for (let r: typeof currentRun | undefined = currentRun; r; ) {
       breadcrumbs.unshift({ label: r.path.length ? labelOf(r.path) : r.workflow, path: r.path });
-      const owner: ReturnType<typeof runOwner> = runOwner(state, r);
-      r = owner && r.path.length ? findRun(state, owner.run) : undefined;
+      const owner: ReturnType<typeof runOwner> = runOwner(state, r, runtimeIndex);
+      r = owner && r.path.length ? findRun(state, owner.run, runtimeIndex) : undefined;
     }
   }
   const uncommitted = transitions.filter(t => !t.committed).length;
@@ -127,7 +129,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
         <button className={inspector ? 'is-active' : ''} aria-label="Inspector" title="Inspector" aria-pressed={inspector} onClick={() => setInspector(!inspector)}><PanelRight size={18} /></button>
       </nav>
       {sidebar && <WorkflowSidebar key={workflow.id} workflow={workflow} overlay={overlay} selectedPlacement={selectedPlacement} onSelectPlacement={selectPlacement} presentations={workflowPresentations}
-        header={state && <section className="sui-sidebar-section"><div className="sui-sidebar-group"><span>Runs</span><span className="sui-muted">{state.runs.length}</span></div><RunSelector state={state} run={runPath} onSelectRun={selectRun} /></section>}>
+        header={state && <section className="sui-sidebar-section"><div className="sui-sidebar-group"><span>Runs</span><span className="sui-muted">{state.runs.length}</span></div><RunSelector state={state} runtimeIndex={runtimeIndex} run={runPath} onSelectRun={selectRun} /></section>}>
         {state && state.failures.length > 0 && <section className="sui-sidebar-section"><div className="sui-sidebar-group"><span>Failures</span><span className="sui-muted">{state.failures.length}</span></div><FailureList state={state} onSelectFailure={selectFailure} /></section>}
         {sidebarContent}
       </WorkflowSidebar>}
@@ -142,14 +144,14 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
           highlightedPlacement={highlight?.placement ?? null} highlightedConnection={highlight?.connection ?? null}
           onSelectPlacement={selectPlacement} onOpenWorkflow={openWorkflow} presentations={workflowPresentations} theme={theme} />
       </div>
-      {recordsOpen && <RecordPanel transitions={transitions} tail={recordTail} definition={definition} state={state} relations={relations} selectedSeq={selectedSeq} filter={filter} onFilterChange={setFilter} onSelectRecord={selectRecord} onClose={() => setRecordsOpen(false)} />}
+      {recordsOpen && <RecordPanel transitions={transitions} tail={recordTail} definition={definition} state={state} runtimeIndex={runtimeIndex} relations={relations} selectedSeq={selectedSeq} filter={filter} onFilterChange={setFilter} onSelectRecord={selectRecord} onClose={() => setRecordsOpen(false)} />}
       <footer className="sui-statusbar"><span><CircleDot size={11} />{state ? `${state.status} · ${state.runs.length} runs` : 'No runtime state'}</span>
         <button onClick={() => setRecordsOpen(!recordsOpen)} aria-expanded={recordsOpen}><ListTree size={12} />Records <b>{transitions.length}</b>{uncommitted > 0 && <span>{uncommitted} uncommitted</span>}{recordTail && <span>partial last line</span>}</button></footer>
       </main>
       {inspector && <aside className="sui-inspector" aria-label="Inspector"><div className="sui-inspector-header"><span>{currentRecord ? 'Record' : 'Placement'}</span><button className="sui-icon-button" aria-label="Close inspector" onClick={() => setInspector(false)}><X size={15} /></button></div>
         {currentRecord ? <RecordInspector transition={currentRecord} relation={relations.get(currentRecord.seq)} values={values} runLabel={labelOf}
           onPrevious={position > 0 ? () => selectRecord(visible[position - 1]!) : undefined} onNext={position >= 0 && position < visible.length - 1 ? () => selectRecord(visible[position + 1]!) : undefined} />
-          : selectedPlacement ? <PlacementInspector definition={definition} workflow={workflow} placement={selectedPlacement} state={state} run={runPath} values={values} presentation={lookup(workflowPresentations, selectedPlacement)}
+          : selectedPlacement ? <PlacementInspector definition={definition} workflow={workflow} placement={selectedPlacement} state={state} runtimeIndex={runtimeIndex} run={runPath} values={values} presentation={lookup(workflowPresentations, selectedPlacement)}
             onOpenWorkflow={openWorkflow} onSelectRun={selectRun} onShowRecords={transitions.length ? () => { setFilter({ run: runPath, placement: selectedPlacement }); setRecordsOpen(true); } : undefined} recordCount={placementRecords} />
             : <div className="sui-empty-inspector"><PanelRight size={28} /><p>Select a placement or a record to see its details.</p></div>}
       </aside>}
