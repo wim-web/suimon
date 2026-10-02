@@ -1,0 +1,45 @@
+version: 2
+enabled: true
+
+github_api_read_retry:
+  max_attempts: 3
+  interval_seconds: 2
+  respect_retry_after: true
+
+merge:
+  method: squash
+
+rules:
+  - id: major-update
+    authors: [app/renovate, 'renovate[bot]']
+    base_branches: [main]
+    labels: [major]
+    instructions: |
+      更新内容、公式リリースノート、破壊的変更とこのrepoでの利用箇所を調査し、API・設定・実行環境の互換性を確認する。
+      CIの状態にかかわらず調査を実施し、既存機能への影響がないと判断でき、以下の条件を満たせばマージする。影響がある場合や判断できない場合はマージしない。
+      最新のHEADに対するspecificationワークフローのchangesジョブと、変更範囲に応じたui-kit・lean・schema・go・conformanceジョブの成功を確認する。
+      playgroundワークフローの対象になる変更ではbuildジョブの成功も確認する。変更範囲やPRイベントを理由に省略されるジョブは、workflowの条件と照合する。
+      draft、競合あり、必要なCIが未実行・失敗・未完了、またはほかのCIに失敗・未完了がある場合はマージしない。
+      Renovate以外の変更履歴、コメント等がある場合はマージしない。
+
+  - id: minor-patch-update
+    authors: [app/renovate, 'renovate[bot]']
+    base_branches: [main]
+    labels: [minor, patch]
+    instructions: |
+      最新のHEADに対するspecificationワークフローのchangesジョブと、変更範囲に応じたui-kit・lean・schema・go・conformanceジョブの成功を確認する。
+      playgroundワークフローの対象になる変更ではbuildジョブの成功も確認する。変更範囲やPRイベントを理由に省略されるジョブは、workflowの条件と照合する。
+      draft、競合あり、必要なCIが未実行・失敗・未完了、またはほかのCIに失敗・未完了がある場合はマージしない。
+      Renovate以外の変更履歴、コメント等がある場合はマージしない。
+      すべての条件とGitHubのマージ条件を満たしていればマージする。
+
+  - id: other-renovate
+    authors: [app/renovate, 'renovate[bot]']
+    base_branches: [main]
+    instructions: |
+      調査をせずにスキップする。
+
+on_blocked:
+  - id: report-blocked
+    instructions: |
+      マージを見送った理由を実行結果に記録する。
