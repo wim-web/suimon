@@ -1,15 +1,18 @@
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowUpRight, ListTree } from 'lucide-react';
 import type { Definition, Execution, Invocation, Path, PlacementPresentation, Result, Run, RuntimeState, Timeout, Workflow } from '../types';
+import { createRuntimeIndex, ownerKey, placementKey } from '../lib/runtime-index';
+import type { RuntimeIndex } from '../lib/runtime-index';
 import { bodyLabel, deriveKinds, findPlacement, findWorkflow, incoming, isEndpoint, isEntry, outgoing, renderValueType } from '../lib/definition';
 import type { IndexedConnection } from '../lib/definition';
-import { armOutcome, childRuns, invocationResults, resultSource, runOverlay, samePath } from '../lib/status';
+import { armOutcome, childRuns, invocationResults, resultSource, runOverlay } from '../lib/status';
 import type { ValueIndex } from '../lib/values';
-import { resolveValue } from '../lib/values';
 import { NodeIcon } from './NodeIcon';
 import { controlLabels, invocationOrder, kindLabel, taskOrder } from './PlacementNode';
 import { StatusBadge, StatusCounts } from './StatusBadge';
 import { ValueView } from './ValueView';
+import { PagedContent } from './PagedContent';
 
 export interface PlacementInspectorProps {
   definition: Definition;
@@ -17,6 +20,8 @@ export interface PlacementInspectorProps {
   placement: string;
   /** With a state and a run of this workflow, the inspector adds the placement's status in that run. */
   state?: RuntimeState;
+  /** Shared index of the supplied immutable state snapshot. */
+  runtimeIndex?: RuntimeIndex;
   run?: Path | null;
   /** Payloads for value identities, from valueIndex. */
   values?: ValueIndex;
@@ -25,7 +30,7 @@ export interface PlacementInspectorProps {
   onSelectRun?: (path: Path) => void;
   onShowRecords?: () => void;
   recordCount?: number;
-  /** Invocations and results listed before the rest is summarized. */
+  /** Invocations and results per page. */
   limit?: number;
 }
 
@@ -33,28 +38,26 @@ const timeoutText = (t?: Timeout) => t && (t.callMs !== undefined || t.elementMs
   ? [t.callMs !== undefined && `call ${t.callMs} ms`, t.elementMs !== undefined && `element ${t.elementMs} ms`].filter(Boolean).join(' · ') : '—';
 
 function Section({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
-  return <section className="sui-inspector-section"><h3>{title}{count !== undefined && <span> {count}</span>}</h3>{children}</section>;
-}
-function More({ total, shown }: { total: number; shown: number }) {
-  return total > shown ? <p className="sui-empty-small">{total - shown} more not shown</p> : null;
+  return <section className="sui-inspector-section" aria-label={title}><h3>{title}{count !== undefined && <span> {count}</span>}</h3>{children}</section>;
 }
 
 function RunLinks({ runs, onSelectRun }: { runs: Run[]; onSelectRun?: (path: Path) => void }) {
-  return runs.length ? <div className="sui-run-links">{runs.map((r, i) => <button key={i} className="sui-link" disabled={!onSelectRun} onClick={() => onSelectRun?.(r.path)}>
+  return runs.length ? <PagedContent count={runs.length} label="Child runs">{(start, end) => <div className="sui-run-links">{runs.slice(start, end).map((r, i) => <button key={i} className="sui-link" disabled={!onSelectRun} onClick={() => onSelectRun?.(r.path)}>
     run {r.workflow}<StatusBadge status={r.complete ? 'complete' : 'running'} /><ArrowUpRight size={12} />
-  </button>)}</div> : null;
+  </button>)}</div>}</PagedContent> : null;
 }
 
-export function PlacementInspector({ definition, workflow: workflowRef, placement: name, state, run, values, presentation, onOpenWorkflow, onSelectRun, onShowRecords, recordCount, limit = 50 }: PlacementInspectorProps) {
+export function PlacementInspector({ definition, workflow: workflowRef, placement: name, state, runtimeIndex, run, values, presentation, onOpenWorkflow, onSelectRun, onShowRecords, recordCount, limit = 50 }: PlacementInspectorProps) {
+  const index = useMemo(() => runtimeIndex ?? (state ? createRuntimeIndex(state) : undefined), [runtimeIndex, state]);
   const workflow = typeof workflowRef === 'string' ? findWorkflow(definition, workflowRef) : workflowRef;
   const placement = findPlacement(workflow, name);
   if (!workflow || !placement) return <div className="sui-empty-inspector"><p>Unknown placement {name}</p></div>;
   const node = placement.node;
   const kind = deriveKinds(definition, workflow)[name] ?? null;
-  const overlay = state && run ? runOverlay(definition, state, run) : null;
+  const overlay = state && run ? runOverlay(definition, state, run, index) : null;
   const status = overlay?.run.workflow === workflow.id ? overlay.placements[name] : undefined;
   const connectionStatus = status ? overlay!.connections : undefined;
-  const results = status && state ? state.results.filter(r => r.placement === name && samePath(r.run, overlay!.run.path)) : [];
+  const results = status && state ? (index!.resultsByPlacement.get(placementKey(overlay!.run.path, name)) ?? []) : [];
   const fn = node.type === 'function' ? definition.functions.find(f => f.id === node.function) : undefined;
   const connectionRow = (c: IndexedConnection, direction: 'in' | 'out') => {
     const deliveries = connectionStatus?.[c.index];
@@ -65,48 +68,48 @@ export function PlacementInspector({ definition, workflow: workflowRef, placemen
     </li>;
   };
   const inbound = incoming(workflow, name), outbound = outgoing(workflow, name);
-  const value = (id: string | null, label?: string) => id === null ? null : <ValueView value={resolveValue(values, id)} label={label} />;
+  const value = (id: string | null, label?: string) => id === null ? null : <ValueView valueId={id} values={values} label={label} />;
   const triggerSource = (trigger: string | null) => {
-    const source = trigger === null ? undefined : state?.results.find(r => r.id === trigger);
+    const source = trigger === null ? undefined : index?.results.get(trigger);
     return source ? `${source.placement}${source.arm ? ` [${source.arm}]` : ''}` : trigger === null ? 'start of run' : 'unknown result';
   };
   const executionView = (e: Execution) => node.type === 'concurrency' && state ? <div className="sui-execution">
     {e.tasks.map(t => {
       const spec = node.tasks.find(s => s.name === t.name);
-      const outputs = state.taskResults.filter(r => r.execution === e.id && r.task === t.name);
+      const outputs = (index!.taskResultsByExecution.get(e.id) ?? []).filter(r => r.task === t.name);
       return <div key={t.name} className="sui-execution-task">
         <div className="sui-row-title"><strong>{t.name}</strong><StatusBadge status={t.status} /></div>
         {value(t.input, 'input')}
-        {outputs.map(r => <div key={r.index}>
+        {outputs.length > 0 && <PagedContent count={outputs.length} pageSize={limit} label={`${t.name} outputs`}>{(start, end) => outputs.slice(start, end).map(r => <div key={r.index}>
           {value(r.value, `result ${r.index}`)}
           {spec?.outputTransform && (typeof r.output === 'object' ? value(r.output.value.v, `output ${r.index}`)
             : <p className="sui-value-missing">output transform {r.output}</p>)}
-        </div>)}
-        <RunLinks runs={childRuns(state, e.id, t.name)} onSelectRun={onSelectRun} />
+        </div>)}</PagedContent>}
+        <RunLinks runs={childRuns(state, e.id, t.name, index)} onSelectRun={onSelectRun} />
       </div>;
     })}
   </div> : null;
   const ordinal = new Map(status?.invocations.map((i, n) => [i.id, n + 1]));
   const resultLabel = (r: Result) => {
     if (!state) return undefined;
-    const source = resultSource(state, r), n = source.invocation && ordinal.get(source.invocation.id);
+    const source = resultSource(state, r, index), n = source.invocation && ordinal.get(source.invocation.id);
     const from = source.kind === 'aggregate' ? 'aggregate' : n !== undefined ? `#${n}` : source.kind;
     return r.arm ? `${from} · arm ${r.arm}` : from;
   };
   const invocationView = (i: Invocation) => {
-    const calls = state?.calls.filter(c => c.owner === i.id && c.task === null) ?? [];
-    const execution = state?.executions.find(e => e.id === i.id);
-    const produced = state ? invocationResults(state, i) : [];
+    const calls = index?.callsByOwner.get(ownerKey(i.id, null)) ?? [];
+    const execution = index?.executions.get(i.id);
+    const produced = state ? invocationResults(state, i, index) : [];
     return <li key={i.id} className="sui-invocation">
       <div className="sui-row-title"><span className="sui-muted">#{ordinal.get(i.id)}</span><StatusBadge status={i.status} />{i.arm && <em className="sui-edge-arm">{i.arm}</em>}<small title={i.trigger ?? undefined}>from {triggerSource(i.trigger)}</small></div>
       {value(i.input, 'input')}
       {calls.map(c => <div key={c.id} className="sui-call"><span>{'function' in c.target ? c.target.function.id : c.target.judge.id}</span><StatusBadge status={c.status} />{c.stream && <small>{c.yields} yielded</small>}</div>)}
-      {state && <RunLinks runs={childRuns(state, i.id)} onSelectRun={onSelectRun} />}
+      {state && <RunLinks runs={childRuns(state, i.id, null, index)} onSelectRun={onSelectRun} />}
       {execution && executionView(execution)}
-      {produced.length > 0 && <div className="sui-invocation-results">{produced.slice(0, limit).map(r => <ValueView key={r.id} value={resolveValue(values, r.value)} label={r.arm ? `result · arm ${r.arm}` : 'result'} />)}<More total={produced.length} shown={limit} /></div>}
+      {produced.length > 0 && <div className="sui-invocation-results"><PagedContent count={produced.length} pageSize={limit} label={`Invocation ${ordinal.get(i.id)} results`}>{(start, end) => produced.slice(start, end).map(r => <ValueView key={r.id} valueId={r.value} values={values} label={r.arm ? `result · arm ${r.arm}` : 'result'} />)}</PagedContent></div>}
     </li>;
   };
-  return <div className="sui-placement-inspector">
+  return <div className="sui-placement-inspector" key={JSON.stringify([workflow.id, run, name])}>
     <NodeIcon kind={node.type} accent={presentation?.accent} size={22} />
     <h2>{presentation?.label ?? name}</h2>
     <p className="sui-description">{presentation?.description ?? `${controlLabels[node.type]} placement in ${workflow.id}`}</p>
@@ -140,8 +143,8 @@ export function PlacementInspector({ definition, workflow: workflowRef, placemen
         {Object.keys(status.taskOutputs).length > 0 && <div className="sui-badges"><small className="sui-muted">outputs</small><StatusCounts counts={{ pending: status.taskOutputs.pending, transformed: status.taskOutputs.value, failed: status.taskOutputs.failed }} order={['pending', 'transformed', 'failed']} /></div>}
         {status.failures.map((f, i) => <p key={i} className="sui-failure-line">failed{f.task ? ` in task ${f.task}` : ''} · {f.cause}</p>)}
       </Section>
-      <Section title="Invocations" count={status.invocations.length}>{status.invocations.length ? <ul className="sui-plain-list">{status.invocations.slice(0, limit).map(invocationView)}</ul> : <p className="sui-empty-small">Not invoked in this run</p>}<More total={status.invocations.length} shown={limit} /></Section>
-      <Section title="Results" count={results.length}>{results.slice(0, limit).map(r => <ValueView key={r.id} value={resolveValue(values, r.value)} label={resultLabel(r)} />)}{!results.length && <p className="sui-empty-small">No results</p>}<More total={results.length} shown={limit} /></Section>
+      <Section title="Invocations" count={status.invocations.length}>{status.invocations.length ? <PagedContent count={status.invocations.length} pageSize={limit} label="Invocations">{(start, end) => <ul className="sui-plain-list">{status.invocations.slice(start, end).map(invocationView)}</ul>}</PagedContent> : <p className="sui-empty-small">Not invoked in this run</p>}</Section>
+      <Section title="Results" count={results.length}><PagedContent count={results.length} pageSize={limit} label="Results">{(start, end) => results.slice(start, end).map(r => <ValueView key={r.id} valueId={r.value} values={values} label={resultLabel(r)} />)}</PagedContent>{!results.length && <p className="sui-empty-small">No results</p>}</Section>
     </>}
     {onShowRecords && <button className="sui-button sui-wide-button" onClick={onShowRecords}><ListTree size={14} />Show records<span>{recordCount ?? ''}</span></button>}
   </div>;

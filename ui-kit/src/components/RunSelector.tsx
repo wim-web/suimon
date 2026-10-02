@@ -1,17 +1,22 @@
 import { useMemo } from 'react';
 import type { Path, RuntimeState } from '../types';
+import { createRuntimeIndex } from '../lib/runtime-index';
+import type { RuntimeIndex } from '../lib/runtime-index';
 import { pathKey, runLabel, runTree, samePath } from '../lib/status';
 import { StatusBadge } from './StatusBadge';
 
 export interface RunSelectorProps {
   state: RuntimeState;
+  /** Shared index of the supplied immutable state snapshot. */
+  runtimeIndex?: RuntimeIndex;
   /** The selected run; [] is the root run. */
   run?: Path | null;
   onSelectRun: (path: Path) => void;
 }
 /** The root run and the child runs of sub-workflow calls, nested under the run that called them. */
-export function RunSelector({ state, run, onSelectRun }: RunSelectorProps) {
-  const nodes = useMemo(() => runTree(state), [state]);
+export function RunSelector({ state, runtimeIndex, run, onSelectRun }: RunSelectorProps) {
+  const index = useMemo(() => runtimeIndex ?? createRuntimeIndex(state), [runtimeIndex, state]);
+  const nodes = useMemo(() => runTree(state, index), [state, index]);
   return <div className="sui-run-list" aria-label="Runs">
     {nodes.map(node => {
       const selected = !!run && samePath(run, node.run.path);

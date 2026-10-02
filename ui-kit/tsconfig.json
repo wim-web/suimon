@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "*.config.ts"]
+  "include": ["src", "tests", "bench", "browser", "*.config.ts"]
 }

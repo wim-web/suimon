@@ -7,6 +7,8 @@ export { findWorkflow, findPlacement, renderValueType, isEntry, isEndpoint, inco
 export type { Kind, IndexedConnection } from './lib/definition';
 export { layoutWorkflow, placementHeight, NODE_WIDTH } from './lib/layout';
 export type { Point, LayoutNode, LayoutEdge, WorkflowLayout } from './lib/layout';
+export { createRuntimeIndex } from './lib/runtime-index';
+export type { RuntimeIndex } from './lib/runtime-index';
 export { samePath, pathKey, findRun, findInvocation, findExecution, runOwner, childRuns, runTree, runLabel, runOverlay, armOutcome, taskOutputValue, taskOutputState, resultSource, invocationResults } from './lib/status';
 export type { RunOwner, RunNode, PlacementPhase, PlacementStatus, ConnectionStatus, RunOverlay, ResultSource, TaskOutputState } from './lib/status';
 export { recordTransitions, recordValues, opValues, recordRelation, relationLabel, filterTransitions } from './lib/records';
