@@ -2,6 +2,7 @@ import './styles.css';
 
 export * from './types';
 export { parseDefinition, parseState, parseRecords, parseRecordLog } from './lib/parse';
+export { RUNTIME_LIMITS } from './lib/runtime-limits';
 export type { RecordOptions } from './lib/parse';
 export { findWorkflow, findPlacement, renderValueType, isEntry, isEndpoint, incoming, outgoing, calledWorkflows, bodyLabel, deriveKinds } from './lib/definition';
 export type { Kind, IndexedConnection } from './lib/definition';
