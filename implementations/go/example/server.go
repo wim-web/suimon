@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -19,7 +21,7 @@ import (
 //	GET  /api/scenarios            the scenarios with their definitions and default inputs
 //	POST /api/runs                 {"scenario": id, "input": value?, "unitMs": u} starts a run whose
 //	                               unit of simulated I/O is u milliseconds (minUnit to maxUnit);
-//	                               returns {"id": ...}
+//	                               returns {"id": ...}, or 429 when active-run capacity is full
 //	GET  /api/runs/{id}?after=n    the progress, with the record lines from n on
 //	GET  /api/runs/{id}/events     the same progress as server-sent events, until the run is done
 //	GET  /api/runs/{id}/report     the report of a finished run (409 while it runs)
@@ -27,20 +29,29 @@ import (
 //
 // Runs are kept in memory; the oldest finished runs are dropped beyond maxRuns.
 
-const maxRuns = 50
+const (
+	maxRuns       = 50
+	maxActiveRuns = 8
+	maxClientRuns = 4 // enough for the UI to compare two scenarios at once
+	maxRunTime    = time.Minute
+)
 
 type server struct {
 	ctx       context.Context
 	scenarios []*scenario
+	runTime   time.Duration
 
-	mu    sync.Mutex
-	next  int
-	runs  map[string]*run
-	order []string
+	mu      sync.Mutex
+	next    int
+	runs    map[string]*run
+	order   []string
+	active  int
+	clients map[string]int // active reservations only; protected by mu
 }
 
 func newServer(ctx context.Context, scenarios []*scenario) *server {
-	return &server{ctx: ctx, scenarios: scenarios, runs: map[string]*run{}}
+	return &server{ctx: ctx, scenarios: scenarios, runTime: maxRunTime,
+		runs: map[string]*run{}, clients: map[string]int{}}
 }
 
 func (s *server) handler(assets fs.FS) http.Handler {
@@ -97,12 +108,22 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 	if sc.Input == nil {
 		input = nil
 	}
-	s.mu.Lock()
-	s.next++
-	id := "r" + strconv.Itoa(s.next)
-	s.mu.Unlock()
-	run, err := startRun(s.ctx, id, sc, input, time.Duration(req.UnitMs)*time.Millisecond)
+	if s.ctx.Err() != nil {
+		http.Error(w, "the playground is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	client := clientIP(r.RemoteAddr)
+	id, ok := s.reserve(client)
+	if !ok {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many active runs; try again after a run finishes", http.StatusTooManyRequests)
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, s.runTime)
+	run, err := startRun(ctx, id, sc, input, time.Duration(req.UnitMs)*time.Millisecond)
 	if err != nil {
+		cancel()
+		s.release(client)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -111,7 +132,51 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 	s.order = append(s.order, id)
 	s.evict()
 	s.mu.Unlock()
+	go func() {
+		// A cancellation only requests shutdown. Keep the slot until execution and reporting finish.
+		run.wait()
+		cancel()
+		s.release(client)
+	}()
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+
+// reserve counts starts in progress too. There is no pending queue: overload is rejected before
+// allocating an execution, journal, timer, or waiter.
+func (s *server) reserve(client string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active >= maxActiveRuns || s.clients[client] >= maxClientRuns {
+		return "", false
+	}
+	s.active++
+	s.clients[client]++
+	s.next++
+	return "r" + strconv.Itoa(s.next), true
+}
+
+func (s *server) release(client string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	s.clients[client]--
+	if s.clients[client] == 0 {
+		delete(s.clients, client)
+	}
+}
+
+// Use the transport peer, never client-supplied forwarding headers. Requests without a peer
+// (the Wasm bridge) share one bucket; IPv4-mapped IPv6 addresses share the IPv4 bucket.
+func clientIP(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return ""
+	}
+	return ip.Unmap().String()
 }
 
 // evict drops the oldest finished runs beyond maxRuns.

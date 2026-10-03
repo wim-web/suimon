@@ -37,4 +37,6 @@ go -C implementations/go run ./example -ui
 
 [http://127.0.0.1:8080](http://127.0.0.1:8080) を開きます。オプションは `go -C implementations/go run ./example -h` で確認できます。
 
+このサーバーは信頼できるローカル利用向けです。過負荷時に待機リクエストを蓄積しないよう、実行枠が埋まったら開始を拒否します。ループバック以外へ公開する場合は、認証・認可・レート制限を行うプロキシと、プロセスまたはコンテナの CPU・メモリ上限を設けてください。接続元 IP ごとの制限では、同じプロキシや NAT を使う利用者は実行枠を共有します。
+
 [workflow構成](definitions/) / [関数と登録](scenarios.go) / [API](server.go) / [UI](ui/src/)
