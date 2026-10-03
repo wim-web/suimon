@@ -77,7 +77,8 @@ func FuncNoInput[Out any](id string, f func(ctx context.Context) (Out, error)) B
 
 // Stream binds a function that takes an input and yields values (Stream, §4.1). The engine calls
 // f once per invocation and reads the returned sequence one element at a time, never two at once,
-// and without waiting for downstream work (§4.1.1): each element is accepted when it is yielded.
+// and without waiting for downstream work (§4.1.1), within the host's Limits. Exceeding a host
+// limit cancels the workflow; it does not wait for downstream capacity to become available.
 // An element with a non-nil error fails the call, and the elements accepted before it stay. When
 // ctx is cancelled the sequence must end, even while an element is being produced; elements after
 // that are not accepted. The value returned with an error is ignored, and a nil sequence is empty.

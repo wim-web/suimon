@@ -5,7 +5,8 @@ import { createRuntimeIndex } from '../lib/runtime-index';
 import type { RuntimeIndex } from '../lib/runtime-index';
 import { filterTransitions, recordRelation, relationLabel } from '../lib/records';
 import type { RecordFilter, RecordRelation } from '../lib/records';
-import { pathKey, runLabel, runTree } from '../lib/status';
+import { pathKey, runLabel } from '../lib/status';
+import { InvalidRuntimeState, useRunTree } from './RuntimeRuns';
 import { VirtualRecordList } from './VirtualRecordList';
 
 export interface RecordPanelProps {
@@ -32,17 +33,19 @@ export function relationsOf(transitions: readonly Transition[], definition: Defi
 }
 
 /** Execution records in order, each op marked committed or uncommitted, filterable by run and placement. */
-export function RecordPanel({ transitions, definition, tail = '', state, runtimeIndex, relations: supplied, selectedSeq, filter: controlled, onFilterChange, onSelectRecord, onClose }: RecordPanelProps) {
+export function RecordPanel({ transitions, definition, tail = '', state: suppliedState, runtimeIndex, relations: supplied, selectedSeq, filter: controlled, onFilterChange, onSelectRecord, onClose }: RecordPanelProps) {
+  const { nodes: runs, invalid } = useRunTree(suppliedState);
+  const state = invalid ? undefined : suppliedState;
   const index = useMemo(() => runtimeIndex ?? (state ? createRuntimeIndex(state) : undefined), [runtimeIndex, state]);
   const [local, setLocal] = useState<RecordFilter>({});
   const filter = controlled ?? local;
   const change = (next: RecordFilter) => { setLocal(next); onFilterChange?.(next); };
   const relations = useMemo(() => supplied ?? relationsOf(transitions, definition, state, index), [supplied, transitions, definition, state, index]);
-  const runs = useMemo(() => state ? runTree(state, index) : [], [state, index]);
   const labels = useMemo(() => new Map(runs.map(node => [pathKey(node.run.path), runLabel(node)])), [runs]);
   const visible = useMemo(() => filterTransitions(transitions, relations, filter), [transitions, relations, filter]);
   const uncommitted = useMemo(() => transitions.filter(t => !t.committed).length, [transitions]);
   const runValue = filter.run ? pathKey(filter.run) : '';
+  if (invalid) return <InvalidRuntimeState />;
   return <section className="sui-record-panel" aria-label="Execution records">
     <div className="sui-record-header"><span><ListTree size={14} />Execution records <b>{transitions.length}</b>{uncommitted > 0 && <em className="sui-tone-warning">{uncommitted} uncommitted</em>}{tail && <em className="sui-tone-warning">partial last line</em>}</span>
       <div className="sui-record-actions">

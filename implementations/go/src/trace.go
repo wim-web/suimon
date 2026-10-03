@@ -1010,3 +1010,44 @@ func (r *ownedRecorder) recordWith(op Op, payload func(value string) (string, er
 	}
 	return records, nil
 }
+
+// recordAdmitted prepares the record before the rule changes state. A refusal leaves the
+// recorder usable, so the runtime can record cancellation using its reserved shutdown budget.
+func (r *ownedRecorder) recordAdmitted(op Op, payload func(string) (string, error), admit func([]Record) error) ([]Record, error) {
+	var records []Record
+	_, err := r.machine.applyAdmitted(op, func(aggregate *string) error {
+		value := aggregate
+		switch op := op.(type) {
+		case OpStart:
+			value = op.Input
+		case OpReturned:
+			value = &op.Value
+		case OpYielded:
+			value = &op.Value
+		case OpDeliver:
+			value = op.Value
+		case OpTaskInput:
+			value = op.Value
+		case OpTaskOutput:
+			value = &op.Value
+		}
+		var values []Payload
+		if value != nil && !r.known[*value] {
+			data, err := payload(*value)
+			if err != nil {
+				return err
+			}
+			values = []Payload{{Value: *value, Payload: data}}
+		}
+		records = []Record{{Seq: r.seq, Op: op, Values: values}, {Seq: r.seq + 1, Commit: true}}
+		return admit(records)
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.seq += len(records)
+	for _, v := range records[0].Values {
+		r.known[v.Value] = true
+	}
+	return records, nil
+}

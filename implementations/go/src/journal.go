@@ -109,9 +109,16 @@ func (j *FileJournal) Sync() error { return j.file.Sync() }
 
 // Contents reads the whole file.
 func (j *FileJournal) Contents() ([]byte, error) {
+	return j.contentsWithin(1<<63 - 1)
+}
+
+func (j *FileJournal) contentsWithin(limit int64) ([]byte, error) {
 	info, err := j.file.Stat()
 	if err != nil {
 		return nil, err
+	}
+	if info.Size() > limit {
+		return nil, quota("journal bytes", limit)
 	}
 	data := make([]byte, info.Size())
 	n, err := j.file.ReadAt(data, 0)
