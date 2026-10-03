@@ -1,202 +1,320 @@
 package suimon
 
-import "fmt"
-
-// Resource limits are shared with Suimon/Limits.lean. They apply before semantic
-// validation, including to definitions constructed in code. Work is a conservative
-// estimate of the reference validator's list scans, independent of semantic fuel.
-const (
-	MaxDefinitionBytes               = 1 << 20
-	MaxDefinitionJSONDepth           = 64
-	MaxDefinitionTypeDepth           = 32
-	MaxDefinitionNameBytes           = 256
-	MaxDefinitionWorkflows           = 128
-	MaxDefinitionDeclarations        = 1024
-	MaxDefinitionPlacements          = 1024
-	MaxDefinitionConnections         = 4096
-	MaxDefinitionTasks               = 1024
-	MaxDefinitionArms                = 1024
-	MaxValidationWork         uint64 = 1_000_000_000
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
 )
 
-func resourceLimit(name string, count, limit uint64) error {
-	if count > limit {
-		return fmt.Errorf("definition: %s limit exceeded (max %d)", name, limit)
+// ErrQuotaExceeded identifies a host resource limit. For a running workflow, Wait returns
+// both this error and a report after recording cancellation and waiting for callbacks to exit.
+// The journal preserves the cancellation, not the host's error or limit configuration.
+var ErrQuotaExceeded = errors.New("suimon: resource quota exceeded")
+
+// Limits bounds one Engine and each Start/Resume on it. Zero fields use DefaultLimits;
+// negative fields are invalid. Limits also apply without a journal and to unchecked engines.
+// MaxWorkflows times the per-workflow budgets bounds aggregate engine work. Completed reports
+// and journals retained by the host, callback allocations, and JSON encoding scratch space
+// belong to the host; callbacks and synchronous transforms must return cooperatively.
+type Limits struct {
+	MaxWorkflows      int64         // Concurrent Start/Resume executions on this engine, including shutdown.
+	MaxCalls          int64         // Active calls per workflow, including streams and cancelling calls.
+	MaxExecutions     int64         // Total concurrency executions per workflow, including completed ones.
+	MaxTasks          int64         // Total task entries across those executions, including waiting tasks.
+	MaxStreamElements int64         // Accepted yields across all streams in a workflow.
+	MaxPayloadBytes   int64         // Retained JSON and queued callback output bytes, including lists.
+	MaxRecords        int64         // Journal lines after the header (operations and commits), even in memory.
+	MaxJournalBytes   int64         // Encoded journal bytes including the header and shutdown records.
+	MaxDuration       time.Duration // Time per Start/Resume session, excluding cooperative shutdown.
+}
+
+// DefaultLimits returns finite host defaults. Increase selected fields with WithLimits for
+// workloads that need larger budgets. Record and byte budgets reserve room for cancellation,
+// termination of every admitted call, and conclusion before accepting new work.
+func DefaultLimits() Limits {
+	return Limits{MaxWorkflows: 16, MaxCalls: 256, MaxExecutions: 4096, MaxTasks: 16384,
+		MaxStreamElements: 10000, MaxPayloadBytes: 64 << 20, MaxRecords: 250000,
+		MaxJournalBytes: 128 << 20, MaxDuration: 5 * time.Minute}
+}
+
+// EngineOption configures the host's execution policy, outside the workflow definition.
+type EngineOption func(*Limits)
+
+// WithLimits sets engine limits; each zero field keeps its default.
+func WithLimits(l Limits) EngineOption { return func(dst *Limits) { *dst = l } }
+
+func engineLimits(opts []EngineOption) (Limits, error) {
+	l := DefaultLimits()
+	for _, opt := range opts {
+		opt(&l)
 	}
+	defaults := DefaultLimits()
+	fields := []struct {
+		p     *int64
+		value int64
+	}{
+		{&l.MaxWorkflows, defaults.MaxWorkflows}, {&l.MaxCalls, defaults.MaxCalls},
+		{&l.MaxExecutions, defaults.MaxExecutions}, {&l.MaxTasks, defaults.MaxTasks},
+		{&l.MaxStreamElements, defaults.MaxStreamElements}, {&l.MaxPayloadBytes, defaults.MaxPayloadBytes},
+		{&l.MaxRecords, defaults.MaxRecords}, {&l.MaxJournalBytes, defaults.MaxJournalBytes},
+	}
+	for _, f := range fields {
+		if *f.p < 0 {
+			return Limits{}, errors.New("suimon: resource limits must be positive")
+		}
+		if *f.p == 0 {
+			*f.p = f.value
+		}
+	}
+	if l.MaxDuration < 0 {
+		return Limits{}, errors.New("suimon: MaxDuration must be positive")
+	}
+	if l.MaxDuration == 0 {
+		l.MaxDuration = defaults.MaxDuration
+	}
+	return l, nil
+}
+
+func quota(resource string, limit int64) error {
+	return fmt.Errorf("%w: %s (limit %d)", ErrQuotaExceeded, resource, limit)
+}
+
+func (e *Engine) acquire() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.active >= e.limits.MaxWorkflows {
+		return quota("workflows", e.limits.MaxWorkflows)
+	}
+	e.active++
 	return nil
 }
 
-// checkDefinitionText runs before recursive JSON parsing. Brackets in strings,
-// including escaped quotes and backslashes, do not count toward nesting.
-func checkDefinitionText(data []byte) error {
-	return checkDefinitionTextWithin(data, MaxDefinitionBytes, MaxDefinitionJSONDepth)
+func (e *Engine) release() { e.mu.Lock(); e.active--; e.mu.Unlock() }
+
+// shutdownBytes uses the largest sequence numbers, so the reserve remains sufficient even
+// when normal work crosses a decimal digit boundary. All shutdown operations carry no values.
+func shutdownBytes(op Op) int64 {
+	const largest = int(^uint(0) >> 1)
+	return int64(len(EncodeRecord(Record{Seq: largest, Op: op})) +
+		len(EncodeRecord(Record{Seq: largest, Commit: true})) + 2)
 }
 
-func checkDefinitionTextWithin(data []byte, bytes, nesting uint64) error {
-	if err := resourceLimit("byte", uint64(len(data)), bytes); err != nil {
-		return err
+func (d *driver) stopQuota(err error) {
+	if d.quotaErr == nil {
+		d.quotaErr = err
 	}
-	depth := 0
-	quoted, escaped := false, false
-	for _, c := range data {
-		if quoted {
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				quoted = false
-			}
-		} else {
-			switch c {
-			case '"':
-				quoted = true
-			case '{', '[':
-				depth++
-				if err := resourceLimit("JSON depth", uint64(depth), nesting); err != nil {
-					return err
-				}
-			case '}', ']':
-				if depth > 0 {
-					depth--
-				}
-			}
+	d.cancel()
+}
+
+// reservePayload is also called by callback goroutines before enqueueing an output. A full
+// budget ends the producer; waiting here could deadlock streams and downstream calls.
+func (d *driver) reservePayload(size int64) bool {
+	for {
+		used := d.payloadUsage.Load()
+		if size > d.limits.MaxPayloadBytes-used {
+			return false
+		}
+		if d.payloadUsage.CompareAndSwap(used, used+size) {
+			return true
 		}
 	}
+}
+
+// payloadForAdmission builds a list only within the remaining payload budget. Nothing is
+// retained until the operation and all resource checks succeed.
+func (d *driver) payloadForAdmission(id string) (string, error) {
+	if p, ok := d.payloads[id]; ok {
+		return p, nil
+	}
+	remaining := d.limits.MaxPayloadBytes - d.payloadBytes
+	if d.pending != nil && d.pending.Value == id {
+		if int64(len(d.pending.Payload)) > remaining {
+			return "", quota("payload bytes", d.limits.MaxPayloadBytes)
+		}
+		return d.pending.Payload, nil
+	}
+	parts, ok := DecodeIdentity(id)
+	if !ok || len(parts) == 0 || parts[0] != "list" || Identity(parts...) != id {
+		return "", fmt.Errorf("suimon: no payload for value %q", id)
+	}
+	var b strings.Builder
+	if remaining < 2 {
+		return "", quota("payload bytes", d.limits.MaxPayloadBytes)
+	}
+	b.WriteByte('[')
+	for i, element := range parts[1:] {
+		p, err := d.payloadForAdmission(element)
+		if err != nil {
+			return "", err
+		}
+		extra := int64(len(p))
+		if i > 0 {
+			extra++
+		}
+		if extra > remaining-int64(b.Len())-1 {
+			return "", quota("payload bytes", d.limits.MaxPayloadBytes)
+		}
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(p)
+	}
+	b.WriteByte(']')
+	return b.String(), nil
+}
+
+// growth is called after Step has checked the operation and before it changes state.
+func (d *driver) growth(op Op) (call string, executions, tasks int64) {
+	switch op := op.(type) {
+	case OpInvoke:
+		pl := d.planOf(op.Run).placements[op.Placement].placement
+		switch c := pl.Control.(type) {
+		case CallControl:
+			if !c.Body.Workflow {
+				call = keyInvocation(op.Run, op.Placement, op.Trigger)
+			}
+		case BranchControl:
+			call = keyInvocation(op.Run, op.Placement, op.Trigger)
+		case ConcurrencyControl:
+			executions, tasks = 1, int64(len(c.Spec.Tasks))
+		}
+	case OpBeginTask:
+		e, _ := d.v.execution(op.Execution)
+		spec, _ := d.v.taskSpec(d.definition, e, op.Task)
+		if !spec.Body.Workflow {
+			call = taskID(op.Execution, op.Task)
+		}
+	}
+	return
+}
+
+func endingCall(op Op) string {
+	switch op := op.(type) {
+	case OpReturned:
+		return op.Call
+	case OpJudged:
+		return op.Call
+	case OpEnded:
+		return op.Call
+	case OpFailed:
+		return op.Call
+	case OpLost:
+		return op.Call
+	case OpTerminated:
+		return op.Call
+	}
+	return ""
+}
+
+func (d *driver) admit(records []Record) error {
+	op := records[0].Op
+	call, executions, tasks := d.growth(op)
+	calls, reserve := d.activeCalls, d.terminationBytes
+	if call != "" {
+		calls++
+		reserve += shutdownBytes(OpTerminated{Call: call})
+	}
+	if id := endingCall(op); id != "" {
+		calls--
+		reserve -= shutdownBytes(OpTerminated{Call: id})
+	}
+	var payloadBytes int64
+	for _, v := range records[0].Values {
+		payloadBytes += int64(len(v.Payload))
+	}
+	var encoded []byte
+	for _, r := range records {
+		encoded = append(encoded, EncodeRecord(r)...)
+		encoded = append(encoded, '\n')
+	}
+	_, cancel := op.(OpCancel)
+	_, conclude := op.(OpConclude)
+	if d.running() && !cancel && !conclude {
+		checks := []struct {
+			name               string
+			used, added, limit int64
+		}{
+			{"active calls", calls, 0, d.limits.MaxCalls},
+			{"executions", d.executions, executions, d.limits.MaxExecutions},
+			{"tasks", d.taskCount, tasks, d.limits.MaxTasks},
+			{"payload bytes", d.payloadBytes, payloadBytes, d.limits.MaxPayloadBytes},
+			{"records", int64(d.recorder.seq - 1), 2 + 4 + 2*calls, d.limits.MaxRecords},
+			{"journal bytes", d.journalBytes, int64(len(encoded)) + reserve + d.shutdownBytes, d.limits.MaxJournalBytes},
+		}
+		if _, yielded := op.(OpYielded); yielded {
+			checks = append(checks, struct {
+				name               string
+				used, added, limit int64
+			}{"stream elements", d.elements, 1, d.limits.MaxStreamElements})
+		}
+		for _, c := range checks {
+			if c.used > c.limit || c.added > c.limit-c.used {
+				return quota(c.name, c.limit)
+			}
+		}
+		if !time.Now().Before(d.deadline) {
+			return quota("duration nanoseconds", int64(d.limits.MaxDuration))
+		}
+	}
+	if !d.reservePayload(payloadBytes) {
+		return quota("payload bytes", d.limits.MaxPayloadBytes)
+	}
+	d.activeCalls, d.terminationBytes = calls, reserve
+	d.executions += executions
+	d.taskCount += tasks
+	if _, yielded := op.(OpYielded); yielded {
+		d.elements++
+	}
+	d.payloadBytes += payloadBytes
+	d.journalBytes += int64(len(encoded))
+	d.prepared = encoded
 	return nil
 }
 
-func (p *Definition) checkResources() error {
-	var bad error
-	check := func(name string, n, max uint64) {
-		if bad == nil {
-			bad = resourceLimit(name, n, max)
+// restoreBudget counts committed work too: restarting a workflow does not replenish its
+// production, memory or journal allowance. Elapsed time starts a new session on Resume.
+func (d *driver) restoreBudget(length int, values []Payload) error {
+	d.journalBytes = int64(length)
+	d.executions = int64(len(d.state.Executions))
+	for _, e := range d.state.Executions {
+		d.taskCount += int64(len(e.Tasks))
+	}
+	for _, c := range d.state.Calls {
+		d.elements += int64(c.Yields)
+		if !c.Status.ended() {
+			d.activeCalls++
+			d.terminationBytes += shutdownBytes(OpTerminated{Call: c.ID})
 		}
 	}
-	text := func(s string) { check("name byte", uint64(len(s)), MaxDefinitionNameBytes) }
-	typ := func(t ValueType) {
-		if t.Lists > MaxDefinitionTypeDepth {
-			check("type depth", uint64(t.Lists), MaxDefinitionTypeDepth)
-		}
-		text(t.Name)
+	for _, v := range values {
+		d.payloadBytes += int64(len(v.Payload))
 	}
-	optType := func(t *ValueType) {
-		if t != nil {
-			typ(*t)
-		}
+	d.payloadUsage.Store(d.payloadBytes)
+	checks := []struct {
+		name        string
+		used, limit int64
+	}{
+		{"active calls", d.activeCalls, d.limits.MaxCalls},
+		{"executions", d.executions, d.limits.MaxExecutions},
+		{"tasks", d.taskCount, d.limits.MaxTasks},
+		{"stream elements", d.elements, d.limits.MaxStreamElements},
+		{"payload bytes", d.payloadBytes, d.limits.MaxPayloadBytes},
+		{"records", int64(d.recorder.seq - 1), d.limits.MaxRecords},
+		{"journal bytes", d.journalBytes, d.limits.MaxJournalBytes},
 	}
-	body := func(b Body) {
-		text(b.ID)
-		text(b.Output)
-	}
-	ref := func(r TransformRef) {
-		text(r.ID)
-	}
-	wc := uint64(len(p.Workflows))
-	decls := uint64(len(p.Functions)) + uint64(len(p.Judges)) + uint64(len(p.Transforms))
-	check("workflow", wc, MaxDefinitionWorkflows)
-	check("declaration", decls, MaxDefinitionDeclarations)
-	if bad != nil {
-		return bad
-	}
-	text(p.Main)
-	for _, f := range p.Functions {
-		text(f.ID)
-		optType(f.Input)
-		typ(f.Output.Type)
-	}
-	for _, j := range p.Judges {
-		text(j.ID)
-		typ(j.Input)
-	}
-	for _, t := range p.Transforms {
-		text(t.ID)
-		typ(t.Input)
-		typ(t.Output)
-	}
-	if bad != nil {
-		return bad
-	}
-	var placements, connections, tasks, arms uint64
-	for _, w := range p.Workflows {
-		placements += uint64(len(w.Placements))
-		connections += uint64(len(w.Connections))
-		check("placement", placements, MaxDefinitionPlacements)
-		check("connection", connections, MaxDefinitionConnections)
-		if bad != nil {
-			return bad
-		}
-		text(w.ID)
-		if w.Input != nil {
-			typ(w.Input.Type)
-			text(w.Input.Placement)
-		}
-		for _, pl := range w.Placements {
-			text(pl.Name)
-			switch c := pl.Control.(type) {
-			case CallControl:
-				body(c.Body)
-			case BranchControl:
-				text(c.Judge)
-				arms += uint64(len(c.Arms))
-				check("arm", arms, MaxDefinitionArms)
-				if bad != nil {
-					return bad
-				}
-				for _, a := range c.Arms {
-					text(a)
-				}
-			case WaitStreamControl:
-				typ(c.Element)
-			case MergeControl:
-				typ(c.Element)
-			case ConcurrencyControl:
-				optType(c.Spec.Input)
-				typ(c.Spec.Element)
-				tasks += uint64(len(c.Spec.Tasks))
-				check("task", tasks, MaxDefinitionTasks)
-				if bad != nil {
-					return bad
-				}
-				for _, t := range c.Spec.Tasks {
-					text(t.Name)
-					body(t.Body)
-					if t.Input != nil {
-						ref(*t.Input)
-					}
-					if t.Output != nil {
-						text(*t.Output)
-					}
-				}
-			}
-			if bad != nil {
-				return bad
-			}
-		}
-		for _, c := range w.Connections {
-			text(c.Source)
-			text(c.Target)
-			ref(c.Transform)
-			if c.Arm != nil {
-				text(*c.Arm)
-			}
-		}
-		if bad != nil {
-			return bad
+	if !d.state.Status.Terminal() {
+		checks[5].used += 4 + 2*d.activeCalls
+		checks[6].used += d.shutdownBytes + d.terminationBytes
+		if d.state.Cancelled {
+			checks[5].used -= 2
+			checks[6].used -= shutdownBytes(OpCancel{})
 		}
 	}
-	// All operands have been capped above; these products fit in uint64 even
-	// on a 32-bit host. Include repeated kind queries, Kahn scans, nested body
-	// lookups, duplicate checks and branch scans in the Lean reference.
-	d := decls + wc
-	n := d + placements + connections + tasks + arms + 1
-	work := n*n + wc*wc*wc*(placements+tasks+1)
-	for _, w := range p.Workflows {
-		v, e := uint64(len(w.Placements)), uint64(len(w.Connections))
-		work += (2*v + 2*e + 1) * (v + 1) * (v*(v+e+d+1) + e)
-		work += v * v * (v*e + v)
-		work += (e + tasks + v + 1) * (wc + 1) * (wc + placements + d + 1)
+	for _, c := range checks {
+		if c.used > c.limit {
+			return quota(c.name, c.limit)
+		}
 	}
-	work += arms * connections
-	return resourceLimit("validation work", work, MaxValidationWork)
+	return nil
 }

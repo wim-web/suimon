@@ -48,7 +48,8 @@ type PanicError struct {
 func (e *PanicError) Error() string { return fmt.Sprintf("suimon: panic in user code: %v", e.Value) }
 
 // Engine runs one definition with the implementations of a registry. It is safe for concurrent use:
-// each Start or Resume drives its own execution. The definition must not change after NewEngine.
+// each Start or Resume drives its own execution. DefaultLimits bounds aggregate resource use;
+// WithLimits configures the host budgets. The definition must not change after NewEngine.
 //
 // The timeouts of the definition are durations here (§11.5): a call fails when it runs longer than
 // callMs from the start of its user code (a task's wait for a slot is not counted), and a Stream
@@ -67,6 +68,9 @@ type Engine struct {
 	// header is the first line of the engine's journals, with its newline: the definition, and
 	// whether NewEngine validated it.
 	header string
+	limits Limits
+	mu     sync.Mutex
+	active int64
 }
 
 // NewEngine checks resource limits, validates p (run, §14), and returns an engine for it.
@@ -78,7 +82,7 @@ type Engine struct {
 // header, it must have the same canonical form. Only a definition built in code can fail this, such
 // as one with an empty id, which ParseDefinition rejects. The header of its journals records that
 // the execution was started with validation.
-func NewEngine(p *Definition, r *Registry) (*Engine, error) {
+func NewEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error) {
 	if err := p.checkResources(); err != nil {
 		return nil, err
 	}
@@ -89,7 +93,7 @@ func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 	if err := p.validate(d); err != nil {
 		return nil, err
 	}
-	return newEngine(p, d, r, true)
+	return newEngine(p, d, r, true, opts)
 }
 
 // NewUncheckedEngine skips structural validation (runUnchecked, §14) but enforces resource limits.
@@ -99,18 +103,22 @@ func NewEngine(p *Definition, r *Registry) (*Engine, error) {
 // Validate does first: the journal could not record such a definition faithfully. The header of its
 // journals records that the execution was started without validation, so that they are checked and
 // resumed without it (§12.1).
-func NewUncheckedEngine(p *Definition, r *Registry) (*Engine, error) {
+func NewUncheckedEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error) {
 	if err := p.checkResources(); err != nil {
 		return nil, err
 	}
 	if err := p.representable(); err != nil {
 		return nil, err
 	}
-	return newEngine(p, p.derive(), r, false)
+	return newEngine(p, p.derive(), r, false, opts)
 }
 
 // newEngine is NewUncheckedEngine with d, a derivation of p, and the flag its journals record.
-func newEngine(p *Definition, d *derivation, r *Registry, validated bool) (*Engine, error) {
+func newEngine(p *Definition, d *derivation, r *Registry, validated bool, opts []EngineOption) (*Engine, error) {
+	limits, err := engineLimits(opts)
+	if err != nil {
+		return nil, err
+	}
 	header, err := recordedHeader(p, validated)
 	if err != nil {
 		return nil, err
@@ -118,7 +126,7 @@ func newEngine(p *Definition, d *derivation, r *Registry, validated bool) (*Engi
 	if err := r.check(p); err != nil {
 		return nil, err
 	}
-	return &Engine{definition: p, derivation: d, registry: r, plans: newPlans(p, d), header: header + "\n"}, nil
+	return &Engine{definition: p, derivation: d, registry: r, plans: newPlans(p, d), header: header + "\n", limits: limits}, nil
 }
 
 // recordedHeader is the header of the journals of p, after checking that p survives recording: the
@@ -154,6 +162,15 @@ func WithJournal(j Journal) StartOption { return func(o *startOptions) { o.journ
 // code carry the values of ctx but are cancelled by the engine alone: on a timeout, a stop, or a
 // cancellation, after it is recorded.
 func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*WorkflowExecution, error) {
+	if err := e.acquire(); err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			e.release()
+		}
+	}()
 	var o startOptions
 	for _, opt := range opts {
 		opt(&o)
@@ -161,6 +178,7 @@ func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*Wo
 	d := e.newDriver(ctx, newOwnedRecorder(e.definition, e.derivation, &State{}, nil, 0), o.journal)
 	// The header is appended with the records of the start, before the first sync.
 	d.buffer = append(d.buffer, e.header...)
+	d.journalBytes = int64(len(e.header))
 	op := OpStart{}
 	if main, ok := e.definition.workflow(e.definition.Main); ok && main.Input != nil {
 		data, err := encodeValue(input)
@@ -168,7 +186,7 @@ func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*Wo
 			return nil, err
 		}
 		id := inputValue()
-		d.payloads[id] = string(data)
+		d.pending = &Payload{Value: id, Payload: string(data)}
 		op.Input = &id
 	} else if input != nil {
 		return nil, errors.New("suimon: the main workflow takes no input")
@@ -181,6 +199,7 @@ func (e *Engine) Start(ctx context.Context, input any, opts ...StartOption) (*Wo
 	}); err != nil {
 		return nil, err
 	}
+	started = true
 	go d.run(ctx)
 	return d.exec, nil
 }
@@ -214,11 +233,31 @@ func (e *Engine) Run(ctx context.Context, input any, opts ...StartOption) (*Repo
 //
 // No other execution may write the journal meanwhile: a FileJournal enforces this with a lock on its
 // file, which may not work on a network file system. A journal whose execution has concluded gives
-// an execution that is already done. ctx is used as in Start.
+// an execution that is already done. ctx is used as in Start. Committed work counts against
+// the engine limits; a journal that already exceeds them is rejected without modification.
+// FileJournal bounds the read before allocating; custom journals must bound their Contents read.
 func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExecution, error) {
-	data, err := j.Contents()
+	if err := e.acquire(); err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			e.release()
+		}
+	}()
+	var data []byte
+	var err error
+	if bounded, ok := j.(interface{ contentsWithin(int64) ([]byte, error) }); ok {
+		data, err = bounded.contentsWithin(e.limits.MaxJournalBytes)
+	} else {
+		data, err = j.Contents()
+	}
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(data)) > e.limits.MaxJournalBytes {
+		return nil, quota("journal bytes", e.limits.MaxJournalBytes)
 	}
 	c, err := Check(string(data), sameDefinition(e.definition))
 	var invalid *invalidDefinitionError
@@ -233,11 +272,6 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 		// Nothing is committed, or the journal was cut inside its header.
 		return nil, ErrNotStarted
 	}
-	if c.Length < len(data) {
-		if err := j.Truncate(int64(c.Length)); err != nil {
-			return nil, err
-		}
-	}
 	var running []string
 	for _, call := range c.State.Calls {
 		if !call.Status.ended() {
@@ -246,13 +280,26 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 	}
 	// The driver takes the state of c over and changes it in place.
 	d := e.newDriver(ctx, newOwnedRecorder(e.definition, e.derivation, c.State, c.Values, c.Committed), j)
+	if err := d.restoreBudget(c.Length, c.Values); err != nil {
+		return nil, err
+	}
+	if c.Length < len(data) {
+		if err := j.Truncate(int64(c.Length)); err != nil {
+			return nil, err
+		}
+	}
+
 	for _, v := range c.Values {
 		d.payloads[v.Value] = v.Payload
 	}
 	d.errs = make([]error, len(c.State.Failures))
 	if err := d.begin(func() error {
 		for _, call := range running {
-			if err := d.apply(OpLost{Call: call}, ErrLost); err != nil {
+			if err := d.apply(OpLost{Call: call}, ErrLost); errors.Is(err, ErrQuotaExceeded) {
+				if err := d.apply(OpLost{Call: call}, ErrLost); err != nil {
+					return err
+				}
+			} else if err != nil {
 				return fmt.Errorf("suimon: reporting call %s lost: %w", call, err)
 			}
 		}
@@ -260,6 +307,7 @@ func (e *Engine) Resume(ctx context.Context, j RecoverableJournal) (*WorkflowExe
 	}); err != nil {
 		return nil, err
 	}
+	started = true
 	go d.run(ctx)
 	return d.exec, nil
 }
@@ -284,9 +332,10 @@ func (x *WorkflowExecution) Cancel() { x.cancelOnce.Do(func() { close(x.cancel) 
 func (x *WorkflowExecution) Done() <-chan struct{} { return x.done }
 
 // Wait waits for the execution to end and returns its report. The report tells how the workflow
-// ended, failures included; the error is not nil only when the engine could not continue: when
-// the journal failed (the record written so far can still be resumed), or ErrStuck. The report is
-// nil then.
+// ended, failures included. A journal failure or ErrStuck returns an error and a nil report;
+// the recorded work can still be resumed. A host resource limit returns both a terminal report
+// and ErrQuotaExceeded.
+// Replay retains the cancellation but does not reconstruct the host error.
 func (x *WorkflowExecution) Wait() (*Report, error) {
 	<-x.done
 	return x.report, x.err

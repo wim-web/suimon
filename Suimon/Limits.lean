@@ -2,7 +2,7 @@ import Suimon.Workflow
 
 /-! Resource admission for executable validation. The structural specification and its
 proofs remain independent of these operational ceilings. Keep these values and the
-work estimate in sync with implementations/go/src/limits.go. -/
+work estimate in sync with implementations/go/src/definition_limits.go. -/
 
 namespace Suimon.Limits
 

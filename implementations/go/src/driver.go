@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
-	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -150,6 +150,18 @@ func (cr *callRuntime) stopElementTimer() {
 type internalError struct{ err error }
 
 type driver struct {
+	engine   *Engine
+	limits   Limits
+	deadline time.Time
+	quotaErr error
+	pending  *Payload
+	prepared []byte
+
+	activeCalls, executions, taskCount, elements                int64
+	payloadBytes, journalBytes, terminationBytes, shutdownBytes int64
+	// payloadUsage includes retained values and callback outputs waiting for the driver.
+	payloadUsage atomic.Int64
+
 	definition *Definition
 	registry   *Registry
 	plans      map[string]*workflowPlan
@@ -192,7 +204,9 @@ type driver struct {
 
 func (e *Engine) newDriver(ctx context.Context, r *ownedRecorder, j Journal) *driver {
 	d := &driver{
-		definition: e.definition, registry: e.registry, plans: e.plans, recorder: r, journal: j,
+		engine: e, limits: e.limits, deadline: time.Now().Add(e.limits.MaxDuration),
+		shutdownBytes: shutdownBytes(OpCancel{}) + shutdownBytes(OpConclude{}),
+		definition:    e.definition, registry: e.registry, plans: e.plans, recorder: r, journal: j,
 		state: r.machine.s, v: r.machine.view,
 		exec:     &WorkflowExecution{cancel: make(chan struct{}), done: make(chan struct{})},
 		base:     context.WithoutCancel(ctx),
@@ -229,11 +243,12 @@ func recovered(p any) error {
 // run drives the execution until it ends.
 func (d *driver) run(ctx context.Context) {
 	report, err := d.loop(ctx)
-	if err != nil {
+	if err != nil && report == nil {
 		d.abandon()
 	}
 	d.exec.report, d.exec.err = report, err
 	close(d.exited)
+	d.engine.release()
 	close(d.exec.done)
 }
 
@@ -244,6 +259,9 @@ func (d *driver) loop(ctx context.Context) (report *Report, err error) {
 		}
 	}()
 	cancel, done := d.exec.cancel, ctx.Done()
+	timer := time.NewTimer(time.Until(d.deadline))
+	defer timer.Stop()
+	deadline := timer.C
 	for {
 		for d.pass() {
 		}
@@ -251,7 +269,7 @@ func (d *driver) loop(ctx context.Context) (report *Report, err error) {
 			return nil, err
 		}
 		if d.state.Status.Terminal() {
-			return d.report(), nil
+			return d.report(), d.quotaErr
 		}
 		if len(d.local) > 0 {
 			ev := d.local[0]
@@ -267,6 +285,11 @@ func (d *driver) loop(ctx context.Context) (report *Report, err error) {
 		case ev := <-d.events:
 			d.handle(ev)
 			d.drain()
+		case <-deadline:
+			deadline = nil
+			if d.running() {
+				d.stopQuota(quota("duration nanoseconds", int64(d.limits.MaxDuration)))
+			}
 		case <-cancel:
 			cancel = nil
 			d.cancel()
@@ -322,17 +345,25 @@ func (d *driver) send(ev event) {
 func (d *driver) apply(op Op, cause error) error {
 	s := d.state
 	before := counts{s.Status, len(s.Runs), len(s.Calls), len(s.Executions)}
-	records, err := d.recorder.recordWith(op, func(v string) (string, error) { return d.payloadOf(v), nil })
+	records, err := d.recorder.recordAdmitted(op, d.payloadForAdmission, d.admit)
+	d.pending = nil
 	if err != nil {
+		if errors.Is(err, ErrQuotaExceeded) {
+			if d.state.Started {
+				d.stopQuota(err)
+			}
+			return err
+		}
 		var rejection *Rejection
 		if errors.As(err, &rejection) {
 			return err
 		}
 		panic(internalError{fmt.Errorf("suimon: recording %s: %w", EncodeOp(op), err)})
 	}
-	for _, r := range records {
-		d.buffer = append(d.buffer, EncodeRecord(r)...)
-		d.buffer = append(d.buffer, '\n')
+	d.buffer = append(d.buffer, d.prepared...)
+	d.prepared = nil
+	for _, v := range records[0].Values {
+		d.payloads[v.Value] = v.Payload
 	}
 	d.observe(before, op, cause)
 	return nil
@@ -348,24 +379,11 @@ type counts struct {
 // payloadOf is the JSON of a value: a payload the driver holds, or the JSON array of the payloads
 // of a list the model built, in the order of the list identity.
 func (d *driver) payloadOf(v string) string {
-	if p, ok := d.payloads[v]; ok {
-		return p
+	p, err := d.payloadForAdmission(v)
+	if err != nil {
+		panic(internalError{err})
 	}
-	parts, ok := DecodeIdentity(v)
-	if !ok || len(parts) == 0 || parts[0] != "list" || Identity(parts...) != v {
-		panic(internalError{fmt.Errorf("suimon: no payload for value %q", v)})
-	}
-	var b strings.Builder
-	b.WriteByte('[')
-	for i, element := range parts[1:] {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(d.payloadOf(element))
-	}
-	b.WriteByte(']')
-	d.payloads[v] = b.String()
-	return b.String()
+	return p
 }
 
 // observe follows up an accepted operation: it notes the new runs, calls and executions, and
@@ -486,6 +504,9 @@ func duration(ms uint64) time.Duration {
 // handle turns a report of user code into an operation (§10.2): a value is accepted only while
 // its call runs; after the call was cancelled, only the end of its user code counts.
 func (d *driver) handle(ev event) {
+	// Release the event's reservation before admission transfers it to retained values.
+	// The event being processed is temporary encoding/decoding scratch space.
+	d.payloadUsage.Add(-int64(len(ev.value)))
 	c := *d.call(ev.call)
 	cr := d.calls[ev.call]
 	switch ev.kind {
@@ -508,7 +529,7 @@ func (d *driver) handle(ev event) {
 		}
 		cr.stopElementTimer()
 		id := yieldValue(c.ID, c.Yields)
-		d.payloads[id] = string(ev.value)
+		d.pending = &Payload{Value: id, Payload: string(ev.value)}
 		d.apply(OpYielded{Call: c.ID, Value: id}, nil)
 		return
 	}
@@ -527,10 +548,15 @@ func (d *driver) handle(ev event) {
 	}
 	var op Op
 	var cause error
+	if errors.Is(ev.err, ErrQuotaExceeded) {
+		d.stopQuota(ev.err)
+		d.apply(OpTerminated{Call: c.ID}, nil)
+		return
+	}
 	switch ev.kind {
 	case evReturned:
 		id := returnValue(c.ID)
-		d.payloads[id] = string(ev.value)
+		d.pending = &Payload{Value: id, Payload: string(ev.value)}
 		op = OpReturned{Call: c.ID, Value: id}
 	case evJudged:
 		if arms := d.armsOf(&c); slices.Contains(arms, ev.arm) {
@@ -547,6 +573,10 @@ func (d *driver) handle(ev event) {
 		op, cause = OpFailed{Call: c.ID}, errors.New("suimon: the user code ended without a result")
 	}
 	if err := d.apply(op, cause); err != nil {
+		if errors.Is(err, ErrQuotaExceeded) {
+			d.apply(OpTerminated{Call: c.ID}, nil)
+			return
+		}
 		// A report that does not fit the call, such as a Single result of a Stream call, fails it.
 		if err := d.apply(OpFailed{Call: c.ID}, fmt.Errorf("suimon: unexpected report of the user code: %w", err)); err != nil {
 			panic(internalError{fmt.Errorf("suimon: call %s cannot end: %w", c.ID, err)})
@@ -557,8 +587,8 @@ func (d *driver) handle(ev event) {
 func (d *driver) armsOf(c *Call) []string { return armsOf(d.definition, d.v, c) }
 
 // pass tries the engine's operations once and reports whether one was accepted. The driver
-// repeats passes until none is, so every operation Step accepts is applied (§12: nothing waits
-// for slow downstream work).
+// repeats passes until none is, applying accepted operations within the host budget (§12:
+// nothing waits for slow downstream work). Exhausting the budget cancels the workflow.
 func (d *driver) pass() bool {
 	progress := false
 	try := func(op Op, cause error) {
@@ -663,7 +693,7 @@ func (d *driver) deliveries(try func(Op, error)) {
 				continue
 			}
 			id := transformValue(index, r.ID)
-			d.payloads[id] = out
+			d.pending = &Payload{Value: id, Payload: out}
 			try(OpDeliver{Run: r.Run, Connection: index, Source: r.ID, Value: &id}, nil)
 		}
 	}
@@ -725,7 +755,7 @@ func (d *driver) tasks(try func(Op, error)) {
 				continue
 			}
 			id := taskInputValue(e.ID, t.Name)
-			d.payloads[id] = out
+			d.pending = &Payload{Value: id, Payload: out}
 			try(OpTaskInput{Execution: e.ID, Task: t.Name, Value: &id}, nil)
 		}
 	}
@@ -751,7 +781,7 @@ func (d *driver) tasks(try func(Op, error)) {
 			continue
 		}
 		id := taskOutputValue(r.Execution, r.Task, r.Index)
-		d.payloads[id] = out
+		d.pending = &Payload{Value: id, Payload: out}
 		try(OpTaskOutput{Execution: r.Execution, Task: r.Task, Index: r.Index, Value: id}, nil)
 	}
 	for k, n := 0, len(d.openExecutions); k < n; k++ {

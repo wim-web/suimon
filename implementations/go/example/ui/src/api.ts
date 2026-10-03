@@ -4,7 +4,17 @@ import { wasmRequest } from './wasm';
 
 /* Both transports use the handlers in implementations/go/example/server.go. */
 const inBrowser = import.meta.env.MODE === 'wasm';
-const request = (path: string, init?: RequestInit) => inBrowser ? wasmRequest(path, init) : fetch(path, init);
+async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  if (inBrowser) return wasmRequest(path, init);
+  const headers = new Headers(init.headers);
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')) {
+    // Fetch for each write so an open page also works after the local server restarts.
+    const csrf = object(await json(await fetch('/api/csrf', { mode: 'same-origin', cache: 'no-store', signal: init.signal })), 'csrf');
+    headers.set('X-CSRF-Token', string(csrf.token, 'csrf.token'));
+    headers.set('Content-Type', 'application/json');
+  }
+  return fetch(path, { ...init, headers, mode: 'same-origin' });
+}
 
 export interface Scenario { id: string; title: string; description: string; definition: Definition; input?: JsonValue; compare?: string }
 export interface Span { function: string; detail: string; startMs: number; endMs: number | null; marks: number[]; outcome: 'running' | 'ok' | 'error' | 'cancelled' }

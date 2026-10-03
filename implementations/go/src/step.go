@@ -66,11 +66,26 @@ func newMachine(p *Definition, d *derivation, s *State) *machine {
 // apply applies op in place and returns the values it introduces, in the order of Introduced. A
 // rejected op changes nothing.
 func (m *machine) apply(op Op) ([]string, error) {
-	st := &stepper{view: m.view, p: m.p, d: m.d}
+	return m.applyAdmitted(op, nil)
+}
+
+// applyAdmitted lets the runtime reserve resources after the rule's checks and before its
+// first mutation. The model and checker use apply, without a host admission policy.
+func (m *machine) applyAdmitted(op Op, admit func(*string) error) (introduced []string, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if a, ok := p.(admissionRejected); ok {
+				err = a.err
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	st := &stepper{view: m.view, p: m.p, d: m.d, admit: admit}
 	if err := st.apply(op); err != nil {
 		return nil, err
 	}
-	introduced := st.introduced(m.seen)
+	introduced = st.introduced(m.seen)
 	for _, v := range introduced {
 		m.seen[v] = struct{}{}
 	}
@@ -89,6 +104,21 @@ type stepper struct {
 	owned uint16
 	// mentions are the values of the records the step added or changed, where they are mentioned.
 	mentions []mention
+	admit    func(*string) error
+	// aggregate is the new list value computed by settle or closeExecution.
+	aggregate *string
+}
+
+type admissionRejected struct{ err error }
+
+func (st *stepper) changing() {
+	if st.admit != nil {
+		admit := st.admit
+		st.admit = nil
+		if err := admit(st.aggregate); err != nil {
+			panic(admissionRejected{err})
+		}
+	}
 }
 
 // A mention is a value at its place in the order of State.Values: the list, the position in the
@@ -143,6 +173,7 @@ func (st *stepper) introduced(seen map[string]struct{}) []string {
 
 // own makes the list writable: without an index, it copies the list once per step.
 func own[T any](st *stepper, list int, xs *[]T) {
+	st.changing()
 	if st.ix == nil && st.owned&(1<<list) == 0 {
 		*xs = append(make([]T, 0, len(*xs)+1), *xs...)
 		st.owned |= 1 << list
@@ -366,6 +397,7 @@ func (st *stepper) addSettled(x Settled) {
 
 // stop cancels running calls and leaves waiting tasks unstarted, in one transition (§11.3).
 func (st *stepper) stop() {
+	st.changing()
 	st.s.Status = StatusStopping
 	own(st, listCalls, &st.s.Calls)
 	for i := range st.s.Calls {
@@ -898,6 +930,7 @@ func (st *stepper) start(input *string) error {
 	if err := require((w.Input != nil) == (input != nil), "INPUT_MISMATCH"); err != nil {
 		return err
 	}
+	st.changing()
 	s.Started = true
 	s.Runs = nil
 	st.owned |= 1 << listRuns
@@ -1006,6 +1039,7 @@ func (st *stepper) invoke(path Path, name string, trigger *string) error {
 		if _, dup := st.execution(id); dup {
 			return reject("DUPLICATE_EXECUTION")
 		}
+		st.changing()
 		tasks := make([]TaskState, len(c.Spec.Tasks))
 		for n, task := range c.Spec.Tasks {
 			status := TaskReady
@@ -1519,6 +1553,9 @@ func (st *stepper) settle(path Path, name string) error {
 			return reject("DUPLICATE_RESULT")
 		}
 	}
+	if result != nil {
+		st.aggregate = &result.Value
+	}
 	st.addSettled(settled)
 	if result != nil {
 		st.addResult(*result)
@@ -1593,6 +1630,7 @@ func (st *stepper) closeExecution(eid string) error {
 	if _, dup := st.result(result.ID); dup {
 		return reject("DUPLICATE_RESULT")
 	}
+	st.aggregate = &result.Value
 	st.completeExecution(pos)
 	st.setInvocationStatus(ipos, InvocationSucceeded)
 	st.addResult(result)
@@ -1713,6 +1751,7 @@ func (st *stepper) cancel() error {
 		s.Cancelled = true
 		return nil
 	case StatusStopping:
+		st.changing()
 		s.Cancelled = true
 		return nil
 	}
