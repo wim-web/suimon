@@ -6,8 +6,8 @@ import "fmt"
 // validation, including to definitions constructed in code. Work is a conservative
 // estimate of the reference validator's list scans, independent of semantic fuel.
 const (
-	MaxDefinitionBytes               = 1 << 20
-	MaxDefinitionJSONDepth           = 64
+	MaxDefinitionBytes               = DefaultMaxInputBytes
+	MaxDefinitionJSONDepth           = MaxInputDepth
 	MaxDefinitionTypeDepth           = 32
 	MaxDefinitionNameBytes           = 256
 	MaxDefinitionWorkflows           = 128
@@ -22,46 +22,6 @@ const (
 func resourceLimit(name string, count, limit uint64) error {
 	if count > limit {
 		return fmt.Errorf("definition: %s limit exceeded (max %d)", name, limit)
-	}
-	return nil
-}
-
-// checkDefinitionText runs before recursive JSON parsing. Brackets in strings,
-// including escaped quotes and backslashes, do not count toward nesting.
-func checkDefinitionText(data []byte) error {
-	return checkDefinitionTextWithin(data, MaxDefinitionBytes, MaxDefinitionJSONDepth)
-}
-
-func checkDefinitionTextWithin(data []byte, bytes, nesting uint64) error {
-	if err := resourceLimit("byte", uint64(len(data)), bytes); err != nil {
-		return err
-	}
-	depth := 0
-	quoted, escaped := false, false
-	for _, c := range data {
-		if quoted {
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				quoted = false
-			}
-		} else {
-			switch c {
-			case '"':
-				quoted = true
-			case '{', '[':
-				depth++
-				if err := resourceLimit("JSON depth", uint64(depth), nesting); err != nil {
-					return err
-				}
-			case '}', ']':
-				if depth > 0 {
-					depth--
-				}
-			}
-		}
 	}
 	return nil
 }

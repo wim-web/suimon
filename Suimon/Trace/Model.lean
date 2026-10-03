@@ -250,8 +250,8 @@ def headerOfWire (wire : Wire) : Except String Header := do
     (`Codec.loadUnchecked`), so the record replays against the definition that ran, valid or not; the
     decoder still rejects what the definition file cannot express. `suimon check` reads headers
     with it. --/
-def Header.load (header : Header) : Except String Definition :=
-  if header.validated then Codec.load header.definition else Codec.loadUnchecked header.definition
+def Header.load (header : Header) (limits : InputLimits := {}) : Except String Definition :=
+  if header.validated then Codec.load header.definition limits else Codec.loadUnchecked header.definition limits
 
 /-- The header a recorder writes for an execution of `p`: the canonical form of `p`, and whether the
     execution was started with validation of `p`. --/
@@ -272,7 +272,7 @@ structure Codec where
   decodeHeader : String → Except String Header
 
 /-- Decoding inverts encoding for the records and headers without repeated keys, which are all a
-    recorder writes (`transaction`, `Codec.definitionWire_distinctKeys`), and a line has no newline. --/
+    recorder writes (`transaction`, `Codec.Core.definitionWire_distinctKeys`), and a line has no newline. --/
 structure Codec.Lawful (c : Codec) : Prop where
   decode_encode : ∀ r, r.DistinctKeys → c.decode (c.encode r) = .ok r
   newline_not_mem_encode : ∀ r, '\n' ∉ (c.encode r).toList
@@ -288,8 +288,11 @@ def Codec.ofWire (render : Wire → String) (parse : String → Except String Wi
   decodeHeader line := parse line >>= headerOfWire
 
 /-- The text form of the header and the records: compact JSON with the fields in the order
-    `headerWire` and `recordWire` give them, one per line (`wireCodec_lawful`). --/
-def wireCodec : Codec := .ofWire Wire.render Wire.parse
+    `headerWire` and `recordWire` give them. Limits apply to each complete line. --/
+def wireCodecWithLimits (limits : InputLimits) : Codec :=
+  .ofWire Wire.render (fun text => Wire.parse text limits)
+
+def wireCodec : Codec := wireCodecWithLimits {}
 
 /-! ## Replay -/
 

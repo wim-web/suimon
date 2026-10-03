@@ -16,13 +16,18 @@ import (
 // ParseDefinition decodes JSON within the byte and nesting limits. Semantic
 // validation and structural resource admission are performed by Validate.
 func ParseDefinition(data []byte) (*Definition, error) {
-	if err := checkDefinitionText(data); err != nil {
+	return ParseDefinitionWithLimits(data, InputLimits{})
+}
+
+// ParseDefinitionWithLimits decodes a definition with a caller-selected byte budget.
+func ParseDefinitionWithLimits(data []byte, limits InputLimits) (*Definition, error) {
+	if err := limits.checkSize(len(data)); err != nil {
 		return nil, err
 	}
 	if !utf8.Valid(data) {
 		return nil, errors.New("definition: invalid UTF-8")
 	}
-	json, err := parseLeanJSON(string(data))
+	json, err := parseLeanJSONWithLimits(string(data), limits)
 	if err != nil {
 		return nil, err
 	}
@@ -108,28 +113,33 @@ func list(json ljValue, key, at string) ([]ljValue, error) {
 	return v.items, nil
 }
 
+// Decode iteratively, including for values supplied by an alternate JSON decoder.
 func decodeValueType(json ljValue, at string) (ValueType, error) {
-	switch json.kind {
-	case ljStr:
-		if json.str == "" {
-			return ValueType{}, fmt.Errorf("%s: empty type name", at)
+	var lists int
+	for {
+		switch json.kind {
+		case ljStr:
+			if json.str == "" {
+				return ValueType{}, fmt.Errorf("%s: empty type name", at)
+			}
+			return ValueType{Name: json.str, Lists: lists}, nil
+		case ljObj:
+			if lists == MaxInputDepth {
+				return ValueType{}, fmt.Errorf("input exceeds maximum nesting depth of %d", MaxInputDepth)
+			}
+			if err := strict(json, []string{"list"}, at); err != nil {
+				return ValueType{}, err
+			}
+			element, err := requireField(json, "list", at)
+			if err != nil {
+				return ValueType{}, err
+			}
+			json = element
+			lists++
+		default:
+			return ValueType{}, fmt.Errorf(`%s: a type is a name or {"list": type}`, at)
 		}
-		return Named(json.str), nil
-	case ljObj:
-		if err := strict(json, []string{"list"}, at); err != nil {
-			return ValueType{}, err
-		}
-		element, err := requireField(json, "list", at)
-		if err != nil {
-			return ValueType{}, err
-		}
-		t, err := decodeValueType(element, at)
-		if err != nil {
-			return ValueType{}, err
-		}
-		return ListOf(t), nil
 	}
-	return ValueType{}, fmt.Errorf(`%s: a type is a name or {"list": type}`, at)
 }
 
 func decodeContract(json ljValue, at string) (Contract, error) {

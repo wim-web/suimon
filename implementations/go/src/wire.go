@@ -212,6 +212,13 @@ func (p *wireParser) fail(msg string, at int) error { return &wireError{msg: msg
 // are accepted, numbers must be natural numbers, no object may repeat a key, and nothing may follow
 // the value.
 func parseWire(s string) (wire, error) {
+	return parseWireWithLimits(s, InputLimits{})
+}
+
+func parseWireWithLimits(s string, limits InputLimits) (wire, error) {
+	if err := limits.check(s); err != nil {
+		return wire{}, err
+	}
 	p := &wireParser{cs: []rune(s)}
 	w, rest, err := p.value(len(p.cs)+1, 0)
 	if err != nil {
@@ -232,8 +239,8 @@ func (p *wireParser) skipWs(i int) int {
 	return i
 }
 
-// value reads one value after optional whitespace. The fuel bounds the call depth; the input
-// length plus one is enough, because every call consumes input or is followed by one that does.
+// value reads one value after optional whitespace. Fuel proves termination and also counts
+// siblings; the independent preflight in parseWireWithLimits bounds nesting before recursion.
 func (p *wireParser) value(fuel, i int) (wire, int, error) {
 	if fuel == 0 {
 		return wire{}, 0, p.fail("input too deeply nested", i)

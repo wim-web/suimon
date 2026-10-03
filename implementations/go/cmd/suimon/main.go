@@ -175,17 +175,17 @@ func nonUTF8(path string) error {
 
 // readDefinition reads, decodes and validates a definition.
 func readDefinition(path string) (*suimon.Definition, error) {
-	f, err := os.Open(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, leanIOError(path, err)
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, suimon.MaxDefinitionBytes+1))
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, suimon.DefaultMaxInputBytes+1))
 	if err != nil {
 		return nil, leanIOError(path, err)
 	}
-	if len(data) > suimon.MaxDefinitionBytes {
-		return nil, fmt.Errorf("definition: byte limit exceeded (max %d)", suimon.MaxDefinitionBytes)
+	if len(data) > suimon.DefaultMaxInputBytes {
+		return nil, fmt.Errorf("input exceeds maximum size of %d bytes", suimon.DefaultMaxInputBytes)
 	}
 	if !utf8.Valid(data) {
 		return nil, nonUTF8(path)

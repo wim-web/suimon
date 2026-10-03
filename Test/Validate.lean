@@ -201,11 +201,11 @@ def resourceLimits : IO Unit := do
   ensure ((Limits.type atDepth).isOk) "type at depth limit rejected"
   ensure ((Limits.text (String.ofList (List.replicate Limits.maxNameBytes 'x'))).isOk)
     "name at byte limit rejected"
-  ensure ((Limits.checkText (String.ofList (List.replicate Limits.maxBytes ' '))).isOk)
+  ensure ((({} : InputLimits).check (String.ofList (List.replicate Limits.maxBytes ' '))).isOk)
     "text at byte limit rejected"
-  parseRejected "byte limit" s!"definition: byte limit exceeded (max {Limits.maxBytes})"
+  parseRejected "byte limit" s!"input exceeds maximum size of {Limits.maxBytes} bytes"
     (String.ofList (List.replicate (Limits.maxBytes + 1) ' '))
-  parseRejected "JSON nesting limit" s!"definition: JSON depth limit exceeded (max {Limits.maxJSONDepth})"
+  parseRejected "JSON nesting limit" s!"input exceeds maximum nesting depth of {Limits.maxJSONDepth}"
     (String.ofList (List.replicate (Limits.maxJSONDepth + 1) '['))
 
 def run : IO Unit := do

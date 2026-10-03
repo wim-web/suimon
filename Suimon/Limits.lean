@@ -1,4 +1,5 @@
 import Suimon.Workflow
+import Suimon.InputLimits
 
 /-! Resource admission for executable validation. The structural specification and its
 proofs remain independent of these operational ceilings. Keep these values and the
@@ -6,8 +7,8 @@ work estimate in sync with implementations/go/src/definition_limits.go. -/
 
 namespace Suimon.Limits
 
-def maxBytes : Nat := 1048576
-def maxJSONDepth : Nat := 64
+def maxBytes : Nat := defaultMaxInputBytes
+def maxJSONDepth : Nat := maxInputDepth
 def maxTypeDepth : Nat := 32
 def maxNameBytes : Nat := 256
 def maxWorkflows : Nat := 128
@@ -44,25 +45,6 @@ def body : Body → Except String Unit
 def ref : TransformRef → Except String Unit
   | .discard => pure ()
   | .declared id => text id
-
-/-- Run before recursive JSON parsing; quoted brackets and escaped quotes do not nest. --/
-def checkTextWithin (bytes nesting : Nat) (s : String) : Except String Unit := do
-  check "byte" s.utf8ByteSize bytes
-  let mut depth := 0
-  let mut quoted := false
-  let mut escaped := false
-  for c in s do
-    if quoted then
-      if escaped then escaped := false
-      else if c == '\\' then escaped := true
-      else if c == '"' then quoted := false
-    else if c == '"' then quoted := true
-    else if c == '{' || c == '[' then
-      depth := depth + 1
-      check "JSON depth" depth nesting
-    else if c == '}' || c == ']' then depth := depth - 1
-
-def checkText (s : String) : Except String Unit := checkTextWithin maxBytes maxJSONDepth s
 
 end Suimon.Limits
 

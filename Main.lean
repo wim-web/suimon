@@ -31,21 +31,23 @@ private def natOption (opts : List (String × String)) (key : String) (default :
     | some n => pure n
     | none => throw s!"{key} expects a natural number"
 
+/-- Read at most the default input budget plus one byte, including for non-regular files. --/
+private def readDefinitionText (path : String) : IO String := do
+  let handle ← IO.FS.Handle.mk path .read
+  let mut bytes := ByteArray.empty
+  repeat
+    let chunk ← handle.read (min 65536 (defaultMaxInputBytes + 1 - bytes.size)).toUSize
+    if chunk.isEmpty then break
+    bytes := bytes ++ chunk
+    IO.ofExcept (({} : InputLimits).checkSize bytes.size)
+  match String.fromUTF8? bytes with
+  | some text => return text
+  | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
+
 /-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated
     (`Codec.loadJson`). --/
 private def readDefinition (path : String) : IO Definition := do
-  let bytes ← IO.FS.withFile path .read fun h => do
-    let mut bytes := ByteArray.empty
-    repeat
-      let chunk ← h.read (USize.ofNat (Limits.maxBytes + 1 - bytes.size))
-      bytes := bytes ++ chunk
-      if chunk.isEmpty || bytes.size > Limits.maxBytes then break
-    return bytes
-  IO.ofExcept (Limits.check "byte" bytes.size Limits.maxBytes)
-  let text ← match String.fromUTF8? bytes with
-    | some text => pure text
-    | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
-  match Codec.parse text >>= Codec.loadJson with
+  match Codec.parse (← readDefinitionText path) >>= Codec.loadJson with
   | .ok p => pure p
   | .error e => throw (IO.userError e)
 
@@ -94,13 +96,7 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
     maxValues := ← IO.ofExcept (natOption opts "--max-values" defaults.maxValues)
     maxWork := ← IO.ofExcept (natOption opts "--max-work" defaults.maxWork) }
   let (text, torn) ← readRecord trace limits.maxBytes
-  -- Bound the header before the recursive wire parser reads its definition.
-  let line := (text.takeWhile (· != '\n')).toString
-  if line.utf8ByteSize < text.utf8ByteSize then
-    IO.ofExcept ((Limits.checkTextWithin (Limits.maxBytes + 64) (Limits.maxJSONDepth + 1) line).mapError
-      (s!"line 1: {·}"))
   let load := fun (header : Trace.Header) => do
-    Limits.checkText (Wire.render header.definition)
     let p ← Trace.Header.load header
     p.checkResources
     pure p

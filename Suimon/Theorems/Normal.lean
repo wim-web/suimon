@@ -3,8 +3,8 @@ import Suimon.Theorems.StaticLemmas
 
 /-! The validator decides `Definition.Normal`: a definition it accepts is normal (§15.2), and it accepts
     every normal definition. The canonical form that a record header holds for an accepted definition
-    loads back to it (`Codec.load_definitionWire`), and no other accepted definition has the same
-    canonical form (`Codec.definitionWire_inj`). -/
+    loads back to it (`Codec.Core.load_definitionWire`), and no other accepted definition has the same
+    canonical form (`Codec.Core.definitionWire_inj`). -/
 
 namespace Suimon
 
@@ -491,7 +491,7 @@ theorem validatePlacement_of_normal {w : Workflow} {pl : Placement} (h : pl.Norm
     have htypes : ∀ at_, validateTypes at_ [e] = .ok () := fun _ => validateTypes_eq_ok.2 (by simpa using htype)
     simp only [Control.body?, Option.bind] at htimeout
     simp [htypes, hne, Validate.check, bind, Except.bind, pure, Except.pure, hkind, htimeout]
-    rw [Codec.forIn_ok_of_yield]
+    rw [Codec.Core.forIn_ok_of_yield]
     intro c hc
     simp [hsingle c hc]
   | concurrency c =>
@@ -503,7 +503,7 @@ theorem validatePlacement_of_normal {w : Workflow} {pl : Placement} (h : pl.Norm
     simp only [Control.body?, Option.bind] at htimeout
     complete_simp
     refine ⟨htypes, by simpa using hlimit, by simpa using hmax, by simpa using hne, unique_of_nodup hu,
-      List.any_eq_true.2 hany, (), Codec.forIn_ok_of_yield fun task ht => ?_, c.input, rfl, ?_⟩
+      List.any_eq_true.2 hany, (), Codec.Core.forIn_ok_of_yield fun task ht => ?_, c.input, rfl, ?_⟩
     · simp [validateTask_of_normal (htasks task ht), bind, Except.bind, pure, Except.pure]
     · split
       · rename_i hsome
@@ -525,7 +525,7 @@ theorem validateWorkflow_of_normal {w : Workflow} (h : w.Normal p) : p.validateW
   unfold validateWorkflow
   complete_simp
   refine ⟨by simpa using h.id, by simpa using h.nonempty, by simpa using h.names, unique_of_nodup h.distinct, (),
-    Codec.forIn_ok_of_yield fun c hc => by simp [hconnections c hc, bind, Except.bind, pure, Except.pure],
+    Codec.Core.forIn_ok_of_yield fun c hc => by simp [hconnections c hc, bind, Except.bind, pure, Except.pure],
     hacyclic, ?_⟩
   have hloops : (∃ a, (forIn w.placements PUnit.unit fun (pl : Placement) _ => do
       p.validatePlacement w pl
@@ -535,7 +535,7 @@ theorem validateWorkflow_of_normal {w : Workflow} (h : w.Normal p) : p.validateW
             s!"workflow {w.id}: endpoint {pl.name} must be Single"
           pure (ForInStep.yield PUnit.unit)
         else pure (ForInStep.yield PUnit.unit)) = .ok a := by
-    refine ⟨⟨(), Codec.forIn_ok_of_yield fun pl hpl => ?_⟩, (), Codec.forIn_ok_of_yield fun pl hpl => ?_⟩
+    refine ⟨⟨(), Codec.Core.forIn_ok_of_yield fun pl hpl => ?_⟩, (), Codec.Core.forIn_ok_of_yield fun pl hpl => ?_⟩
     · simp [hplacements pl hpl, bind, Except.bind, pure, Except.pure]
     · split
       · rename_i hend
@@ -566,9 +566,9 @@ theorem validateStructural_of_normal (h : p.Normal) : p.validateStructural = .ok
   unfold validateStructural
   complete_simp
   refine ⟨unique_of_nodup h.functionIds, unique_of_nodup h.judgeIds, unique_of_nodup h.transformIds, hdiscard,
-    unique_of_nodup h.workflowIds, h.main, hcalls, (), Codec.forIn_ok_of_yield fun f hf => ?_,
-    (), Codec.forIn_ok_of_yield fun j hj => ?_, (), Codec.forIn_ok_of_yield fun t ht => ?_,
-    (), Codec.forIn_ok_of_yield fun w hw => ?_⟩
+    unique_of_nodup h.workflowIds, h.main, hcalls, (), Codec.Core.forIn_ok_of_yield fun f hf => ?_,
+    (), Codec.Core.forIn_ok_of_yield fun j hj => ?_, (), Codec.Core.forIn_ok_of_yield fun t ht => ?_,
+    (), Codec.Core.forIn_ok_of_yield fun w hw => ?_⟩
   · have : validateFunction f = .ok () := by
       unfold validateFunction
       complete_simp
@@ -598,7 +598,7 @@ end Definition
 
 end Suimon
 
-namespace Suimon.Codec
+namespace Suimon.Codec.Core
 
 /-- The canonical form of a definition that validation accepts decodes back to it. --/
 theorem definition_definitionWire_of_validate {p : Definition} (h : p.validate = .ok ()) :
@@ -635,4 +635,4 @@ theorem load_eq_of_definitionWire {p q : Definition} (hp : p.validate = .ok ()) 
     (hw : definitionWire q = definitionWire p) : q = p :=
   (definitionWire_inj (validate_of_load h) hp).1 hw
 
-end Suimon.Codec
+end Suimon.Codec.Core
