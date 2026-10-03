@@ -34,7 +34,18 @@ private def natOption (opts : List (String × String)) (key : String) (default :
 /-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated
     (`Codec.loadJson`). --/
 private def readDefinition (path : String) : IO Definition := do
-  match Codec.parse (← IO.FS.readFile path) >>= Codec.loadJson with
+  let bytes ← IO.FS.withFile path .read fun h => do
+    let mut bytes := ByteArray.empty
+    repeat
+      let chunk ← h.read (USize.ofNat (Limits.maxBytes + 1 - bytes.size))
+      bytes := bytes ++ chunk
+      if chunk.isEmpty || bytes.size > Limits.maxBytes then break
+    return bytes
+  IO.ofExcept (Limits.check "byte" bytes.size Limits.maxBytes)
+  let text ← match String.fromUTF8? bytes with
+    | some text => pure text
+    | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
+  match Codec.parse text >>= Codec.loadJson with
   | .ok p => pure p
   | .error e => throw (IO.userError e)
 
@@ -83,7 +94,17 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
     maxValues := ← IO.ofExcept (natOption opts "--max-values" defaults.maxValues)
     maxWork := ← IO.ofExcept (natOption opts "--max-work" defaults.maxWork) }
   let (text, torn) ← readRecord trace limits.maxBytes
-  match (Trace.check Trace.wireCodec Trace.Header.load text limits).map fun c =>
+  -- Bound the header before the recursive wire parser reads its definition.
+  let line := (text.takeWhile (· != '\n')).toString
+  if line.utf8ByteSize < text.utf8ByteSize then
+    IO.ofExcept ((Limits.checkTextWithin (Limits.maxBytes + 64) (Limits.maxJSONDepth + 1) line).mapError
+      (s!"line 1: {·}"))
+  let load := fun (header : Trace.Header) => do
+    Limits.checkText (Wire.render header.definition)
+    let p ← Trace.Header.load header
+    p.checkResources
+    pure p
+  match (Trace.check Trace.wireCodec load text limits).map fun c =>
       { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.

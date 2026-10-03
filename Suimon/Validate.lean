@@ -1,4 +1,5 @@
 import Suimon.Derive
+import Suimon.Limits
 
 namespace Suimon
 
@@ -187,9 +188,9 @@ def validateTransform (t : TransformDecl) : Except String Unit := do
   validateTypes s!"transform {t.id}" [t.input, t.output]
 
 /-- Structural checks of §14, and what the definition file can express: identifiers and type names
-    are not empty, and numbers are at most `maxNat`. `run` executes only definitions accepted here,
-    which are exactly those that satisfy `Definition.Normal` (`Definition.validate_eq_ok_iff`). --/
-def validate (p : Definition) : Except String Unit := do
+    are not empty, and numbers are at most `maxNat`. These are the conditions of `Definition.Normal`;
+    executable validation also checks resource admission before evaluating them. --/
+def validateStructural (p : Definition) : Except String Unit := do
   check (unique (p.functions.map (·.id))) "duplicate function id"
   check (unique (p.judges.map (·.id))) "duplicate judge id"
   check (unique (p.transforms.map (·.id))) "duplicate transform id"
@@ -202,6 +203,19 @@ def validate (p : Definition) : Except String Unit := do
   for j in p.judges do validateJudge j
   for t in p.transforms do validateTransform t
   for w in p.workflows do p.validateWorkflow w
+
+/-- Operational validation admits the definition before running the structural checks. --/
+def validate (p : Definition) : Except String Unit := do
+  p.checkResources
+  p.validateStructural
+
+theorem validate_eq_ok {p : Definition} : p.validate = .ok () ↔
+    p.checkResources = .ok () ∧ p.validateStructural = .ok () := by
+  simp only [validate]
+  cases p.checkResources <;> simp [bind, Except.bind]
+
+theorem structural_of_validate {p : Definition} (h : p.validate = .ok ()) : p.validateStructural = .ok () :=
+  (validate_eq_ok.mp h).2
 
 end Definition
 

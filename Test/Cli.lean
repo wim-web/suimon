@@ -155,6 +155,17 @@ def run : IO Unit := do
     let result ← cli ["check", path.toString, "--max-bytes", toString generated.stdout.utf8ByteSize] 1
     Validate.ensure (Validate.contains result.stderr "record-byte limit exceeded") "unbounded torn tail"
     let _ ← cli ["check", path.toString, "--max-bytes", toString (generated.stdout.utf8ByteSize + 1)] 0
+  -- Replay allowances do not bypass definition admission, including unchecked headers.
+  for validated in [false, true] do
+    let text := Trace.wireCodec.encodeHeader (.of (Validate.mergeChain 150) validated) ++ "\n"
+    IO.FS.withTempFile fun handle path => do
+      handle.putStr text
+      handle.flush
+      let result ← cli ["check", path.toString, "--max-bytes", toString text.utf8ByteSize,
+        "--max-records", "0", "--max-values", "0", "--max-work", "1000000000"] 1
+      Validate.ensure (result.stderr ==
+          "line 1: definition: validation work limit exceeded (max 1000000000)\n")
+        s!"definition limit with replay allowances: {result.stderr}"
   let complete := String.join ((generated.stdout.splitOn "\n").take 5 |>.map (· ++ "\n"))
   IO.FS.withTempFile fun handle path => do
     handle.write (complete.toUTF8 ++ ByteArray.mk #[0xe3, 0x81])
