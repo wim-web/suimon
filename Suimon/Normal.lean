@@ -1,7 +1,7 @@
 import Suimon.Derive
 
-/-! The normality conditions of a definition (§14), stated without the validator, which accepts exactly
-    the normal definitions (`Definition.validate_eq_ok_iff`). They use the derivations of
+/-! The normality conditions of a definition (§14), independent of operational resource limits.
+    Validation accepts normal definitions within those limits (`Definition.validate_eq_ok_iff`). These use the derivations of
     `Suimon/Derive.lean` for the types of results and inputs and for the Single/Stream kinds. -/
 
 namespace Suimon

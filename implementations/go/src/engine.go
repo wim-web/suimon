@@ -73,18 +73,19 @@ type Engine struct {
 	active int64
 }
 
-// NewEngine validates p (run, §14) and returns an engine for it. Every function, judge and
-// transform the definition uses must be bound in r with the declared shape: a Single or a Stream
+// NewEngine checks resource limits, validates p (run, §14), and returns an engine for it.
+// Every function, judge and transform must be bound in r with the declared shape: a Single or a Stream
 // function, with or without input. The Go types of the values are not checked against the type
 // names of the definition; that they match is up to the caller (§4.4).
 //
 // Journals start with the definition (§12.1), so it must survive recording: read back from the
-// header, it must have the same canonical form. Only a definition built in code can fail this, such
-// as one with an empty id, which ParseDefinition rejects. The header of its journals records that
-// the execution was started with validation.
-// Headers and record lines must fit the default InputLimits used by Check and Resume.
-// These parser limits apply in addition to the execution budgets set by WithLimits.
+// header, it must have the same canonical form. The complete header and subsequent record lines
+// must fit the default InputLimits used by Check and Resume, in addition to WithLimits budgets.
+// The header records that the execution was started with validation.
 func NewEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error) {
+	if err := p.checkResources(); err != nil {
+		return nil, err
+	}
 	if err := p.representable(); err != nil {
 		return nil, err
 	}
@@ -95,14 +96,17 @@ func NewEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error
 	return newEngine(p, d, r, true, opts)
 }
 
-// NewUncheckedEngine is NewEngine without validating the definition (runUnchecked, §14). The engine
-// still records, applies the policies, timeouts and limits, and checks each operation with Step,
+// NewUncheckedEngine skips structural validation (runUnchecked, §14) but enforces resource limits.
+// The engine records, applies policies, timeouts and limits, and checks each operation with Step,
 // but for a definition that validation would reject nothing guarantees that the execution ends: Wait
 // may return ErrStuck. It still refuses what a Go definition can hold but a Lean one cannot, as
 // Validate does first: the journal could not record such a definition faithfully. The header of its
 // journals records that the execution was started without validation, so that they are checked and
 // resumed without it (§12.1).
 func NewUncheckedEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error) {
+	if err := p.checkResources(); err != nil {
+		return nil, err
+	}
 	if err := p.representable(); err != nil {
 		return nil, err
 	}

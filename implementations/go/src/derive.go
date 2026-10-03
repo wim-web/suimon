@@ -1,7 +1,5 @@
 package suimon
 
-import "maps"
-
 // Derivations of Suimon/Derive.lean. An Option (Option T) of Lean is returned as a pointer that is
 // nil for "no input" together with a flag that is false for "unknown".
 
@@ -179,64 +177,91 @@ type kindTable map[string]Kind
 // kindRow is what kind? reads of one placement name: the placement it names, which is the first of
 // that name, and its input connections.
 type kindRow struct {
-	name      string
 	placement *Placement
 	incoming  []Connection
 }
 
-// kindsAt derives the table at fuel level by level, as kind? recurses on the fuel: the table at fuel
-// 0 is empty, and the table at fuel n+1 holds the kind of each placement derived from the kinds of
-// its sources in the table at fuel n. kind? itself derives the kind of a source once for each path
-// to it, which takes time exponential in the length of a chain of Merges with two connections from
-// each to the next; a level derives each kind once. The tables are those of kind? at every fuel, so
-// the fuel bounds the connection paths of a cyclic workflow as it does in Lean. Each table is
-// derived from the one below alone, so once a table equals the one below it, it stays the same at
-// every higher fuel.
+// kindsAt resolves each placement once, when every source kind is available.
+// A derived kind never changes with more fuel: only an unknown kind can become
+// known. The longest source path records the first fuel at which it is known.
+// Cycles and missing sources remain unresolved, exactly as in kind?.
 func (w *Workflow) kindsAt(p *Definition, fuel int) kindTable {
-	rows := make([]kindRow, 0, len(w.Placements))
-	seen := make(map[string]bool, len(w.Placements))
+	table := kindTable{}
+	if fuel <= 0 {
+		return table
+	}
+	rows := make(map[string]kindRow, len(w.Placements))
+	pending := make(map[string]int, len(w.Placements))
+	outgoing := make(map[string][]string, len(w.Placements))
+	level := make(map[string]int, len(w.Placements))
 	for i := range w.Placements {
 		pl := &w.Placements[i]
-		if !seen[pl.Name] {
-			// A later placement of the name reads what the first one reads.
-			seen[pl.Name] = true
-			rows = append(rows, kindRow{name: pl.Name, placement: pl})
+		if _, exists := rows[pl.Name]; !exists {
+			rows[pl.Name] = kindRow{placement: pl}
+			level[pl.Name] = 1
 		}
 	}
-	incoming := make(map[string][]Connection, len(rows))
 	for _, c := range w.Connections {
-		incoming[c.Target] = append(incoming[c.Target], c)
+		if row, exists := rows[c.Target]; exists {
+			row.incoming = append(row.incoming, c)
+			rows[c.Target] = row
+			pending[c.Target]++
+			outgoing[c.Source] = append(outgoing[c.Source], c.Target)
+		}
 	}
-	for i := range rows {
-		rows[i].incoming = incoming[rows[i].name]
+	functions := make(map[string]Kind, len(p.Functions))
+	workflows := make(map[string]bool, len(p.Workflows))
+	for _, f := range p.Functions {
+		if _, exists := functions[f.ID]; !exists {
+			functions[f.ID] = f.Output.Kind
+		}
 	}
-	table := kindTable{}
-	for range fuel {
-		next := make(kindTable, len(rows))
-		for _, row := range rows {
-			if k, ok := table.kindFrom(p, w, row); ok {
-				next[row.name] = k
+	for _, w := range p.Workflows {
+		workflows[w.ID] = true
+	}
+	queue := make([]string, 0, len(rows))
+	for name := range rows {
+		if pending[name] == 0 {
+			queue = append(queue, name)
+		}
+	}
+	for head := 0; head < len(queue); head++ {
+		name := queue[head]
+		if level[name] > fuel {
+			continue
+		}
+		row := rows[name]
+		sources, ok := table.sourceKinds(row.incoming)
+		if !ok {
+			continue
+		}
+		input, ok := w.combineInput(name, sources)
+		if !ok {
+			continue
+		}
+		var k Kind
+		if call, isCall := row.placement.Control.(CallControl); isCall && (input == nil || *input == KindSingle) {
+			if call.Body.Workflow {
+				k, ok = KindSingle, workflows[call.Body.ID]
+			} else {
+				k, ok = functions[call.Body.ID]
+			}
+		} else {
+			k, ok = p.outputKind(row.placement.Control, input)
+		}
+		if !ok {
+			continue
+		}
+		table[name] = k
+		for _, dst := range outgoing[name] {
+			pending[dst]--
+			level[dst] = max(level[dst], level[name]+1)
+			if pending[dst] == 0 {
+				queue = append(queue, dst)
 			}
 		}
-		if maps.Equal(next, table) {
-			break
-		}
-		table = next
 	}
 	return table
-}
-
-// kindFrom is the kind? of a row at fuel n+1 from the table at fuel n.
-func (t kindTable) kindFrom(p *Definition, w *Workflow, row kindRow) (Kind, bool) {
-	sources, ok := t.sourceKinds(row.incoming)
-	if !ok {
-		return 0, false
-	}
-	input, ok := w.combineInput(row.name, sources)
-	if !ok {
-		return 0, false
-	}
-	return p.outputKind(row.placement.Control, input)
 }
 
 // sourceKinds is Lean's incoming.mapM fun c => prev c.source.
@@ -300,8 +325,11 @@ func (d *derivation) kinds(w *Workflow) kindTable {
 }
 
 // OutputKind is the derived Single/Stream kind of a placement of workflow; ok is false when it
-// cannot be derived.
+// cannot be derived or the definition exceeds resource limits.
 func (p *Definition) OutputKind(workflow, placement string) (kind Kind, ok bool) {
+	if p.checkResources() != nil {
+		return 0, false
+	}
 	w, found := p.workflow(workflow)
 	if !found {
 		return 0, false

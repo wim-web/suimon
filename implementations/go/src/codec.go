@@ -13,7 +13,8 @@ import (
 // transform name discard refers to the library transform. Errors carry the messages of the Lean
 // decoder, including the JSON syntax errors of Lean's parser.
 
-// ParseDefinition decodes a definition from JSON text. It does not validate the definition.
+// ParseDefinition decodes JSON within the byte and nesting limits. Semantic
+// validation and structural resource admission are performed by Validate.
 func ParseDefinition(data []byte) (*Definition, error) {
 	return ParseDefinitionWithLimits(data, InputLimits{})
 }

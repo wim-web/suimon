@@ -753,6 +753,9 @@ func CheckWithLimits(text string, load HeaderLoader, limits InputLimits) (Checke
 	if err != nil {
 		return Checked{}, fmt.Errorf("line 1: %w", err)
 	}
+	if err := p.checkResources(); err != nil {
+		return Checked{}, fmt.Errorf("line 1: %w", err)
+	}
 	r := &replay{machine: newMachine(p, p.derive(), &State{}), known: map[string]bool{}, next: 1}
 	offset := len(complete[0]) + 1
 	length := offset

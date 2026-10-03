@@ -96,7 +96,11 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
     maxValues := ← IO.ofExcept (natOption opts "--max-values" defaults.maxValues)
     maxWork := ← IO.ofExcept (natOption opts "--max-work" defaults.maxWork) }
   let (text, torn) ← readRecord trace limits.maxBytes
-  match (Trace.check Trace.wireCodec Trace.Header.load text limits).map fun c =>
+  let load := fun (header : Trace.Header) => do
+    let p ← Trace.Header.load header
+    p.checkResources
+    pure p
+  match (Trace.check Trace.wireCodec load text limits).map fun c =>
       { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.

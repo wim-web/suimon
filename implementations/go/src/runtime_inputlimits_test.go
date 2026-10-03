@@ -120,21 +120,75 @@ func TestRuntimeParserRecordSize(t *testing.T) {
 	}
 }
 
+// Fill a header using many individually valid declarations. This reaches the byte
+// boundary without bypassing the validator's separate name/type/count ceilings.
+func parserLimitSizedDefinition(t *testing.T, size int, validated bool) *Definition {
+	t.Helper()
+	p := parserLimitDefinition()
+	typ := ValueType{Name: strings.Repeat("T", MaxDefinitionNameBytes), Lists: MaxDefinitionTypeDepth}
+	extra := FunctionDecl{ID: strings.Repeat("f", MaxDefinitionNameBytes), Input: &typ,
+		Output: Contract{Kind: KindSingle, Type: typ}}
+	base := len(EncodeHeader(p, validated))
+	p.Functions = append(p.Functions, extra)
+	width := len(EncodeHeader(p, validated)) - base
+	count := (size - base) / width
+	p.Functions = p.Functions[:1]
+	for i := 0; i < count; i++ {
+		extra.ID = fmt.Sprintf("%04d", i) + strings.Repeat("f", MaxDefinitionNameBytes-4)
+		p.Functions = append(p.Functions, extra)
+	}
+	remaining := size - len(EncodeHeader(p, validated))
+	// Control characters and quotes grow the encoding while names stay within
+	// their raw UTF-8 byte budget. Only unused type names are changed.
+	input := *p.Functions[1].Input
+	p.Functions[1].Input = &input
+	for _, name := range []*string{&p.Functions[1].Output.Type.Name, &input.Name} {
+		chars := []byte(*name)
+		for i := range chars {
+			if remaining >= 5 {
+				chars[i], remaining = '\n', remaining-5
+			} else if remaining > 0 {
+				chars[i], remaining = '"', remaining-1
+			}
+		}
+		*name = string(chars)
+	}
+	if remaining != 0 || len(EncodeHeader(p, validated)) != size {
+		t.Fatal("failed to construct the exact header size")
+	}
+	if err := p.checkResources(); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestRuntimeParserHeaderLimits(t *testing.T) {
 	for _, validated := range []bool{false, true} {
 		for _, depth := range []int{MaxInputDepth - 1, MaxInputDepth, MaxInputDepth + 1} {
-			t.Run(fmt.Sprintf("validated=%t/depth=%d", validated, depth), func(t *testing.T) {
+			t.Run(fmt.Sprintf("validated=%t/parser depth=%d", validated, depth), func(t *testing.T) {
 				p := parserLimitDefinition()
 				// Header -> definition -> functions -> function -> output -> list wrappers.
 				p.Functions[0].Output.Type.Lists = depth - 5
-				testParserLimitHeader(t, p, validated, depth <= MaxInputDepth)
+				_, err := recordedHeader(p, validated)
+				if (err == nil) != (depth <= MaxInputDepth) {
+					t.Fatalf("header depth %d: %v", depth, err)
+				}
+				// The validator has a tighter type limit, for checked and unchecked engines.
+				constructor := NewEngine
+				if !validated {
+					constructor = NewUncheckedEngine
+				}
+				if _, err := constructor(p, nil); err == nil || !strings.Contains(err.Error(), "type depth limit") {
+					t.Fatalf("definition admission: %v", err)
+				}
 			})
 		}
+		p := parserLimitDefinition()
+		p.Functions[0].Output.Type.Lists = MaxDefinitionTypeDepth
+		testParserLimitHeader(t, p, validated, true)
 		for _, delta := range []int{-1, 0, 1} {
 			t.Run(fmt.Sprintf("validated=%t/bytes=%d", validated, DefaultMaxInputBytes+delta), func(t *testing.T) {
-				p := parserLimitDefinition()
-				name := &p.Functions[0].Output.Type.Name
-				*name = strings.Repeat("T", DefaultMaxInputBytes+delta-len(EncodeHeader(p, validated))+len(*name))
+				p := parserLimitSizedDefinition(t, DefaultMaxInputBytes+delta, validated)
 				testParserLimitHeader(t, p, validated, delta <= 0)
 			})
 		}
@@ -199,10 +253,9 @@ func TestConformanceParserJournalLimits(t *testing.T) {
 			output := "value"
 			switch boundary {
 			case "header depth":
-				p.Functions[0].Output.Type.Lists = MaxInputDepth - 5
+				p.Functions[0].Output.Type.Lists = MaxDefinitionTypeDepth
 			case "header bytes":
-				name := &p.Functions[0].Output.Type.Name
-				*name = strings.Repeat("T", DefaultMaxInputBytes-len(EncodeHeader(p, true))+len(*name))
+				p = parserLimitSizedDefinition(t, DefaultMaxInputBytes, true)
 			case "oversized output":
 				output = strings.Repeat("x", 1<<20)
 			}

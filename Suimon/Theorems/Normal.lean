@@ -288,7 +288,8 @@ theorem Placement.Normal.workflowRef {p : Definition} {w : Workflow} {pl : Place
 /-- The validator is sound: a definition it accepts is normal (§15.2). --/
 theorem Definition.normal_of_validate {p : Definition} (h : p.validate = .ok ()) : p.Normal := by
   have hc := validate_ok h
-  unfold Definition.validate at h
+  have h := Definition.structural_of_validate h
+  unfold Definition.validateStructural at h
   normal_simp at h
   obtain ⟨-, -, -, -, -, -, -, u₁, hf, u₂, hj, u₃, ht, u₄, hw⟩ := h
   have hworkflows := fun w hw' => validateWorkflow_normal (Static.forIn_yield_ok hw w hw')
@@ -307,8 +308,8 @@ theorem Definition.normal_of_validate {p : Definition} (h : p.validate = .ok ())
 
 /-! ## The validator is complete
 
-It accepts every normal definition, so `Definition.Normal` states all that it checks
-(`Definition.validate_eq_ok_iff`). -/
+The structural checks accept every normal definition. Executable validation additionally
+requires resource admission (`Definition.validate_eq_ok_iff`). -/
 
 /-- Reduces a validator computation to the conditions under which it succeeds. --/
 local macro "complete_simp" : tactic =>
@@ -550,8 +551,8 @@ theorem validateWorkflow_of_normal {w : Workflow} (h : w.Normal p) : p.validateW
     obtain ⟨⟨a, ha⟩, b, hb⟩ := hloops
     exact ⟨(), validateEntry_of_normal (h.entry e hwi), a, ha, b, hb⟩
 
-/-- The validator is complete: it accepts every normal definition. --/
-theorem validate_of_normal (h : p.Normal) : p.validate = .ok () := by
+/-- The structural checks accept every normal definition. --/
+theorem validateStructural_of_normal (h : p.Normal) : p.validateStructural = .ok () := by
   have hcalls : p.callsAcyclic = true := by
     obtain ⟨rank, hrank⟩ := h.calls
     refine acyclic_of_rank (rank := rank) (fun e he => ?_) (by simp)
@@ -562,7 +563,7 @@ theorem validate_of_normal (h : p.Normal) : p.validate = .ok () := by
   have hdiscard : (!p.transforms.any (·.id == TransformRef.discardName)) = true := by
     simp only [Bool.not_eq_true', List.any_eq_false, beq_iff_eq]
     exact h.discard
-  unfold validate
+  unfold validateStructural
   complete_simp
   refine ⟨unique_of_nodup h.functionIds, unique_of_nodup h.judgeIds, unique_of_nodup h.transformIds, hdiscard,
     unique_of_nodup h.workflowIds, h.main, hcalls, (), Codec.Core.forIn_ok_of_yield fun f hf => ?_,
@@ -585,9 +586,13 @@ theorem validate_of_normal (h : p.Normal) : p.validate = .ok () := by
     simp [this, bind, Except.bind, pure, Except.pure]
   · simp [validateWorkflow_of_normal (h.workflows w hw), bind, Except.bind, pure, Except.pure]
 
-/-- Validation accepts exactly the normal definitions. --/
-theorem validate_eq_ok_iff : p.validate = .ok () ↔ p.Normal :=
-  ⟨normal_of_validate, validate_of_normal⟩
+/-- Validation accepts normal definitions within the resource limits. --/
+theorem validate_of_normal (h : p.Normal) (hr : p.checkResources = .ok ()) : p.validate = .ok () :=
+  validate_eq_ok.mpr ⟨hr, validateStructural_of_normal h⟩
+
+theorem validate_eq_ok_iff : p.validate = .ok () ↔ p.Normal ∧ p.checkResources = .ok () :=
+  ⟨fun h => ⟨normal_of_validate h, (validate_eq_ok.mp h).1⟩,
+    fun ⟨h, hr⟩ => validate_of_normal h hr⟩
 
 end Definition
 
