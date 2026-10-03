@@ -2,7 +2,7 @@ import Suimon.Json
 import Suimon.Normal
 import Suimon.Theorems.WireText
 
-namespace Suimon.Codec
+namespace Suimon.Codec.Core
 
 /-! ## The canonical form of a definition repeats no key
 
@@ -115,7 +115,7 @@ theorem definitionWire_distinctKeys (p : Definition) : (definitionWire p).Distin
   exact ⟨.str _, arr_map_distinctKeys functionWire_distinctKeys _, arr_map_distinctKeys judgeWire_distinctKeys _,
     arr_map_distinctKeys transformWire_distinctKeys _, arr_map_distinctKeys workflowWire_distinctKeys _⟩
 
-end Suimon.Codec
+end Suimon.Codec.Core
 
 /-! ## The canonical form of a normal definition decodes back to it
 
@@ -124,9 +124,9 @@ The header of a record holds `definitionWire p`, and the loader `Codec.load` dec
 without validation, only decodes it. The decoder reads fields by key and rejects what the definition
 file cannot express: an empty string or type name, a number above `maxNat`. `Definition.Expressible`
 states what it can express; every normal definition is expressible (`Definition.Normal.expressible`),
-and so is every definition the decoder reads (`Codec.expressible_of_definition`). The canonical form of
-an expressible definition decodes back to it (`Codec.definition_definitionWire_of_expressible`), so it
-determines the definition (`Codec.definitionWire_inj_of_expressible`). -/
+and so is every definition the decoder reads (`Codec.Core.expressible_of_definition`). The canonical form of
+an expressible definition decodes back to it (`Codec.Core.definition_definitionWire_of_expressible`), so it
+determines the definition (`Codec.Core.definitionWire_inj_of_expressible`). -/
 
 namespace Suimon
 
@@ -305,7 +305,7 @@ end Definition.Normal
 
 end Suimon
 
-namespace Suimon.Codec
+namespace Suimon.Codec.Core
 open Lean
 
 /-! ### Objects of `Json` -/
@@ -1048,5 +1048,22 @@ theorem loadUnchecked_definitionWire {p : Definition} (h : p.Expressible) : load
 theorem loadUnchecked_eq_of_definitionWire {p q : Definition} (hp : p.Expressible) {w : Wire}
     (h : loadUnchecked w = .ok q) (hw : definitionWire q = definitionWire p) : q = p :=
   (definitionWire_inj_of_expressible (expressible_of_loadUnchecked h) hp).1 hw
+
+end Suimon.Codec.Core
+
+namespace Suimon.Codec
+
+/-- Resource checks are the only difference from the proved semantic decoder. --/
+theorem definition_eq_core {json : Lean.Json} {limits : InputLimits}
+    (h : limits.checkJson json = .ok ()) : definition json limits = Core.definition json := by
+  simp [definition, h, bind, Except.bind]
+
+theorem load_eq_core {wire : Wire} {limits : InputLimits}
+    (h : limits.checkWire wire = .ok ()) : load wire limits = Core.load wire := by
+  simp [load, h, bind, Except.bind]
+
+theorem loadUnchecked_eq_core {wire : Wire} {limits : InputLimits}
+    (h : limits.checkWire wire = .ok ()) : loadUnchecked wire limits = Core.loadUnchecked wire := by
+  simp [loadUnchecked, h, bind, Except.bind]
 
 end Suimon.Codec

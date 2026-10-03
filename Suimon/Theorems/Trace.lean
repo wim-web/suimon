@@ -7,6 +7,13 @@ with this model by the replay tests; these theorems do not establish that implem
 
 namespace Suimon.Trace
 
+/-- The mathematical loader, before input resource checks. --/
+def Header.loadCore (header : Header) : Except String Definition :=
+  if header.validated then Codec.Core.load header.definition else Codec.Core.loadUnchecked header.definition
+
+/-- The unbounded mathematical codec. Operational callers use `wireCodec`. --/
+def wireCodecCore : Codec := .ofWire Wire.render Wire.parseCore
+
 /-! ## Encoding and decoding do not change a record -/
 
 private theorem ok_bind {α β ε : Type} (x : α) (f : α → Except ε β) : (Except.ok x >>= f) = f x := rfl
@@ -124,8 +131,8 @@ theorem Codec.ofWire_lawful {render : Wire → String} {parse : String → Excep
 
 /-- The header and the records are written and read back through the verified text form of `Wire`
     values, whose one side condition, that no key repeats, `Codec.Lawful` carries. --/
-theorem wireCodec_lawful : wireCodec.Lawful :=
-  Codec.ofWire_lawful Wire.parse_render Wire.newline_not_mem_render
+theorem wireCodecCore_lawful : wireCodecCore.Lawful :=
+  Codec.ofWire_lawful Wire.parseCore_render Wire.newline_not_mem_render
 
 /-- The payloads read from the fields of an object have the keys of the fields. --/
 theorem payloads_keys : ∀ {entries : Fields} {values : List (Value × String)},
@@ -201,14 +208,32 @@ def Codec.DecodesDistinct (c : Codec) : Prop := ∀ line r, c.decode line = .ok 
 
 /-- The text form reads only records whose payloads have distinct keys, since no object of a line may
     repeat a key (`Wire.distinctKeys_of_parse`). --/
+theorem wireCodecCore_decodesDistinct : wireCodecCore.DecodesDistinct := by
+  intro line r h
+  simp only [wireCodecCore, Codec.ofWire] at h
+  cases hp : Wire.parseCore line with
+  | error e => simp [hp, error_bind] at h
+  | ok w =>
+    simp only [hp, ok_bind] at h
+    exact recordOfWire_distinctKeys (Wire.distinctKeys_of_parseCore hp) h
+
+/-- The bounded operational codec also rejects repeated keys. --/
 theorem wireCodec_decodesDistinct : wireCodec.DecodesDistinct := by
   intro line r h
-  simp only [wireCodec, Codec.ofWire] at h
+  simp only [wireCodec, wireCodecWithLimits, Codec.ofWire] at h
   cases hp : Wire.parse line with
   | error e => simp [hp, error_bind] at h
   | ok w =>
     simp only [hp, ok_bind] at h
     exact recordOfWire_distinctKeys (Wire.distinctKeys_of_parse hp) h
+
+/-- The header boundary agrees with the mathematical loader within its budget. --/
+theorem Header.load_eq_core {header : Header}
+    (h : ({} : InputLimits).checkWire header.definition = .ok ()) :
+    Header.load header = Header.loadCore header := by
+  cases hv : header.validated <;>
+    simp [Header.load, Header.loadCore, hv, Suimon.Codec.load,
+      Suimon.Codec.loadUnchecked, h, ok_bind]
 
 /-! ## Lines -/
 
@@ -550,7 +575,7 @@ theorem check_torn_header (c : Codec) (load : Header → Except String Definitio
     committed transitions, the first `k / 2`, and reports the rest as uncommitted, and the flag of the
     header. With `check_torn_header`, this covers a crash anywhere in a recording. The definition of
     the header repeats no key; a recorder writes the canonical form of its definition, which has none
-    (`Codec.definitionWire_distinctKeys`). --/
+    (`Codec.Core.definitionWire_distinctKeys`). --/
 theorem check_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
     (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
@@ -878,34 +903,34 @@ theorem check_validated_isSome {c : Codec} {load : Header → Except String Defi
 
 /-! ## Resuming under a definition (§12.1)
 
-A run resumes only under the definition its record holds: `resumeModel` compares the canonical forms,
+A run resumes only under the definition its record holds: `resume` compares the canonical forms,
 which repeat no key, so forms that render alike are equal. -/
 
 /-- Canonical forms that render alike are equal: they repeat no key, and a rendered value parses back
     to itself. --/
 theorem definitionWire_eq_of_render {p q : Definition}
-    (h : (Codec.definitionWire q).render = (Codec.definitionWire p).render) :
-    Codec.definitionWire q = Codec.definitionWire p := by
-  have hq := Wire.parse_render _ (Codec.definitionWire_distinctKeys q)
-  rw [h, Wire.parse_render _ (Codec.definitionWire_distinctKeys p)] at hq
+    (h : (Codec.Core.definitionWire q).render = (Codec.Core.definitionWire p).render) :
+    Codec.Core.definitionWire q = Codec.Core.definitionWire p := by
+  have hq := Wire.parseCore_render _ (Codec.Core.definitionWire_distinctKeys q)
+  rw [h, Wire.parseCore_render _ (Codec.Core.definitionWire_distinctKeys p)] at hq
   exact (Except.ok.inj hq).symm
 
 /-- The definition `agreeing load p` reads is the one `load` reads, when it has the canonical form
     of `p`. --/
 theorem agreeing_eq_ok {load : Header → Except String Definition} {p q : Definition} {header : Header} :
-    agreeing load p header = .ok q ↔ load header = .ok q ∧ Codec.definitionWire q = Codec.definitionWire p := by
+    agreeing load p header = .ok q ↔ load header = .ok q ∧ Codec.Core.definitionWire q = Codec.Core.definitionWire p := by
   simp only [agreeing]
   cases hl : load header with
   | error e => simp [error_bind]
   | ok q' =>
     simp only [ok_bind, Except.ok.injEq]
-    by_cases hr : (Codec.definitionWire q').render = (Codec.definitionWire p).render
+    by_cases hr : (Codec.Core.definitionWire q').render = (Codec.Core.definitionWire p).render
     · simp only [hr, beq_self_eq_true, ↓reduceIte, pure_ok, Except.ok.injEq]
       constructor
       · rintro rfl
         exact ⟨rfl, definitionWire_eq_of_render hr⟩
       · exact fun h => h.1
-    · have hne : ((Codec.definitionWire q').render == (Codec.definitionWire p).render) = false := by
+    · have hne : ((Codec.Core.definitionWire q').render == (Codec.Core.definitionWire p).render) = false := by
         simpa using hr
       simp only [hne, Bool.false_eq_true, ↓reduceIte, throw_error, error_bind, reduceCtorEq, false_iff,
         not_and]
@@ -923,7 +948,7 @@ theorem check_agreeing {c : Codec} {load : Header → Except String Definition} 
     {checked : Checked} :
     checkModel c (agreeing load p) text = .ok checked ↔
       checkModel c load text = .ok checked ∧
-        ∀ q, checked.definition = some q → Codec.definitionWire q = Codec.definitionWire p := by
+        ∀ q, checked.definition = some q → Codec.Core.definitionWire q = Codec.Core.definitionWire p := by
   simp only [checkModel]
   split
   · refine ⟨fun h => ⟨h, fun q hq => ?_⟩, fun h => h.1⟩
@@ -938,7 +963,7 @@ theorem check_agreeing {c : Codec} {load : Header → Except String Definition} 
       cases hl : load header with
       | error e => simp [agreeing_of_error hl, error_bind, mapError_error]
       | ok q =>
-        by_cases hr : Codec.definitionWire q = Codec.definitionWire p
+        by_cases hr : Codec.Core.definitionWire q = Codec.Core.definitionWire p
         · simp only [agreeing_eq_ok.2 ⟨hl, hr⟩]
           refine ⟨fun h => ⟨h, fun q' hq' => ?_⟩, fun h => h.1⟩
           cases hrep : replayLines c q {} 1 lines with
@@ -970,7 +995,7 @@ theorem resume_eq_ok {c : Codec} {load : Header → Except String Definition} {p
     {s : State} :
     resumeModel c load p text = .ok s ↔
       ∃ checked q, checkModel c load text = .ok checked ∧ checked.definition = some q ∧
-        Codec.definitionWire q = Codec.definitionWire p ∧ checked.state = s := by
+        Codec.Core.definitionWire q = Codec.Core.definitionWire p ∧ checked.state = s := by
   simp only [resumeModel]
   cases hc : checkModel c (agreeing load p) text with
   | error e =>
@@ -1004,11 +1029,11 @@ theorem resume_eq_ok {c : Codec} {load : Header → Except String Definition} {p
 theorem resume_definitionWire {c : Codec} {load : Header → Except String Definition} {p : Definition}
     {text : String} {s : State} (h : resumeModel c load p text = .ok s) :
     ∃ checked q, checkModel c load text = .ok checked ∧ checked.definition = some q ∧
-      Codec.definitionWire q = Codec.definitionWire p := by
+      Codec.Core.definitionWire q = Codec.Core.definitionWire p := by
   obtain ⟨checked, q, hcheck, hq, hw, -⟩ := resume_eq_ok.1 h
   exact ⟨checked, q, hcheck, hq, hw⟩
 
-/-- A resumed run continues from the state `recoverModel` gives. --/
+/-- A resumed run continues from the state `recover` gives. --/
 theorem resume_recover {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {s : State} (h : resumeModel c load p text = .ok s) : recoverModel c load text = .ok s := by
   obtain ⟨checked, q, hcheck, -, -, rfl⟩ := resume_eq_ok.1 h

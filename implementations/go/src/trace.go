@@ -395,7 +395,12 @@ func opOfWire(w wire) (Op, error) {
 
 // DecodeOp reads an op from JSON text.
 func DecodeOp(text string) (Op, error) {
-	w, err := parseWire(text)
+	return DecodeOpWithLimits(text, InputLimits{})
+}
+
+// DecodeOpWithLimits decodes with a caller-selected byte budget.
+func DecodeOpWithLimits(text string, limits InputLimits) (Op, error) {
+	w, err := parseWireWithLimits(text, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +460,12 @@ func recordOfWire(w wire) (Record, error) {
 
 // DecodeRecord reads one line of an execution record, without its newline.
 func DecodeRecord(line string) (Record, error) {
-	w, err := parseWire(line)
+	return DecodeRecordWithLimits(line, InputLimits{})
+}
+
+// DecodeRecordWithLimits decodes with a caller-selected byte budget.
+func DecodeRecordWithLimits(line string, limits InputLimits) (Record, error) {
+	w, err := parseWireWithLimits(line, limits)
 	if err != nil {
 		return Record{}, err
 	}
@@ -507,7 +517,12 @@ type HeaderLoader func(definition []byte, validated bool) (*Definition, error)
 // is decoded only, so that the record replays against the definition that ran, valid or not;
 // ParseDefinition still rejects what the definition file cannot express.
 func LoadHeader(definition []byte, validated bool) (*Definition, error) {
-	p, err := ParseDefinition(definition)
+	return LoadHeaderWithLimits(definition, validated, InputLimits{})
+}
+
+// LoadHeaderWithLimits loads a header definition with a caller-selected byte budget.
+func LoadHeaderWithLimits(definition []byte, validated bool, limits InputLimits) (*Definition, error) {
+	p, err := ParseDefinitionWithLimits(definition, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -519,12 +534,12 @@ func LoadHeader(definition []byte, validated bool) (*Definition, error) {
 	return p, nil
 }
 
-// readHeader reads the header line and has load read its definition; it returns the flag too.
-func readHeader(line string, load HeaderLoader) (*Definition, bool, error) {
+// readHeaderWithLimits reads the header line and has load read its definition; it returns the flag too.
+func readHeaderWithLimits(line string, load HeaderLoader, limits InputLimits) (*Definition, bool, error) {
 	if !utf8.ValidString(line) {
 		return nil, false, errors.New("invalid UTF-8")
 	}
-	w, err := parseWire(line)
+	w, err := parseWireWithLimits(line, limits)
 	if err != nil {
 		return nil, false, err
 	}
@@ -661,21 +676,21 @@ func hasPayload(values []Payload, v string) bool {
 // leanList renders a list of strings as Lean's toString does: [a, b].
 func leanList(xs []string) string { return "[" + strings.Join(xs, ", ") + "]" }
 
-// replayLine replays one complete line; the op of a transition is applied at its commit, which
+// replayLineWithLimits replays one complete line; the op of a transition is applied at its commit, which
 // also checks the payloads: the op record carries payloads only for values the transition
 // introduces, and each of them has one.
-func replayLine(r *replay, index int, line string) error {
-	if err := replayRecord(r, line); err != nil {
+func replayLineWithLimits(r *replay, index int, line string, limits InputLimits) error {
+	if err := replayRecordWithLimits(r, line, limits); err != nil {
 		return fmt.Errorf("line %d: %w", index+1, err)
 	}
 	return nil
 }
 
-func replayRecord(r *replay, line string) error {
+func replayRecordWithLimits(r *replay, line string, limits InputLimits) error {
 	if !utf8.ValidString(line) {
 		return errors.New("invalid UTF-8")
 	}
-	record, err := DecodeRecord(line)
+	record, err := DecodeRecordWithLimits(line, limits)
 	if err != nil {
 		return err
 	}
@@ -723,12 +738,18 @@ func replayRecord(r *replay, line string) error {
 // A reader of a record loads the definition with LoadHeader, as the CLI does; Resume accepts only the
 // definition of its engine.
 func Check(text string, load HeaderLoader) (Checked, error) {
+	return CheckWithLimits(text, load, InputLimits{})
+}
+
+// CheckWithLimits applies limits to each complete line. The header loader may
+// impose its own tighter limit; use LoadHeaderWithLimits to configure it too.
+func CheckWithLimits(text string, load HeaderLoader, limits InputLimits) (Checked, error) {
 	lines := strings.Split(text, "\n")
 	complete, tail := lines[:len(lines)-1], lines[len(lines)-1]
 	if len(complete) == 0 {
 		return Checked{State: &State{}, Uncommitted: tail != ""}, nil
 	}
-	p, validated, err := readHeader(complete[0], load)
+	p, validated, err := readHeaderWithLimits(complete[0], load, limits)
 	if err != nil {
 		return Checked{}, fmt.Errorf("line 1: %w", err)
 	}
@@ -736,7 +757,7 @@ func Check(text string, load HeaderLoader) (Checked, error) {
 	offset := len(complete[0]) + 1
 	length := offset
 	for index, line := range complete[1:] {
-		if err := replayLine(r, index+1, line); err != nil {
+		if err := replayLineWithLimits(r, index+1, line, limits); err != nil {
 			return Checked{}, err
 		}
 		offset += len(line) + 1

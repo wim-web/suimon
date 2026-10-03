@@ -99,6 +99,13 @@ type ljParser struct {
 // parseLeanJSON parses valid UTF-8 text as Codec.parse does: as Lean's Json.parse does, except that a
 // repeated key is an error.
 func parseLeanJSON(s string) (ljValue, error) {
+	return parseLeanJSONWithLimits(s, InputLimits{})
+}
+
+func parseLeanJSONWithLimits(s string, limits InputLimits) (ljValue, error) {
+	if err := limits.check(s); err != nil {
+		return ljValue{}, err
+	}
 	p := &ljParser{s: s}
 	p.ws()
 	v, err := p.anyCore()

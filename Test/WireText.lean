@@ -7,7 +7,7 @@ open Suimon
 def check (condition : Bool) (message : String) : IO Unit := do
   unless condition do throw (IO.userError message)
 
-/-- Rendering is injective on values without repeated keys (`Wire.parse_render`), so equal renderings
+/-- Rendering is injective on values without repeated keys (`Wire.parseCore_render`), so equal renderings
     mean equal values. --/
 def roundTrip (label : String) (w : Wire) : IO Unit := do
   let text := w.render
@@ -51,7 +51,7 @@ def run : IO Unit := do
   renders "escapes" (.str "\"\\\n\x1f/é") "\"\\\"\\\\\\u000a\\u001f/é\""
   renders "field order" (.obj [("z", .nat 1), ("a", .nat 2), ("z", .nat 3)]) "{\"z\":1,\"a\":2,\"z\":3}"
   for (label, w) in [("null", Wire.null), ("empty string", .str ""), ("empty array", .arr []),
-      ("empty object", .obj []), ("sample", sample), ("deep", (List.range 200).foldl (fun w _ => .arr [w]) .null)] do
+      ("empty object", .obj []), ("sample", sample), ("deep", (List.range maxInputDepth).foldl (fun w _ => .arr [w]) .null)] do
     roundTrip label w
   parses "whitespace" " { \"a\" :\n[ 1 ,\t2 ] ,\r\"b\" : { } } " (.obj [("a", .arr [.nat 1, .nat 2]), ("b", .obj [])])
   parses "standard escapes" "\"\\n\\t\\r\\b\\f\\/\\u00e9\\u00C9\"" (.str "\n\t\r\x08\x0c/éÉ")

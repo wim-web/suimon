@@ -31,10 +31,23 @@ private def natOption (opts : List (String × String)) (key : String) (default :
     | some n => pure n
     | none => throw s!"{key} expects a natural number"
 
+/-- Read at most the default input budget plus one byte, including for non-regular files. --/
+private def readDefinitionText (path : String) : IO String := do
+  let handle ← IO.FS.Handle.mk path .read
+  let mut bytes := ByteArray.empty
+  repeat
+    let chunk ← handle.read (min 65536 (defaultMaxInputBytes + 1 - bytes.size)).toUSize
+    if chunk.isEmpty then break
+    bytes := bytes ++ chunk
+    IO.ofExcept (({} : InputLimits).checkSize bytes.size)
+  match String.fromUTF8? bytes with
+  | some text => return text
+  | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
+
 /-- Reads a definition file: JSON text without repeated keys (`Codec.parse`), decoded and validated
     (`Codec.loadJson`). --/
 private def readDefinition (path : String) : IO Definition := do
-  match Codec.parse (← IO.FS.readFile path) >>= Codec.loadJson with
+  match Codec.parse (← readDefinitionText path) >>= Codec.loadJson with
   | .ok p => pure p
   | .error e => throw (IO.userError e)
 

@@ -12,7 +12,7 @@ inductive Wire where
   deriving Repr, Inhabited
 
 /-- No object in the value repeats a key, at any depth. The text form rejects a repeated key; a
-    value without one reads back from its rendering (`Wire.parse_render`). --/
+    value without one reads back from its rendering (`Wire.parseCore_render`). --/
 inductive Wire.DistinctKeys : Wire → Prop where
   | null : Wire.DistinctKeys .null
   | bool (b : Bool) : Wire.DistinctKeys (.bool b)

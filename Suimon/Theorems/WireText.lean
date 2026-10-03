@@ -501,10 +501,10 @@ theorem Wire.newline_not_mem_render (w : Wire) : '\n' ∉ (Wire.render w).toList
   exact newline_not_mem_textChars w
 
 /-- Parsing inverts rendering for a value without repeated keys (the parser rejects a repeated key). --/
-theorem Wire.parse_render (w : Wire) (hw : w.DistinctKeys) : Wire.parse (Wire.render w) = .ok w := by
+theorem Wire.parseCore_render (w : Wire) (hw : w.DistinctKeys) : Wire.parseCore (Wire.render w) = .ok w := by
   have h := parseValue_textChars w hw (w.textChars.length + 1) [] (by omega) delim_nil
   rw [List.append_nil] at h
-  simp [Wire.parse, Wire.render_toList, h, skipWs]
+  simp [Wire.parseCore, Wire.render_toList, h, skipWs]
 
 /-! ## No repeated key -/
 
@@ -628,8 +628,8 @@ theorem parsed_distinctKeys : ∀ fuel,
 end WireText
 
 /-- The parser rejects a repeated key: no object of a value it reads repeats one, at any depth. --/
-theorem Wire.distinctKeys_of_parse {s : String} {w : Wire} (h : Wire.parse s = .ok w) : w.DistinctKeys := by
-  simp only [Wire.parse] at h
+theorem Wire.distinctKeys_of_parseCore {s : String} {w : Wire} (h : Wire.parseCore s = .ok w) : w.DistinctKeys := by
+  simp only [Wire.parseCore] at h
   split at h
   · simp at h
   · rename_i w' rest hw
@@ -637,5 +637,26 @@ theorem Wire.distinctKeys_of_parse {s : String} {w : Wire} (h : Wire.parse s = .
     · cases h
       exact (parsed_distinctKeys _).1 _ _ _ hw
     · simp at h
+
+end Suimon
+
+namespace Suimon
+
+/-- Within the resource budget, the public parser is the verified mathematical parser. --/
+theorem Wire.parse_eq_core {s : String} {limits : InputLimits}
+    (h : limits.check s = .ok ()) : Wire.parse s limits = Wire.parseCore s := by
+  simp [Wire.parse, h, bind, Except.bind]
+
+/-- Bounded round trip: an encoded value must fit the caller's input budget. --/
+theorem Wire.parse_render (w : Wire) (hw : w.DistinctKeys) {limits : InputLimits}
+    (h : limits.check w.render = .ok ()) : Wire.parse w.render limits = .ok w := by
+  rw [Wire.parse_eq_core h, Wire.parseCore_render w hw]
+
+theorem Wire.distinctKeys_of_parse {s : String} {w : Wire} {limits : InputLimits}
+    (h : Wire.parse s limits = .ok w) : w.DistinctKeys := by
+  unfold Wire.parse at h
+  cases hc : limits.check s with
+  | error e => simp [hc, bind, Except.bind] at h
+  | ok _ => exact Wire.distinctKeys_of_parseCore (by simpa [hc, bind, Except.bind] using h)
 
 end Suimon

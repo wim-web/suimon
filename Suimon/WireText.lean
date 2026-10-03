@@ -1,8 +1,8 @@
-import Suimon.Wire
+import Suimon.InputLimits
 
 /-! The text encoding of `Wire` values: compact JSON with a fixed rendering and a parser that
-    accepts at least every rendering of a value without repeated keys. Records are written one per
-    line, so a rendering never contains a raw newline. -/
+    accepts renderings without repeated keys within an input budget. The mathematical core has no
+    resource limit. Records are written one per line, so a rendering never contains a raw newline. -/
 
 namespace Suimon
 
@@ -167,8 +167,9 @@ def literal (word : List Char) (value : Wire) (cs : List Char) : Parsed Wire :=
   | some rest => .ok (value, rest)
   | none => fail "invalid literal" cs
 
-/- `fuel` bounds the call depth; `Wire.parse` passes the input length plus one, which is enough
-   because every call either consumes input or is followed by one that does. -/
+/- `fuel` bounds the call depth; `Wire.parseCore` passes the input length plus one, which is enough
+   because every call either consumes input or is followed by one that does. The public
+   `Wire.parse` checks a separate, fixed depth ceiling before calling this core. -/
 mutual
 
 /-- Reads one value after optional whitespace. --/
@@ -253,7 +254,7 @@ open WireText in
 /-- Parses JSON text into a `Wire`: whitespace between tokens and the standard escapes are
     accepted, numbers must be natural numbers, no object may repeat a key, and nothing may follow
     the value. --/
-def Wire.parse (s : String) : Except String Wire :=
+def Wire.parseCore (s : String) : Except String Wire :=
   let cs := s.toList
   let err (e : String × Nat) : Except String Wire :=
     .error s!"{e.1} at offset {cs.length - e.2}"
@@ -263,5 +264,11 @@ def Wire.parse (s : String) : Except String Wire :=
     match skipWs rest with
     | [] => .ok w
     | c :: more => err (s!"unexpected trailing character {repr c}", (c :: more).length)
+
+/-- The input boundary for record text. Resource checks precede recursive parsing.
+    `parseCore` is the unbounded mathematical codec used by round-trip proofs. --/
+def Wire.parse (s : String) (limits : InputLimits := {}) : Except String Wire := do
+  limits.check s
+  Wire.parseCore s
 
 end Suimon

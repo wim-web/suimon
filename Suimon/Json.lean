@@ -1,5 +1,5 @@
 import Suimon.Validate
-import Suimon.Wire
+import Suimon.InputLimits
 
 /-! A definition is read from Lean's `Json`, which the definition file and the header of an execution
     record give, and validated (`Codec.loadJson`, `Codec.load`), except the definition of a record
@@ -15,7 +15,7 @@ open Lean
 A definition file is read as Lean's `Json.parse` reads JSON text, except that an object may not
 repeat a key, where `Json.parse` keeps the last field. The parser is `Lean.Json.Parser`'s, with one
 check added to `objectCore`, and uses its lexers: text without a repeated key gives the same `Json`,
-and any error the same message at the same offset. The one exception is a number whose exponent pads
+and any syntax error the same message at the same offset, within `InputLimits`. A number whose exponent pads
 its mantissa with more than 64 zeros: it keeps 64, because the exact power of ten can be
 astronomically large (`1e1000000000`) and a non-zero mantissa exceeds `maxNat` either way. Keys are compared after their escapes are decoded,
 and a repeated key fails right after its closing quote, as `duplicate key "k"` with the key quoted
@@ -130,8 +130,9 @@ end
 end Codec.Parser
 
 open Std.Internal.Parsec Std.Internal.Parsec.String in
-/-- Parses definition text like `Json.parse`, except that a key repeated in an object is an error. --/
-def Codec.parse (text : String) : Except String Json :=
+/-- Parses bounded definition text like `Json.parse`, rejecting repeated object keys. --/
+def Codec.parse (text : String) (limits : InputLimits := {}) : Except String Json := do
+  limits.check text
   Parser.run (do ws; let json ← Codec.Parser.anyCore; eof; return json) text
 
 mutual
@@ -156,7 +157,9 @@ def Wire.fieldsToJson : List (String × Wire) → List (String × Json)
 
 end
 
-namespace Codec
+/-! The core specifies decoding independently of deployment resource limits. Public
+    input entry points below check their budgets before calling it. -/
+namespace Codec.Core
 
 /-- Unknown keys are rejected, so a misspelled optional field is not silently ignored. --/
 def strict (json : Json) (allowed : List String) (at_ : String) : Except String Unit := do
@@ -480,14 +483,44 @@ def load (w : Wire) : Except String Definition :=
     header of an execution that was started without validation (runUnchecked, §14), which is replayed
     against the definition as it ran (§12.1, `Trace.Header.load`). The decoder still rejects what the
     definition file cannot express, so the definition it reads is expressible
-    (`Codec.expressible_of_loadUnchecked`); the recovery theorems for such records are about this
+    (`Codec.Core.expressible_of_loadUnchecked`); the recovery theorems for such records are about this
     loader (`Trace.check_text_unchecked`). --/
 def loadUnchecked (w : Wire) : Except String Definition :=
   definition w.toJson
 
+end Codec.Core
+
+namespace Codec
+
+export Core (valueTypeWire contractWire policyWire timeoutWire bodyWire transformRefWire taskWire
+  collectWire controlWire placementWire connectionWire entryWire workflowWire functionWire judgeWire
+  transformWire definitionWire definitionJson)
+
+/-- Decode a prebuilt type only after checking its depth and structural budget. --/
+def valueType (json : Json) (at_ : String) (limits : InputLimits := {}) : Except String ValueType := do
+  limits.checkJson json
+  Core.valueType json at_
+
+/-- Decode a prebuilt definition. This also guards the `FromJson Definition` instance. --/
+def definition (json : Json) (limits : InputLimits := {}) : Except String Definition := do
+  limits.checkJson json
+  Core.definition json
+
+def loadJson (json : Json) (limits : InputLimits := {}) : Except String Definition := do
+  limits.checkJson json
+  Core.loadJson json
+
+def load (w : Wire) (limits : InputLimits := {}) : Except String Definition := do
+  limits.checkWire w
+  Core.load w
+
+def loadUnchecked (w : Wire) (limits : InputLimits := {}) : Except String Definition := do
+  limits.checkWire w
+  Core.loadUnchecked w
+
 end Codec
 
 instance : Lean.ToJson Definition := ⟨Codec.definitionJson⟩
-instance : Lean.FromJson Definition := ⟨Codec.definition⟩
+instance : Lean.FromJson Definition := ⟨fun json => Codec.definition json⟩
 
 end Suimon

@@ -60,7 +60,7 @@ func TestWireText(t *testing.T) {
 	renders(t, "field order", wireObj(field("z", wireNat(1)), field("a", wireNat(2)), field("z", wireNat(3))),
 		`{"z":1,"a":2,"z":3}`)
 	deep := wireNull()
-	for range 200 {
+	for range MaxInputDepth {
 		deep = wireArr(deep)
 	}
 	for label, w := range map[string]wire{"null": wireNull(), "empty string": wireStr(""), "empty array": wireArr(),
