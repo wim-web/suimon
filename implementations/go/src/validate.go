@@ -11,6 +11,9 @@ import (
 // and returns the first failed check, with the message and in the order of Suimon/Validate.lean. run
 // executes only definitions accepted here.
 func (p *Definition) Validate() error {
+	if err := p.checkResources(); err != nil {
+		return err
+	}
 	if err := p.representable(); err != nil {
 		return err
 	}
@@ -172,36 +175,44 @@ func unique(xs []string) bool {
 
 type edge struct{ src, dst string }
 
-// acyclic is Kahn elimination, bounded by the number of vertices.
+// acyclic uses indexed adjacency and indegrees. Fuel still counts layers, as
+// in the reference algorithm; parallel edges and unknown endpoints retain its
+// behavior. Each vertex and edge is visited O(1) times.
 func acyclic(edges []edge, fuel int, vertices []string) bool {
-	for ; fuel > 0; fuel-- {
-		if len(vertices) == 0 {
-			return true
+	indegree := make(map[string]int, len(vertices))
+	outgoing := make(map[string][]string, len(vertices))
+	for _, v := range vertices {
+		indegree[v] = 0
+	}
+	for _, e := range edges {
+		_, src := indegree[e.src]
+		_, dst := indegree[e.dst]
+		if src && dst {
+			outgoing[e.src] = append(outgoing[e.src], e.dst)
+			indegree[e.dst]++
 		}
-		var roots, rest []string
-		for _, v := range vertices {
-			isRoot := true
-			for _, e := range edges {
-				if e.dst == v && slices.Contains(vertices, e.src) {
-					isRoot = false
-					break
+	}
+	queue := make([]string, 0, len(indegree))
+	for v, n := range indegree {
+		if n == 0 {
+			queue = append(queue, v)
+		}
+	}
+	visited, head := 0, 0
+	for ; fuel > 0 && head < len(queue); fuel-- {
+		end := len(queue)
+		for ; head < end; head++ {
+			v := queue[head]
+			visited++
+			for _, dst := range outgoing[v] {
+				indegree[dst]--
+				if indegree[dst] == 0 {
+					queue = append(queue, dst)
 				}
 			}
-			if isRoot {
-				roots = append(roots, v)
-			}
 		}
-		if len(roots) == 0 {
-			return false
-		}
-		for _, v := range vertices {
-			if !slices.Contains(roots, v) {
-				rest = append(rest, v)
-			}
-		}
-		vertices = rest
 	}
-	return len(vertices) == 0
+	return visited == len(indegree)
 }
 
 func (b Body) workflowRef() (string, bool) { return b.ID, b.Workflow }

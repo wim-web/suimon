@@ -521,6 +521,9 @@ func LoadHeader(definition []byte, validated bool) (*Definition, error) {
 
 // readHeader reads the header line and has load read its definition; it returns the flag too.
 func readHeader(line string, load HeaderLoader) (*Definition, bool, error) {
+	if err := checkDefinitionTextWithin([]byte(line), MaxDefinitionBytes+64, MaxDefinitionJSONDepth+1); err != nil {
+		return nil, false, err
+	}
 	if !utf8.ValidString(line) {
 		return nil, false, errors.New("invalid UTF-8")
 	}
@@ -730,6 +733,9 @@ func Check(text string, load HeaderLoader) (Checked, error) {
 	}
 	p, validated, err := readHeader(complete[0], load)
 	if err != nil {
+		return Checked{}, fmt.Errorf("line 1: %w", err)
+	}
+	if err := p.checkResources(); err != nil {
 		return Checked{}, fmt.Errorf("line 1: %w", err)
 	}
 	r := &replay{machine: newMachine(p, p.derive(), &State{}), known: map[string]bool{}, next: 1}

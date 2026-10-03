@@ -468,14 +468,16 @@ structure DefinitionChecked (p : Definition) : Prop where
 /-- Validation checks every declared workflow. --/
 theorem Definition.validateWorkflow_of_validate {p : Definition} (h : p.validate = .ok ()) {w : Workflow}
     (hw : w ∈ p.workflows) : p.validateWorkflow w = .ok () := by
-  unfold Definition.validate at h
+  have h := Definition.structural_of_validate h
+  unfold Definition.validateStructural at h
   validate_simp at h
   obtain ⟨-, -, -, -, -, -, -, -, -, -, -, -, -, u, hloop⟩ := h
   exact Static.forIn_yield_ok hloop w hw
 
 theorem Definition.validate_ok {p : Definition} (h : p.validate = .ok ()) : DefinitionChecked p := by
   have hworkflows := fun w hw => validateWorkflow_ok (validateWorkflow_of_validate h (w := w) hw)
-  unfold Definition.validate at h
+  have h := Definition.structural_of_validate h
+  unfold Definition.validateStructural at h
   validate_simp at h
   obtain ⟨hf, hj, ht, hd, hw, hm, hcalls, -⟩ := h
   exact ⟨nodup_of_unique hf, nodup_of_unique hj, nodup_of_unique ht, by simpa using hd,

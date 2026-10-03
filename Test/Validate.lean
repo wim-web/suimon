@@ -175,7 +175,41 @@ def diamonds (n : Nat) : Definition := {
   let elapsed := (← IO.monoMsNow) - start
   ensure (elapsed < 1000) s!"{label}: validation took {elapsed} ms"
 
+def resourceLimits : IO Unit := do
+  let base := mergeChain 0
+  let some w := base.workflows.head? | throw (IO.userError "missing workflow")
+  let some pl := w.placements.head? | throw (IO.userError "missing placement")
+  let some f := base.functions.head? | throw (IO.userError "missing function")
+  let task : TaskSpec := { name := "t", body := .function "loadConfig", policy := .stop }
+  let connection : Connection := { source := "p0", target := "p0", transform := .discard }
+  let tooManyTasks := mapWorkflow "w" (mapPlacement "c" (mapConcurrency fun c =>
+    { c with tasks := List.replicate (Limits.maxTasks + 1) task })) (standalone none)
+  let deepType := (List.range (Limits.maxTypeDepth + 1)).foldl (fun t _ => .list t) (.named "T")
+  let bad : List (String × Definition) := [
+    ("workflow", { base with workflows := List.replicate (Limits.maxWorkflows + 1) w }),
+    ("declaration", { base with functions := List.replicate (Limits.maxDeclarations + 1) f }),
+    ("placement", { base with workflows := [{ w with placements := List.replicate (Limits.maxPlacements + 1) pl }] }),
+    ("connection", { base with workflows := [{ w with connections := List.replicate (Limits.maxConnections + 1) connection }] }),
+    ("task", tooManyTasks),
+    ("arm", { base with workflows := [{ w with placements := [{ pl with control := .branch "j" (List.replicate (Limits.maxArms + 1) "a") }] }] }),
+    ("name byte", { base with main := String.ofList (List.replicate 86 'あ') }),
+    ("type depth", { base with functions := [{ f with output := .single deepType }] }),
+    ("validation work", mergeChain 150)]
+  for (name, p) in bad do
+    rejected s!"resource {name}" s!"definition: {name} limit exceeded" p
+  let atDepth := (List.range Limits.maxTypeDepth).foldl (fun t _ => .list t) (.named "T")
+  ensure ((Limits.type atDepth).isOk) "type at depth limit rejected"
+  ensure ((Limits.text (String.ofList (List.replicate Limits.maxNameBytes 'x'))).isOk)
+    "name at byte limit rejected"
+  ensure ((Limits.checkText (String.ofList (List.replicate Limits.maxBytes ' '))).isOk)
+    "text at byte limit rejected"
+  parseRejected "byte limit" s!"definition: byte limit exceeded (max {Limits.maxBytes})"
+    (String.ofList (List.replicate (Limits.maxBytes + 1) ' '))
+  parseRejected "JSON nesting limit" s!"definition: JSON depth limit exceeded (max {Limits.maxJSONDepth})"
+    (String.ofList (List.replicate (Limits.maxJSONDepth + 1) '['))
+
 def run : IO Unit := do
+  resourceLimits
   let users ← load "users"
   let branch ← load "branch"
   let merge ← load "merge"

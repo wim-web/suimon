@@ -130,9 +130,10 @@ end
 end Codec.Parser
 
 open Std.Internal.Parsec Std.Internal.Parsec.String in
-/-- Parses definition text like `Json.parse`, except that a key repeated in an object is an error. --/
+/-- Parses definition text within the byte and nesting limits, rejecting repeated object keys. --/
 def Codec.parse (text : String) : Except String Json :=
-  Parser.run (do ws; let json ← Codec.Parser.anyCore; eof; return json) text
+  Limits.checkText text >>= fun _ =>
+    Parser.run (do ws; let json ← Codec.Parser.anyCore; eof; return json) text
 
 mutual
 
