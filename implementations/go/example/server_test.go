@@ -1,3 +1,5 @@
+//go:build !js
+
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -22,19 +25,38 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	assets := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>ui</title>")}}
-	srv := httptest.NewServer(newServer(context.Background(), scenarios).handler(assets))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	srv := httptest.NewUnstartedServer(nil)
 	t.Cleanup(srv.Close)
-	return srv
-}
-
-func call(t *testing.T, method, url, body string) (int, []byte) {
-	t.Helper()
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	srv.Config.Handler, err = newServer(ctx, scenarios).localHandler(assets, srv.Listener.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body != "" {
+	srv.Start()
+	return srv
+}
+
+func call(t *testing.T, method, target, body string) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, target, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method == http.MethodPost {
+		endpoint, err := url.Parse(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		origin := endpoint.Scheme + "://" + endpoint.Host
+		status, data := call(t, "GET", origin+"/api/csrf", "")
+		if status != http.StatusOK {
+			t.Fatalf("CSRF token: %d %s", status, data)
+		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(csrfHeader, decode[map[string]string](t, data)["token"])
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {

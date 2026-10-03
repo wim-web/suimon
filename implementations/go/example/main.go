@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,7 +21,7 @@ import (
 
 func main() {
 	ui := flag.Bool("ui", false, "serve the browser UI and the JSON API")
-	listen := flag.String("listen", "127.0.0.1:8080", "listen address for -ui")
+	listen := flag.String("listen", "127.0.0.1:8080", "loopback listen address for -ui")
 	uiDir := flag.String("ui-dir", "example/ui/dist", "the built UI (relative to the working directory)")
 	name := flag.String("scenario", "stream", "the scenario to run without -ui")
 	unit := flag.Duration("unit", defaultUnit, fmt.Sprintf("one unit of simulated I/O without -ui (%v to %v)", minUnit, maxUnit))
@@ -52,12 +51,17 @@ func serve(ctx context.Context, scenarios []*scenario, address, dir string) erro
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", address)
+	listener, err := listenLoopback(address)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	handler, err := newServer(ctx, scenarios).localHandler(assets, listener.Addr())
 	if err != nil {
 		return err
 	}
 	fmt.Printf("suimon playground: http://%s\n", listener.Addr())
-	srv := &http.Server{Handler: newServer(ctx, scenarios).handler(assets), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

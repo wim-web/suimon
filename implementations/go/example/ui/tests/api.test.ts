@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
-import { applyProgress, parseProgress, parseReport, parseScenarios, startRun } from '../src/api';
+import { applyProgress, cancelRun, parseProgress, parseReport, parseScenarios, startRun } from '../src/api';
 
 // branch.progress.json is the response of GET /api/runs/{id} for a finished run of the branch
 // scenario with a unit of 10ms, as the Go server wrote it: its records start with the header.
@@ -41,15 +41,62 @@ it('requires the unit of the run in a progress message', () => {
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
-it('sends the unit with each run request', async () => {
-  const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: 'r1' }), { status: 201 }));
+it('sends the unit and a fresh CSRF capability with each run request', async () => {
+  let token = 0;
+  const fetch = vi.fn(async (url: string, _init: RequestInit) => url === '/api/csrf'
+    ? Response.json({ token: `token-${++token}` })
+    : Response.json({ id: 'r1' }, { status: 201 }));
   vi.stubGlobal('fetch', fetch);
   expect(await startRun('stream', { names: ['alpha'] }, 600)).toBe('r1');
   await startRun('merge', undefined, 1000);
-  expect(fetch.mock.calls.map(([url, init]) => [url, init.method, JSON.parse(init.body as string)])).toEqual([
-    ['/api/runs', 'POST', { scenario: 'stream', input: { names: ['alpha'] }, unitMs: 600 }],
-    ['/api/runs', 'POST', { scenario: 'merge', unitMs: 1000 }],
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/csrf', '/api/runs', '/api/csrf', '/api/runs']);
+  expect(fetch.mock.calls.filter(([url]) => url === '/api/runs').map(([url, init]) => [
+    url, init.method, JSON.parse(init.body as string), new Headers(init.headers).get('X-CSRF-Token'), new Headers(init.headers).get('Content-Type'), init.mode,
+  ])).toEqual([
+    ['/api/runs', 'POST', { scenario: 'stream', input: { names: ['alpha'] }, unitMs: 600 }, 'token-1', 'application/json', 'same-origin'],
+    ['/api/runs', 'POST', { scenario: 'merge', unitMs: 1000 }, 'token-2', 'application/json', 'same-origin'],
   ]);
+  expect(fetch.mock.calls.filter(([url]) => url === '/api/csrf').every(([, init]) => init.cache === 'no-store' && init.mode === 'same-origin')).toBe(true);
+});
+
+it('protects cancellation even though the POST body is empty', async () => {
+  const fetch = vi.fn(async (url: string, _init: RequestInit) => url === '/api/csrf'
+    ? Response.json({ token: 'cancel-token' }) : new Response(null, { status: 204 }));
+  vi.stubGlobal('fetch', fetch);
+  await cancelRun('r1');
+  const [url, init] = fetch.mock.calls[1]!;
+  expect(url).toBe('/api/runs/r1/cancel');
+  expect(init.method).toBe('POST');
+  expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
+  expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('cancel-token');
+});
+
+it('does not send a write when the CSRF bootstrap fails', async () => {
+  const fetch = vi.fn(async () => new Response('unexpected Origin', { status: 403 }));
+  vi.stubGlobal('fetch', fetch);
+  await expect(startRun('stream', undefined, 600)).rejects.toThrow('unexpected Origin');
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the WASM transport independent of HTTP capabilities', async () => {
+  vi.stubEnv('MODE', 'wasm');
+  vi.resetModules();
+  const fetch = vi.fn();
+  vi.stubGlobal('fetch', fetch);
+  const wasm = await import('../src/wasm');
+  const request = vi.spyOn(wasm, 'wasmRequest').mockResolvedValue(Response.json({ id: 'r1' }, { status: 201 }));
+  try {
+    const api = await import('../src/api');
+    expect(await api.startRun('stream', undefined, 600)).toBe('r1');
+    request.mockResolvedValue(new Response(null, { status: 204 }));
+    await api.cancelRun('r1');
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['/api/runs', '/api/runs/r1/cancel']);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally {
+    request.mockRestore();
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  }
 });
 
 it('parses a report', () => {
