@@ -50,7 +50,7 @@ func (d *driver) start(c *Call) {
 				report(event{kind: evFailed, err: errors.New("suimon: Stream function " + target + " is not bound")})
 				return
 			}
-			generate(ctx, fetch, b.stream(ctx, input), report)
+			generate(ctx, fetch, b.stream(ctx, input), d.limits.MaxPayloadBytes, d.reservePayload, report)
 		}
 	default:
 		b, ok := d.registry.functions[target]
@@ -60,6 +60,9 @@ func (d *driver) start(c *Call) {
 				return
 			}
 			out, err := b.function(ctx, input)
+			if err == nil && !d.reservePayload(int64(len(out))) {
+				out, err = nil, quota("payload bytes", d.limits.MaxPayloadBytes)
+			}
 			if err != nil {
 				report(event{kind: evFailed, err: err})
 				return
@@ -97,7 +100,7 @@ func (d *driver) guard(id string, body func(report func(event))) {
 // the driver has recorded a fetch, and after the call was cancelled it pulls nothing more, ends
 // the generator, and reports that the user code has returned (§4.1.1, §11.3). A panic of the
 // generator reaches guard.
-func generate(ctx context.Context, fetch <-chan struct{}, seq iter.Seq2[[]byte, error], report func(event)) {
+func generate(ctx context.Context, fetch <-chan struct{}, seq iter.Seq2[[]byte, error], maxBytes int64, reserve func(int64) bool, report func(event)) {
 	next, stop := iter.Pull2(seq)
 	defer stop()
 	exit := func() {
@@ -124,6 +127,9 @@ func generate(ctx context.Context, fetch <-chan struct{}, seq iter.Seq2[[]byte, 
 		case err != nil:
 			stop()
 			report(event{kind: evFailed, err: err})
+		case !reserve(int64(len(value))):
+			stop()
+			report(event{kind: evFailed, err: quota("payload bytes", maxBytes)})
 		default:
 			report(event{kind: evYielded, value: value, index: index})
 			continue

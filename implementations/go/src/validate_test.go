@@ -171,7 +171,7 @@ func TestValidateRepresentable(t *testing.T) {
 	merge = load(t, "merge")
 	merge.Workflows[0].Placements[0].Name = "a\xff"
 	merge.Workflows[0].Placements[1].Name = "a\xfe"
-	for label, engine := range map[string]func(*Definition, *Registry) (*Engine, error){
+	for label, engine := range map[string]func(*Definition, *Registry, ...EngineOption) (*Engine, error){
 		"NewEngine": NewEngine, "NewUncheckedEngine": NewUncheckedEngine} {
 		if _, err := engine(merge, r); err == nil || !strings.Contains(err.Error(), "is not valid UTF-8") {
 			t.Errorf("%s: got %v, want the name rejected as not UTF-8", label, err)
