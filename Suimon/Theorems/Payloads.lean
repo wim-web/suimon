@@ -799,7 +799,7 @@ theorem replayLines_distinct {c : Codec} (hc : c.DecodesDistinct) {p : Definitio
     transition introduces, which the state before does not mention, and a step never makes the state
     forget a value; so a value with a payload is never introduced again. --/
 theorem check_values_nodup {c : Codec} (hc : c.DecodesDistinct) {load : Header → Except String Definition}
-    {text : String} {checked : Checked} (h : check c load text = .ok checked) :
+    {text : String} {checked : Checked} (h : checkModel c load text = .ok checked) :
     (checked.values.map (·.1)).Nodup := by
   rcases check_eq_ok h with ⟨-, -, -, hvalues⟩ | ⟨header, p, lines, r, -, hr, -, -, -, hvalues⟩
   · rw [hvalues]
@@ -822,13 +822,13 @@ private theorem eq_of_nodup_map_fst {α β : Type} : ∀ {l : List (α × β)}, 
 
 /-- The committed payloads of a checked record never give one value two payloads. --/
 theorem check_payload_unique {c : Codec} (hc : c.DecodesDistinct) {load : Header → Except String Definition}
-    {text : String} {checked : Checked} (h : check c load text = .ok checked) {v : Value} {a b : String}
+    {text : String} {checked : Checked} (h : checkModel c load text = .ok checked) {v : Value} {a b : String}
     (ha : (v, a) ∈ checked.values) (hb : (v, b) ∈ checked.values) : a = b :=
   (Prod.mk.inj (eq_of_nodup_map_fst (check_values_nodup hc h) _ ha _ hb rfl)).2
 
-/-- In a record that `suimon check` accepts, each value has at most one committed payload. --/
+/-- In a record that `checkModel` accepts, each value has at most one committed payload. --/
 theorem check_values_nodup_wire {load : Header → Except String Definition} {text : String} {checked : Checked}
-    (h : check wireCodec load text = .ok checked) : (checked.values.map (·.1)).Nodup :=
+    (h : checkModel wireCodec load text = .ok checked) : (checked.values.map (·.1)).Nodup :=
   check_values_nodup wireCodec_decodesDistinct h
 
 end Trace

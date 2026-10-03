@@ -439,6 +439,20 @@ func TestConformanceValidate(t *testing.T) {
 func TestConformanceArguments(t *testing.T) {
 	cli := leanCLI(t)
 	merge := definition(t, "merge")
+	// Compare the shared command synopsis. Indented help details can describe
+	// implementation-specific controls, such as Lean's replay resource limits.
+	synopsis := func(text string) string {
+		if !strings.HasPrefix(text, "suimon validate <definition.json>\n") {
+			return text
+		}
+		var lines []string
+		for _, line := range strings.Split(text, "\n") {
+			if !strings.HasPrefix(line, "  ") {
+				lines = append(lines, line)
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
 	for _, args := range [][]string{
 		{}, {"--help"}, {"help"}, {"--help", "x"}, {"validate"}, {"validate", "a", "b"}, {"frobnicate"},
 		{"check", merge}, {"check", "x.jsonl", "--definition", merge}, {"explore", merge, "--seeds"}, {"explore", merge, "--bogus", "1"},
@@ -448,7 +462,10 @@ func TestConformanceArguments(t *testing.T) {
 		{"check", "x.jsonl", "--state"}, {"check", "x.jsonl", "--state", "--definition"}, {"check", "x.jsonl", "--definition"},
 		{"check", "x.jsonl", "--state", "1", "--definition", merge}, {"explore", merge, "--state"},
 	} {
-		sameResult(t, fmt.Sprint(args), runLean(t, cli, args...), runGo(args...))
+		lean, goResult := runLean(t, cli, args...), runGo(args...)
+		lean.stdout, lean.stderr = synopsis(lean.stdout), synopsis(lean.stderr)
+		goResult.stdout, goResult.stderr = synopsis(goResult.stdout), synopsis(goResult.stderr)
+		sameResult(t, fmt.Sprint(args), lean, goResult)
 	}
 }
 

@@ -2,6 +2,9 @@ import Suimon.Trace
 import Suimon.Theorems.WireText
 import Suimon.Theorems.Json
 
+/-! Recovery laws for the unbounded reference model. The bounded executable checker is compared
+with this model by the replay tests; these theorems do not establish that implementation equivalence. -/
+
 namespace Suimon.Trace
 
 /-! ## Encoding and decoding do not change a record -/
@@ -533,13 +536,13 @@ theorem decodeHeader_line {c : Codec} (hc : c.Lawful) {header : Header} (hw : he
     record names no definition yet. --/
 theorem check_torn_header (c : Codec) (load : Header → Except String Definition) {tail : String}
     (htail : '\n' ∉ tail.toList) :
-    check c load tail =
+    checkModel c load tail =
       .ok { definition := none, validated := none, state := {}, committed := 0, uncommitted := decide (tail ≠ ""),
             values := [] } := by
   have hsplit : splitLines tail.toList [] = ([], tail.toList) := by simpa using splitLines_of_not_mem htail []
   have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
     rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
-  simp only [check, hsplit, pure_ok, htailEmpty]
+  simp only [checkModel, hsplit, pure_ok, htailEmpty]
   simp
 
 /-- A crash after the header leaves it, the first `k` records a recorder wrote, and possibly the start
@@ -554,7 +557,7 @@ theorem check_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String 
     (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
     (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      check c load (recording c header (rs.take k) ++ tail) =
+      checkModel c load (recording c header (rs.take k) ++ tail) =
         .ok { definition := some p, validated := some header.validated, state := u, committed := k / 2,
               uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
   obtain ⟨u, hu, hreplay⟩ := replayLines_take hc h {} 1 k rfl rfl rfl rfl hk
@@ -571,7 +574,7 @@ theorem check_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String 
     · simp [hodd]
   have htailEmpty : tail.toList.isEmpty = decide (tail = "") := by
     rw [Bool.eq_iff_iff, List.isEmpty_iff, String.toList_eq_nil_iff, decide_eq_true_iff]
-  simp only [check, hsplit, decodeHeader_line hc hw, hload, mapError_ok, hreplay, ok_bind, pure_ok, hpending,
+  simp only [checkModel, hsplit, decodeHeader_line hc hw, hload, mapError_ok, hreplay, ok_bind, pure_ok, hpending,
     htailEmpty]
   simp
 
@@ -580,7 +583,7 @@ theorem check_text {c : Codec} (hc : c.Lawful) {load : Header → Except String 
     (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) :
-    check c load (recording c header rs) =
+    checkModel c load (recording c header rs) =
       .ok { definition := some p, validated := some header.validated, state := t, committed := steps.length,
             uncommitted := false, values := steps.flatMap (·.2) } := by
   have hlen := record_length h
@@ -596,8 +599,8 @@ theorem recover_text {c : Codec} (hc : c.Lawful) {load : Header → Except Strin
     (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) :
-    recover c load (recording c header rs) = .ok t := by
-  simp [recover, check_text hc hw hload h, Except.map]
+    recoverModel c load (recording c header rs) = .ok t := by
+  simp [recoverModel, check_text hc hw hload h, Except.map]
 
 /-- After a crash, recovery resumes from the state of the committed transitions. --/
 theorem recover_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
@@ -606,9 +609,9 @@ theorem recover_torn {c : Codec} (hc : c.Lawful) {load : Header → Except Strin
     (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
     (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      recover c load (recording c header (rs.take k) ++ tail) = .ok u := by
+      recoverModel c load (recording c header (rs.take k) ++ tail) = .ok u := by
   obtain ⟨u, hu, hcheck⟩ := check_torn hc hw hload h hk htail
-  exact ⟨u, hu, by simp [recover, hcheck, Except.map]⟩
+  exact ⟨u, hu, by simp [recoverModel, hcheck, Except.map]⟩
 
 /-- After a crash the runtime keeps the header as it was written and the committed lines, resumes from
     the recovered state with the committed payloads, and appends the records of new transactions; the
@@ -618,9 +621,9 @@ theorem check_resume {c : Codec} (hc : c.Lawful) {load : Header → Except Strin
     {steps more : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
     (htail : '\n' ∉ tail.toList) {u t' : State} {rs' : List Record}
-    (hu : recover c load (recording c header (rs.take k) ++ tail) = .ok u)
+    (hu : recoverModel c load (recording c header (rs.take k) ++ tail) = .ok u)
     (hmore : record p u more ((steps.take (k / 2)).flatMap (·.2)) (2 * (k / 2) + 1) = .ok (t', rs')) :
-    check c load (recording c header (rs.take (2 * (k / 2))) ++ text c rs') =
+    checkModel c load (recording c header (rs.take (2 * (k / 2))) ++ text c rs') =
       .ok { definition := some p, validated := some header.validated, state := t', committed := k / 2 + more.length,
             uncommitted := false, values := (steps.take (k / 2) ++ more).flatMap (·.2) } := by
   obtain ⟨u₀, hu₀, hrecover⟩ := recover_torn hc hw hload h hk htail
@@ -685,12 +688,12 @@ theorem check_prefix {c : Codec} (hc : c.Lawful) {load : Header → Except Strin
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ('\n' ∉ pre.toList ∧
-      check c load pre =
+      checkModel c load pre =
         .ok { definition := none, validated := none, state := {}, committed := 0, uncommitted := decide (pre ≠ ""),
               values := [] }) ∨
     ∃ k ≤ rs.length, ∃ tail : String, '\n' ∉ tail.toList ∧ pre = recording c header (rs.take k) ++ tail ∧
       ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-        check c load pre =
+        checkModel c load pre =
           .ok { definition := some p, validated := some header.validated, state := u, committed := k / 2,
                 uncommitted := decide (k % 2 = 1 ∨ tail ≠ ""), values := (steps.take (k / 2)).flatMap (·.2) } := by
   rcases prefix_recording hc header rs hpre with hnl | ⟨k, hk, tail, htail, rfl⟩
@@ -705,11 +708,11 @@ theorem recover_prefix {c : Codec} (hc : c.Lawful) {load : Header → Except Str
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
-      recover c load pre = .ok u := by
+      recoverModel c load pre = .ok u := by
   rcases check_prefix hc hw hload h hpre with ⟨-, hcheck⟩ | ⟨k, hk, tail, -, -, u, hu, hcheck⟩
-  · exact ⟨0, Nat.zero_le _, {}, by simp [record, pure_ok], by simp [recover, hcheck, Except.map]⟩
+  · exact ⟨0, Nat.zero_le _, {}, by simp [record, pure_ok], by simp [recoverModel, hcheck, Except.map]⟩
   · have hlen := record_length h
-    exact ⟨k / 2, by omega, u, hu, by simp [recover, hcheck, Except.map]⟩
+    exact ⟨k / 2, by omega, u, hu, by simp [recoverModel, hcheck, Except.map]⟩
 
 /-- After a crash anywhere in a recording, the runtime keeps the header as it was written (writing it
     again if the crash cut it) and the committed lines, resumes from the recovered state with the
@@ -720,10 +723,10 @@ theorem check_resume_prefix {c : Codec} (hc : c.Lawful) {load : Header → Excep
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) {pre : String} (hpre : pre.toList <+: (recording c header rs).toList) :
     ∃ n ≤ steps.length, ∃ u, record p {} (steps.take n) [] 1 = .ok (u, rs.take (2 * n)) ∧
-      recover c load pre = .ok u ∧
+      recoverModel c load pre = .ok u ∧
       ∀ {more : List (Op × List (Value × String))} {t' : State} {rs' : List Record},
         record p u more ((steps.take n).flatMap (·.2)) (2 * n + 1) = .ok (t', rs') →
-        check c load (recording c header (rs.take (2 * n)) ++ text c rs') =
+        checkModel c load (recording c header (rs.take (2 * n)) ++ text c rs') =
           .ok { definition := some p, validated := some header.validated, state := t', committed := n + more.length,
                 uncommitted := false, values := (steps.take n ++ more).flatMap (·.2) } := by
   obtain ⟨n, hn, u, hu, hrecover⟩ := recover_prefix hc hw hload h hpre
@@ -745,8 +748,8 @@ theorem splitLines_header (c : Codec) (hc : c.Lawful) (header : Header) (rest : 
     of `load`, whatever follows the header. --/
 theorem check_load_error {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
     (hw : header.definition.DistinctKeys) {e : String} (hload : load header = .error e) (rest : String) :
-    check c load (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
-  simp only [check, splitLines_header c hc header rest]
+    checkModel c load (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
+  simp only [checkModel, splitLines_header c hc header rest]
   simp only [decodeHeader_line hc hw, hload, mapError_error, ok_bind, error_bind]
 
 /-! ## Payloads of a recovered state (§12.1) -/
@@ -817,11 +820,11 @@ theorem replayLines_covered {c : Codec} {p : Definition} :
 /-- A record that checks has a header that `load` read, unless it has no complete line; the checked
     record replays its other lines against the definition that `load` gave. --/
 theorem check_eq_ok {c : Codec} {load : Header → Except String Definition} {text : String} {checked : Checked}
-    (h : check c load text = .ok checked) :
+    (h : checkModel c load text = .ok checked) :
     (checked.definition = none ∧ checked.validated = none ∧ checked.state = {} ∧ checked.values = []) ∨
       ∃ header p lines r, load header = .ok p ∧ replayLines c p {} 1 lines = .ok r ∧ checked.definition = some p ∧
         checked.validated = some header.validated ∧ checked.state = r.state ∧ checked.values = r.values := by
-  simp only [check] at h
+  simp only [checkModel] at h
   split at h
   · simp only [pure_ok, Except.ok.injEq] at h
     subst h
@@ -843,7 +846,7 @@ theorem check_eq_ok {c : Codec} {load : Header → Except String Definition} {te
 /-- Every value a checked state mentions has its payload among the committed ones, so a recovered
     state never names a lost value (§12.1). --/
 theorem check_payloads {c : Codec} {load : Header → Except String Definition} {text : String}
-    {checked : Checked} (h : check c load text = .ok checked) :
+    {checked : Checked} (h : checkModel c load text = .ok checked) :
     ∀ v ∈ checked.state.values, checked.values.any (·.1 == v) = true := by
   have hempty : Replay.Covered {} := fun v hv => by simp [State.values] at hv
   rcases check_eq_ok h with ⟨-, -, hstate, hvalues⟩ | ⟨header, p, lines, r, -, hr, -, -, hstate, hvalues⟩
@@ -855,7 +858,7 @@ theorem check_payloads {c : Codec} {load : Header → Except String Definition} 
 /-- The definition a checked record names is one that `load` read from its header, and the record
     reports the flag of that header. --/
 theorem check_definition {c : Codec} {load : Header → Except String Definition} {text : String} {checked : Checked}
-    {q : Definition} (h : check c load text = .ok checked) (hq : checked.definition = some q) :
+    {q : Definition} (h : checkModel c load text = .ok checked) (hq : checked.definition = some q) :
     ∃ header, load header = .ok q ∧ checked.validated = some header.validated := by
   rcases check_eq_ok h with ⟨hnone, -⟩ | ⟨header, p, lines, r, hl, -, hp, hv, -⟩
   · rw [hnone] at hq
@@ -865,7 +868,7 @@ theorem check_definition {c : Codec} {load : Header → Except String Definition
 
 /-- A checked record names a definition exactly when it reports the flag of a header. --/
 theorem check_validated_isSome {c : Codec} {load : Header → Except String Definition} {text : String}
-    {checked : Checked} (h : check c load text = .ok checked) :
+    {checked : Checked} (h : checkModel c load text = .ok checked) :
     checked.validated.isSome = checked.definition.isSome := by
   rcases check_eq_ok h with ⟨hd, hv, -⟩ | ⟨header, p, lines, r, -, -, hp, hv, -⟩
   · rw [hd, hv]
@@ -875,7 +878,7 @@ theorem check_validated_isSome {c : Codec} {load : Header → Except String Defi
 
 /-! ## Resuming under a definition (§12.1)
 
-A run resumes only under the definition its record holds: `resume` compares the canonical forms,
+A run resumes only under the definition its record holds: `resumeModel` compares the canonical forms,
 which repeat no key, so forms that render alike are equal. -/
 
 /-- Canonical forms that render alike are equal: they repeat no key, and a rendered value parses back
@@ -918,10 +921,10 @@ theorem agreeing_of_error {load : Header → Except String Definition} {p : Defi
     its header, once complete, has the canonical form of `p`; both checks then agree. --/
 theorem check_agreeing {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {checked : Checked} :
-    check c (agreeing load p) text = .ok checked ↔
-      check c load text = .ok checked ∧
+    checkModel c (agreeing load p) text = .ok checked ↔
+      checkModel c load text = .ok checked ∧
         ∀ q, checked.definition = some q → Codec.definitionWire q = Codec.definitionWire p := by
-  simp only [check]
+  simp only [checkModel]
   split
   · refine ⟨fun h => ⟨h, fun q hq => ?_⟩, fun h => h.1⟩
     simp only [pure_ok, Except.ok.injEq] at h
@@ -965,11 +968,11 @@ theorem check_agreeing {c : Codec} {load : Header → Except String Definition} 
     the header holds has the canonical form of `p`; it resumes from the checked state. --/
 theorem resume_eq_ok {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
     {s : State} :
-    resume c load p text = .ok s ↔
-      ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
+    resumeModel c load p text = .ok s ↔
+      ∃ checked q, checkModel c load text = .ok checked ∧ checked.definition = some q ∧
         Codec.definitionWire q = Codec.definitionWire p ∧ checked.state = s := by
-  simp only [resume]
-  cases hc : check c (agreeing load p) text with
+  simp only [resumeModel]
+  cases hc : checkModel c (agreeing load p) text with
   | error e =>
     simp only [error_bind, reduceCtorEq, false_iff, not_exists, not_and]
     intro checked q hcheck hq hw _
@@ -999,29 +1002,29 @@ theorem resume_eq_ok {c : Codec} {load : Header → Except String Definition} {p
 /-- A record resumes only under a definition of the canonical form of the one its header holds
     (§12.1). --/
 theorem resume_definitionWire {c : Codec} {load : Header → Except String Definition} {p : Definition}
-    {text : String} {s : State} (h : resume c load p text = .ok s) :
-    ∃ checked q, check c load text = .ok checked ∧ checked.definition = some q ∧
+    {text : String} {s : State} (h : resumeModel c load p text = .ok s) :
+    ∃ checked q, checkModel c load text = .ok checked ∧ checked.definition = some q ∧
       Codec.definitionWire q = Codec.definitionWire p := by
   obtain ⟨checked, q, hcheck, hq, hw, -⟩ := resume_eq_ok.1 h
   exact ⟨checked, q, hcheck, hq, hw⟩
 
-/-- A resumed run continues from the state `recover` gives. --/
+/-- A resumed run continues from the state `recoverModel` gives. --/
 theorem resume_recover {c : Codec} {load : Header → Except String Definition} {p : Definition} {text : String}
-    {s : State} (h : resume c load p text = .ok s) : recover c load text = .ok s := by
+    {s : State} (h : resumeModel c load p text = .ok s) : recoverModel c load text = .ok s := by
   obtain ⟨checked, q, hcheck, -, -, rfl⟩ := resume_eq_ok.1 h
-  simp [recover, hcheck, Except.map]
+  simp [recoverModel, hcheck, Except.map]
 
 /-- A record without a complete line, which a crash inside the header leaves, does not resume. --/
 theorem resume_torn_header (c : Codec) (load : Header → Except String Definition) (p : Definition) {tail : String}
-    (htail : '\n' ∉ tail.toList) : resume c load p tail = .error "the record has no header" := by
-  simp [resume, check_torn_header c (agreeing load p) htail, ok_bind, throw_error]
+    (htail : '\n' ∉ tail.toList) : resumeModel c load p tail = .error "the record has no header" := by
+  simp [resumeModel, check_torn_header c (agreeing load p) htail, ok_bind, throw_error]
 
 /-- A record whose header holds a definition that `load` refuses resumes under no definition: it is
     refused at line 1, with the error of `load`. --/
 theorem resume_load_error {c : Codec} (hc : c.Lawful) {load : Header → Except String Definition} {header : Header}
     (hw : header.definition.DistinctKeys) {e : String} (hload : load header = .error e) (p : Definition)
-    (rest : String) : resume c load p (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
-  simp [resume, check_load_error hc hw (agreeing_of_error (p := p) hload) rest, error_bind]
+    (rest : String) : resumeModel c load p (c.encodeHeader header ++ "\n" ++ rest) = .error s!"line 1: {e}" := by
+  simp [resumeModel, check_load_error hc hw (agreeing_of_error (p := p) hload) rest, error_bind]
 
 /-- A header whose definition `load` reads as `p` agrees with `p`. --/
 theorem agreeing_of_load {load : Header → Except String Definition} {p : Definition} {header : Header}
@@ -1034,8 +1037,8 @@ theorem resume_text {c : Codec} (hc : c.Lawful) {load : Header → Except String
     (hw : header.definition.DistinctKeys) {p : Definition} (hload : load header = .ok p)
     {steps : List (Op × List (Value × String))} {t : State} {rs : List Record}
     (h : record p {} steps [] 1 = .ok (t, rs)) :
-    resume c load p (recording c header rs) = .ok t := by
-  simp [resume, check_text hc hw (agreeing_of_load hload) h, ok_bind, pure_ok]
+    resumeModel c load p (recording c header rs) = .ok t := by
+  simp [resumeModel, check_text hc hw (agreeing_of_load hload) h, ok_bind, pure_ok]
 
 /-- After a crash that left the header complete, the definition resumes from the state of the
     committed transitions. --/
@@ -1045,8 +1048,8 @@ theorem resume_torn {c : Codec} (hc : c.Lawful) {load : Header → Except String
     (h : record p {} steps [] 1 = .ok (t, rs)) {k : Nat} (hk : k ≤ rs.length) {tail : String}
     (htail : '\n' ∉ tail.toList) :
     ∃ u, record p {} (steps.take (k / 2)) [] 1 = .ok (u, rs.take (2 * (k / 2))) ∧
-      resume c load p (recording c header (rs.take k) ++ tail) = .ok u := by
+      resumeModel c load p (recording c header (rs.take k) ++ tail) = .ok u := by
   obtain ⟨u, hu, hcheck⟩ := check_torn hc hw (agreeing_of_load hload) h hk htail
-  exact ⟨u, hu, by simp [resume, hcheck, ok_bind, pure_ok]⟩
+  exact ⟨u, hu, by simp [resumeModel, hcheck, ok_bind, pure_ok]⟩
 
 end Suimon.Trace

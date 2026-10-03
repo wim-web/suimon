@@ -40,18 +40,32 @@ def recorded (p : Definition) (seed : Nat) (validated : Bool := true) : IO Recor
   let text := Suimon.Trace.recording Suimon.Trace.wireCodec (.of p validated) records
   return { steps := steps.toList, records, text, states }
 
-def checkedText (label : String) (text : String) : IO Suimon.Trace.Checked :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec Suimon.Trace.Header.load text with
+/-- Compare executable replay with the specification on valid, corrupt, and torn records. --/
+def checkBoth (label text : String) : IO (Except String Suimon.Trace.Checked) := do
+  let model := Suimon.Trace.checkModel Suimon.Trace.wireCodec Suimon.Trace.Header.load text
+  let bounded := Suimon.Trace.check Suimon.Trace.wireCodec Suimon.Trace.Header.load text
+  match model, bounded with
+  | .error a, .error b => ensure (a == b) s!"{label}: replay errors differ: {a}; {b}"
+  | .ok a, .ok b =>
+    ensure (a.definition == b.definition && a.validated == b.validated && a.state == b.state &&
+      a.committed == b.committed && a.uncommitted == b.uncommitted && a.values == b.values)
+      s!"{label}: indexed replay differs from the reference"
+  | .ok _, .error e => throw (IO.userError s!"{label}: indexed replay rejected: {e}")
+  | .error e, .ok _ => throw (IO.userError s!"{label}: indexed replay accepted: {e}")
+  return bounded
+
+def checkedText (label : String) (text : String) : IO Suimon.Trace.Checked := do
+  match ← checkBoth label text with
   | .ok c => pure c
   | .error e => throw (IO.userError s!"{label}: {e}")
 
-def rejectedText (label fragment : String) (text : String) : IO Unit :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec Suimon.Trace.Header.load text with
+def rejectedText (label fragment : String) (text : String) : IO Unit := do
+  match ← checkBoth label text with
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{fragment}'")
   | .error e => ensure (contains e fragment) s!"{label}: expected '{fragment}', got {e}"
 
-def rejectedExactly (label expected : String) (text : String) : IO Unit :=
-  match Suimon.Trace.check Suimon.Trace.wireCodec Suimon.Trace.Header.load text with
+def rejectedExactly (label expected : String) (text : String) : IO Unit := do
+  match ← checkBoth label text with
   | .ok _ => throw (IO.userError s!"{label}: accepted, expected '{expected}'")
   | .error e => ensure (e == expected) s!"{label}: expected '{expected}', got {e}"
 
