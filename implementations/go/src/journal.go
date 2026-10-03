@@ -52,8 +52,9 @@ type FileJournal struct {
 }
 
 // CreateJournal creates a journal in a new file; it fails if the file exists.
+// It uses mode 0600 (before umask), since journal payloads may contain sensitive data.
 func CreateJournal(path string) (*FileJournal, error) {
-	j, err := openJournal(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+	j, err := openJournal(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, err
 	}

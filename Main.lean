@@ -6,6 +6,8 @@ open Lean Suimon
 private def usage : String :=
   "suimon validate <definition.json>\n" ++
   "suimon check <trace.jsonl> [--state]\n" ++
+  "  [--max-bytes N] [--max-records N] [--max-values N] [--max-work N]\n" ++
+  "  defaults: 16777216 bytes, 100000 records, 100000 values, 1000000000 work units\n" ++
   "suimon explore <definition.json> [--seeds N] [--steps N]\n" ++
   "suimon gen <definition.json> [--seed N] [--steps N]\n"
 
@@ -62,9 +64,21 @@ private def validateFile (path : String) : IO UInt32 := run do
 
 /-- The complete lines of a record, and whether anything follows the last newline. A crash may cut
     the last line inside a character, so only the complete lines must be UTF-8 (§12.1). --/
-private def readRecord (path : String) : IO (String × Bool) := do
-  let bytes ← IO.FS.readBinFile path
-  let cut := (bytes.toList.reverse.dropWhile (· != 10)).length
+private def readRecord (path : String) (maxBytes : Nat) : IO (String × Bool) := do
+  -- Bound the read itself, including torn bytes; a stat-only check races a growing file and
+  -- does not bound pipes. Probe at most one byte beyond the allowance.
+  let bytes ← IO.FS.withFile path .read fun handle => do
+    let mut bytes := ByteArray.empty
+    repeat
+      let chunk ← handle.read (min 65536 (maxBytes - bytes.size + 1)).toUSize
+      if chunk.isEmpty then break
+      if bytes.size + chunk.size > maxBytes then
+        throw (IO.userError s!"record-byte limit exceeded (max {maxBytes})")
+      bytes := bytes ++ chunk
+    return bytes
+  let mut cut := bytes.size
+  while cut > 0 && bytes[cut - 1]! != 10 do
+    cut := cut - 1
   match String.fromUTF8? (bytes.extract 0 cut) with
   | some text => return (text, cut < bytes.size)
   | none => throw (IO.userError s!"Tried to read file '{path}' containing non UTF-8 data.")
@@ -73,7 +87,13 @@ private def readRecord (path : String) : IO (String × Bool) := do
     (`Trace.Header.load`): decoded and validated like a definition file when the execution was started
     with validation, decoded only when it was started without. --/
 private def checkFile (trace : String) (opts : List (String × String)) : IO UInt32 := run do
-  let (text, torn) ← readRecord trace
+  let defaults : Trace.Limits := {}
+  let limits : Trace.Limits := {
+    maxBytes := ← IO.ofExcept (natOption opts "--max-bytes" defaults.maxBytes)
+    maxRecords := ← IO.ofExcept (natOption opts "--max-records" defaults.maxRecords)
+    maxValues := ← IO.ofExcept (natOption opts "--max-values" defaults.maxValues)
+    maxWork := ← IO.ofExcept (natOption opts "--max-work" defaults.maxWork) }
+  let (text, torn) ← readRecord trace limits.maxBytes
   -- Bound the header before the recursive wire parser reads its definition.
   let line := (text.takeWhile (· != '\n')).toString
   if line.utf8ByteSize < text.utf8ByteSize then
@@ -84,7 +104,7 @@ private def checkFile (trace : String) (opts : List (String × String)) : IO UIn
     let p ← Trace.Header.load header
     p.checkResources
     pure p
-  match (Trace.check Trace.wireCodec load text).map fun c =>
+  match (Trace.check Trace.wireCodec load text limits).map fun c =>
       { c with uncommitted := c.uncommitted || torn } with
   | .ok checked =>
     -- `--state` prints the whole state, for comparing another implementation's state with this one.
@@ -132,7 +152,7 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | ["--help"] | ["help"] => IO.print usage; return 0
   | ["validate", path] => validateFile path
-  | "check" :: trace :: rest => match options rest [] ["--state"] with
+  | "check" :: trace :: rest => match options rest ["--max-bytes", "--max-records", "--max-values", "--max-work"] ["--state"] with
     | .ok opts => checkFile trace opts
     | .error e => IO.eprintln e; return 2
   | "explore" :: path :: rest => match options rest ["--seeds", "--steps"] with
