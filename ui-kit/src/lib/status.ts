@@ -3,6 +3,7 @@ import { findWorkflow } from './definition';
 import { dictionary } from './dictionary';
 import { createRuntimeIndex, ownerKey, placementKey } from './runtime-index';
 import type { RuntimeIndex } from './runtime-index';
+import { RUNTIME_LIMITS } from './runtime-limits';
 
 export function samePath(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((segment, i) => segment === b[i]);
@@ -76,30 +77,107 @@ export interface RunNode {
   status: 'running' | 'complete';
 }
 
-/** Runs in tree order: each child run follows the run that owns its caller. Orphans come last. */
-export function runTree(state: RuntimeState, index: RuntimeIndex = createRuntimeIndex(state)): RunNode[] {
-  const byParent = new Map<string, { run: Run; owner?: RunOwner }[]>();
-  const roots: { run: Run; owner?: RunOwner }[] = [];
-  for (const run of state.runs) {
-    const owner = runOwner(state, run, index);
-    if (!run.path.length || !owner) roots.push({ run, owner });
-    else {
-      const key = pathKey(owner.run), siblings = byParent.get(key);
-      if (siblings) siblings.push({ run, owner }); else byParent.set(key, [{ run, owner }]);
+function invalidState(at: string, message: string): never { throw new TypeError(`state.${at}: ${message}`); }
+function runtimePathKey(path: Path, at: string): string {
+  if (path.length > RUNTIME_LIMITS.pathSegments) invalidState(at, `at most ${RUNTIME_LIMITS.pathSegments} path segments are supported`);
+  return pathKey(path);
+}
+function uniqueIds<T extends { id: string }>(items: T[], at: string): Map<string, T> {
+  const index = new Map<string, T>();
+  items.forEach((item, i) => {
+    if (index.has(item.id)) invalidState(`${at}[${i}].id`, 'duplicate id');
+    index.set(item.id, item);
+  });
+  return index;
+}
+
+/**
+ * Runs in tree order, with each child following its caller's run. Throws TypeError for an
+ * ambiguous, incomplete, cyclic or over-budget ownership graph, even if parseState was bypassed.
+ * IDs and path segments stay opaque; executions and their invocations intentionally share IDs.
+ * Check source arrays rather than the optional lookup index, which discards duplicates.
+ */
+export function runTree(state: RuntimeState, _index?: RuntimeIndex): RunNode[] {
+  if (state.runs.length > RUNTIME_LIMITS.runs) invalidState('runs', `at most ${RUNTIME_LIMITS.runs} runs are supported`);
+  const runs = new Map<string, Run>();
+  state.runs.forEach((run, i) => {
+    const key = runtimePathKey(run.path, `runs[${i}].path`);
+    if (runs.has(key)) invalidState(`runs[${i}].path`, 'duplicate run path');
+    runs.set(key, run);
+  });
+  const invocations = uniqueIds(state.invocations, 'invocations');
+  const executions = uniqueIds(state.executions, 'executions');
+  uniqueIds(state.calls, 'calls');
+  uniqueIds(state.results, 'results');
+  state.invocations.forEach((invocation, i) => {
+    if (!runs.has(runtimePathKey(invocation.run, `invocations[${i}].run`))) invalidState(`invocations[${i}].run`, 'unknown run');
+  });
+  const tasks = new Map<Execution, Set<string>>();
+  state.executions.forEach((execution, i) => {
+    const at = `executions[${i}]`, invocation = invocations.get(execution.id);
+    runtimePathKey(execution.run, `${at}.run`);
+    if (!invocation || !samePath(invocation.run, execution.run) || invocation.placement !== execution.placement) {
+      invalidState(at, 'execution must match its invocation');
+    }
+    const names = new Set<string>();
+    for (const task of execution.tasks) {
+      if (names.has(task.name)) invalidState(`${at}.tasks`, 'duplicate task name');
+      names.add(task.name);
+    }
+    tasks.set(execution, names);
+  });
+
+  const byParent = new Map<Run, { children: RunNode[]; counts: Map<string, number> }>();
+  const roots: RunNode[] = [];
+  state.runs.forEach((run, i) => {
+    const at = `runs[${i}]`;
+    const node: RunNode = { run, depth: 0, ordinal: 1, status: run.complete ? 'complete' : 'running' };
+    if (!run.path.length) {
+      if (run.owner !== null || run.task !== null) invalidState(at, 'root run cannot have an owner or task');
+      roots.push(node);
+      return;
+    }
+    if (run.owner === null) invalidState(`${at}.owner`, 'child run needs an owner');
+    let owner: RunOwner;
+    if (run.task !== null) {
+      const execution = executions.get(run.owner);
+      if (!execution) invalidState(`${at}.owner`, 'unknown execution');
+      if (!tasks.get(execution)!.has(run.task)) invalidState(`${at}.task`, 'unknown task');
+      owner = { run: execution.run, placement: execution.placement, execution, task: run.task };
+    } else {
+      const invocation = invocations.get(run.owner);
+      if (!invocation) invalidState(`${at}.owner`, 'unknown invocation');
+      owner = { run: invocation.run, placement: invocation.placement, invocation, task: null };
+    }
+    node.owner = owner;
+    // Caller run references were checked above, before linking children.
+    const parent = runs.get(pathKey(owner.run))!;
+    const group = byParent.get(parent) ?? { children: [], counts: new Map<string, number>() };
+    const key = ownerKey(owner.placement, owner.task);
+    node.ordinal = (group.counts.get(key) ?? 0) + 1;
+    group.counts.set(key, node.ordinal);
+    group.children.push(node);
+    byParent.set(parent, group);
+  });
+
+  const nodes: RunNode[] = [];
+  const visited = new Set<Run>();
+  const pending = [...roots];
+  while (pending.length) {
+    const node = pending.pop()!;
+    if (visited.has(node.run)) invalidState('runs', 'ownership cycle');
+    if (node.depth > RUNTIME_LIMITS.runDepth) invalidState('runs', `ownership depth exceeds ${RUNTIME_LIMITS.runDepth}`);
+    visited.add(node.run);
+    nodes.push(node);
+    const children = byParent.get(node.run)?.children ?? [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i]!;
+      child.depth = node.depth + 1;
+      pending.push(child);
     }
   }
-  roots.sort((a, b) => a.run.path.length - b.run.path.length);
-  const nodes: RunNode[] = [];
-  const visit = (item: { run: Run; owner?: RunOwner }, depth: number, ordinal: number) => {
-    nodes.push({ run: item.run, depth, owner: item.owner, ordinal, status: item.run.complete ? 'complete' : 'running' });
-    const counts = new Map<string, number>();
-    for (const child of byParent.get(pathKey(item.run.path)) ?? []) {
-      const key = ownerKey(child.owner!.placement, child.owner!.task);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-      visit(child, depth + 1, counts.get(key)!);
-    }
-  };
-  roots.forEach(root => visit(root, 0, 1));
+  // With every owner resolved, any component disconnected from the root contains a cycle.
+  if (nodes.length !== state.runs.length) invalidState('runs', 'ownership cycle');
   return nodes;
 }
 

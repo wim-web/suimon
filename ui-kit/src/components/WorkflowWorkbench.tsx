@@ -6,7 +6,8 @@ import { findWorkflow } from '../lib/definition';
 import { lookup } from '../lib/dictionary';
 import { recordTransitions, recordValues, filterTransitions } from '../lib/records';
 import type { RecordFilter, RecordRelation } from '../lib/records';
-import { childRuns, findRun, pathKey, runLabel, runOverlay, runOwner, runTree, samePath } from '../lib/status';
+import { childRuns, findRun, pathKey, runLabel, runOverlay, samePath } from '../lib/status';
+import { RUNTIME_LIMITS } from '../lib/runtime-limits';
 import { createRuntimeIndex } from '../lib/runtime-index';
 import { valueIndex } from '../lib/values';
 import { FailureList } from './FailureList';
@@ -14,6 +15,7 @@ import { PlacementInspector } from './PlacementInspector';
 import { RecordInspector } from './RecordInspector';
 import { RecordPanel, relationsOf } from './RecordPanel';
 import { RunSelector } from './RunSelector';
+import { InvalidRuntimeState, useRunTree } from './RuntimeRuns';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { WorkflowSidebar } from './WorkflowSidebar';
 import { WorkflowToolbar } from './WorkflowToolbar';
@@ -43,7 +45,9 @@ export interface WorkflowWorkbenchProps {
 type View = { run: Path } | { workflow: string; trail: string[]; from?: Path };
 const emptyRecords: readonly ExecutionRecord[] = [];
 
-export function WorkflowWorkbench({ definition, state, records = emptyRecords, recordTail = '', presentations, title, subtitle, actions, sidebarContent, notice, theme = 'dark', run: controlledRun, onRunChange, onSelectRecord }: WorkflowWorkbenchProps) {
+export function WorkflowWorkbench({ definition, state: suppliedState, records = emptyRecords, recordTail = '', presentations, title, subtitle, actions, sidebarContent, notice, theme = 'dark', run: controlledRun, onRunChange, onSelectRecord }: WorkflowWorkbenchProps) {
+  const { nodes: tree, invalid } = useRunTree(suppliedState);
+  const state = invalid ? undefined : suppliedState;
   const [localView, setView] = useState<View>({ run: [] });
   const [selectedPlacement, setSelectedPlacement] = useState<string | null>(null);
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
@@ -58,7 +62,7 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
   const transitions = useMemo(() => recordTransitions(records), [records]);
   const relations = useMemo(() => relationsOf(transitions, definition, state, runtimeIndex), [transitions, definition, state, runtimeIndex]);
   const values = useMemo(() => valueIndex(definition, state, recordValues(transitions), runtimeIndex), [definition, state, transitions, runtimeIndex]);
-  const tree = useMemo(() => state ? runTree(state, runtimeIndex) : [], [state, runtimeIndex]);
+  const nodesByPath = useMemo(() => new Map(tree.map(node => [pathKey(node.run.path), node])), [tree]);
   const labels = useMemo(() => new Map(tree.map(node => [pathKey(node.run.path), runLabel(node)])), [tree]);
   const labelOf = useCallback((path: string[]) => labels.get(pathKey(path)) ?? (path.length ? 'unknown run' : 'root'), [labels]);
 
@@ -108,16 +112,23 @@ export function WorkflowWorkbench({ definition, state, records = emptyRecords, r
   const currentRecord = selectedSeq === null ? undefined : transitions.find(t => t.seq === selectedSeq);
   const position = currentRecord ? visible.indexOf(currentRecord) : -1;
   const breadcrumbs: { label: string; path: Path }[] = [];
+  let invalidBreadcrumbs = false;
   if (state && currentRun) {
+    const visited = new Set<string>();
     for (let r: typeof currentRun | undefined = currentRun; r; ) {
-      breadcrumbs.unshift({ label: r.path.length ? labelOf(r.path) : r.workflow, path: r.path });
-      const owner: ReturnType<typeof runOwner> = runOwner(state, r, runtimeIndex);
-      r = owner && r.path.length ? findRun(state, owner.run, runtimeIndex) : undefined;
+      const key = pathKey(r.path);
+      if (visited.has(key) || breadcrumbs.length > RUNTIME_LIMITS.runDepth) { invalidBreadcrumbs = true; break; }
+      visited.add(key);
+      breadcrumbs.push({ label: r.path.length ? labelOf(r.path) : r.workflow, path: r.path });
+      const owner = nodesByPath.get(key)?.owner;
+      r = owner ? nodesByPath.get(pathKey(owner.run))?.run : undefined;
     }
+    breadcrumbs.reverse();
   }
   const uncommitted = transitions.filter(t => !t.committed).length;
   const placementRecords = selectedPlacement ? filterTransitions(transitions, relations, { run: runPath, placement: selectedPlacement }).length : 0;
 
+  if (invalid || invalidBreadcrumbs) return <div className="suimon-ui sui-workbench" data-theme={theme}><InvalidRuntimeState /></div>;
   return <div className="suimon-ui sui-workbench" data-theme={theme}>
     <WorkflowToolbar title={title ?? definition.main} subtitle={subtitle} status={state ? state.status : 'definition'} failures={state?.failures.length}
       onShowFailures={() => setSidebar(true)} actions={actions} />

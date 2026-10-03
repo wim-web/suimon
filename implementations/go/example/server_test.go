@@ -70,15 +70,6 @@ func call(t *testing.T, method, target, body string) (int, []byte) {
 	return res.StatusCode, data
 }
 
-func decode[T any](t *testing.T, data []byte) T {
-	t.Helper()
-	var v T
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatalf("%v: %s", err, data)
-	}
-	return v
-}
-
 func startTestRun(t *testing.T, srv *httptest.Server, body string) string {
 	t.Helper()
 	status, data := call(t, "POST", srv.URL+"/api/runs", body)

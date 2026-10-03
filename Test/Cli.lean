@@ -136,6 +136,25 @@ def run : IO Unit := do
       s!"repeated header key: {result.stderr}"
   -- A crash may cut the last line inside a character; only the complete lines must be UTF-8.
   let generated ← cli ["gen", "Test/definitions/users.json", "--seed", "3"] 0
+  IO.FS.withTempFile fun handle path => do
+    handle.putStr generated.stdout
+    handle.flush
+    for (option, error) in [("--max-bytes", "record-byte limit exceeded"),
+        ("--max-records", "record-count limit exceeded"),
+        ("--max-values", "introduced-value limit exceeded"),
+        ("--max-work", "replay-work limit exceeded")] do
+      let result ← cli ["check", path.toString, option, "0"] 1
+      Validate.ensure (Validate.contains result.stderr error) s!"{option}: {result.stderr}"
+      let bad ← cli ["check", path.toString, option, "-1"] 1
+      Validate.ensure (Validate.contains bad.stderr "expects a natural number") s!"{option}: invalid number"
+      let _ ← cli ["check", path.toString, option] 2
+    let _ ← cli ["check", path.toString, "--max-bytes", toString generated.stdout.utf8ByteSize] 0
+    -- The read budget includes incomplete, invalid UTF-8 bytes after the last newline.
+    handle.write (ByteArray.mk #[0xff])
+    handle.flush
+    let result ← cli ["check", path.toString, "--max-bytes", toString generated.stdout.utf8ByteSize] 1
+    Validate.ensure (Validate.contains result.stderr "record-byte limit exceeded") "unbounded torn tail"
+    let _ ← cli ["check", path.toString, "--max-bytes", toString (generated.stdout.utf8ByteSize + 1)] 0
   let complete := String.join ((generated.stdout.splitOn "\n").take 5 |>.map (· ++ "\n"))
   IO.FS.withTempFile fun handle path => do
     handle.write (complete.toUTF8 ++ ByteArray.mk #[0xe3, 0x81])

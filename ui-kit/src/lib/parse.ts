@@ -4,6 +4,8 @@ import type {
   RuntimeState, Settled, Task, TaskOutput, TaskResult, TaskState, Timeout, TransformDecl, ValueType, Workflow,
 } from '../types';
 import { dictionary } from './dictionary';
+import { RUNTIME_LIMITS } from './runtime-limits';
+import { runTree } from './status';
 
 type Obj = Record<string, unknown>;
 
@@ -278,6 +280,10 @@ export function parseDefinition(value: unknown): Definition {
 /* Runtime state (derived JSON of Suimon/State.lean). Unknown fields are ignored. */
 
 function path(value: unknown, at: string): Path { return array(value, at).map((segment, i) => string(segment, `${at}[${i}]`)); }
+function runtimePath(value: unknown, at: string): Path {
+  if (array(value, at).length > RUNTIME_LIMITS.pathSegments) fail(at, `at most ${RUNTIME_LIMITS.pathSegments} path segments are supported`);
+  return path(value, at);
+}
 function optional<T>(o: Obj, key: string, at: string, parse: (value: unknown, at: string) => T): T | null {
   return o[key] === undefined || o[key] === null ? null : parse(o[key], `${at}.${key}`);
 }
@@ -290,12 +296,12 @@ const outcome = (value: unknown, at: string) => oneOf(value, at, outcomes);
 
 function run(value: unknown, at: string): Run {
   const o = object(value, at);
-  return { path: req(o, 'path', at, path), workflow: req(o, 'workflow', at, string), input: optional(o, 'input', at, string), owner: optional(o, 'owner', at, string), task: optional(o, 'task', at, string), complete: req(o, 'complete', at, bool) };
+  return { path: req(o, 'path', at, runtimePath), workflow: req(o, 'workflow', at, string), input: optional(o, 'input', at, string), owner: optional(o, 'owner', at, string), task: optional(o, 'task', at, string), complete: req(o, 'complete', at, bool) };
 }
 function invocation(value: unknown, at: string): Invocation {
   const o = object(value, at);
   return {
-    id: req(o, 'id', at, string), run: req(o, 'run', at, path), placement: req(o, 'placement', at, string),
+    id: req(o, 'id', at, string), run: req(o, 'run', at, runtimePath), placement: req(o, 'placement', at, string),
     trigger: optional(o, 'trigger', at, string), input: optional(o, 'input', at, string),
     status: req(o, 'status', at, (v, a) => oneOf(v, a, ['active', 'succeeded', 'skipped', 'failed', 'upstreamFailed', 'cancelled'] as const)),
     arm: optional(o, 'arm', at, string),
@@ -326,7 +332,7 @@ function taskState(value: unknown, at: string): TaskState {
 }
 function execution(value: unknown, at: string): Execution {
   const o = object(value, at);
-  return { id: req(o, 'id', at, string), run: req(o, 'run', at, path), placement: req(o, 'placement', at, string), input: optional(o, 'input', at, string), tasks: list(o, 'tasks', at, taskState), complete: req(o, 'complete', at, bool) };
+  return { id: req(o, 'id', at, string), run: req(o, 'run', at, runtimePath), placement: req(o, 'placement', at, string), input: optional(o, 'input', at, string), tasks: list(o, 'tasks', at, taskState), complete: req(o, 'complete', at, bool) };
 }
 /** `{"value": {"v": id}}`, the derived JSON of a constructor with one value. */
 function valueCase(value: unknown, at: string): { value: { v: string } } | undefined {
@@ -369,16 +375,20 @@ function failure(value: unknown, at: string): Failure {
   return { run: req(o, 'run', at, path), placement: req(o, 'placement', at, string), task: optional(o, 'task', at, string), cause: req(o, 'cause', at, (v, a) => oneOf(v, a, ['error', 'timeout', 'lost', 'transform'] as const)) };
 }
 
-/** Checks a runtime state in the derived JSON form of Suimon/State.lean and normalizes Option fields to null. */
+/** Checks runtime shapes and bounded, acyclic run ownership; normalizes Option fields to null. */
 export function parseState(value: unknown): RuntimeState {
   const at = 'state', o = object(value, at);
-  return {
+  const runs = array(field(o, 'runs', at), `${at}.runs`);
+  if (runs.length > RUNTIME_LIMITS.runs) fail(`${at}.runs`, `at most ${RUNTIME_LIMITS.runs} runs are supported`);
+  const state: RuntimeState = {
     status: req(o, 'status', at, (v, a) => oneOf(v, a, ['running', 'stopping', 'succeeded', 'failed', 'cancelled', 'skipped'] as const)),
     started: req(o, 'started', at, bool), cancelled: req(o, 'cancelled', at, bool),
-    runs: list(o, 'runs', at, run), invocations: list(o, 'invocations', at, invocation), calls: list(o, 'calls', at, call),
+    runs: runs.map((item, i) => run(item, `${at}.runs[${i}]`)), invocations: list(o, 'invocations', at, invocation), calls: list(o, 'calls', at, call),
     executions: list(o, 'executions', at, execution), results: list(o, 'results', at, result), taskResults: list(o, 'taskResults', at, taskResult),
     deliveries: list(o, 'deliveries', at, delivery), settled: list(o, 'settled', at, settled), failures: list(o, 'failures', at, failure),
   };
+  runTree(state);
+  return state;
 }
 
 /* Execution records (trace.schema.json) */
