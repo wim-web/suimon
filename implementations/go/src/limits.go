@@ -92,12 +92,28 @@ func (e *Engine) acquire() error {
 
 func (e *Engine) release() { e.mu.Lock(); e.active--; e.mu.Unlock() }
 
+const largestRecordSequence = int(^uint(0) >> 1)
+
+// Engines use the default reader limits for both writing and Resume. A limit failure
+// before admission uses the quota shutdown path, preserving a readable journal.
+func checkJournalLine(line string) error {
+	if err := (InputLimits{}).check(line); err != nil {
+		return fmt.Errorf("%w: journal line: %w", ErrQuotaExceeded, err)
+	}
+	return nil
+}
+
 // shutdownBytes uses the largest sequence numbers, so the reserve remains sufficient even
 // when normal work crosses a decimal digit boundary. All shutdown operations carry no values.
 func shutdownBytes(op Op) int64 {
-	const largest = int(^uint(0) >> 1)
-	return int64(len(EncodeRecord(Record{Seq: largest, Op: op})) +
-		len(EncodeRecord(Record{Seq: largest, Commit: true})) + 2)
+	return int64(len(EncodeRecord(Record{Seq: largestRecordSequence, Op: op})) +
+		len(EncodeRecord(Record{Seq: largestRecordSequence, Commit: true})) + 2)
+}
+
+// A call must remain recordable when it is cancelled, even after sequence numbers
+// grow. OpLost on Resume is shorter than this termination record.
+func checkCallShutdown(call string) error {
+	return checkJournalLine(EncodeRecord(Record{Seq: largestRecordSequence, Op: OpTerminated{Call: call}}))
 }
 
 func (d *driver) stopQuota(err error) {
@@ -212,6 +228,9 @@ func (d *driver) admit(records []Record) error {
 	call, executions, tasks := d.growth(op)
 	calls, reserve := d.activeCalls, d.terminationBytes
 	if call != "" {
+		if err := checkCallShutdown(call); err != nil {
+			return err
+		}
 		calls++
 		reserve += shutdownBytes(OpTerminated{Call: call})
 	}
@@ -225,7 +244,11 @@ func (d *driver) admit(records []Record) error {
 	}
 	var encoded []byte
 	for _, r := range records {
-		encoded = append(encoded, EncodeRecord(r)...)
+		line := EncodeRecord(r)
+		if err := checkJournalLine(line); err != nil {
+			return err
+		}
+		encoded = append(encoded, line...)
 		encoded = append(encoded, '\n')
 	}
 	_, cancel := op.(OpCancel)
@@ -283,6 +306,9 @@ func (d *driver) restoreBudget(length int, values []Payload) error {
 	for _, c := range d.state.Calls {
 		d.elements += int64(c.Yields)
 		if !c.Status.ended() {
+			if err := checkCallShutdown(c.ID); err != nil {
+				return err
+			}
 			d.activeCalls++
 			d.terminationBytes += shutdownBytes(OpTerminated{Call: c.ID})
 		}

@@ -82,6 +82,8 @@ type Engine struct {
 // header, it must have the same canonical form. Only a definition built in code can fail this, such
 // as one with an empty id, which ParseDefinition rejects. The header of its journals records that
 // the execution was started with validation.
+// Headers and record lines must fit the default InputLimits used by Check and Resume.
+// These parser limits apply in addition to the execution budgets set by WithLimits.
 func NewEngine(p *Definition, r *Registry, opts ...EngineOption) (*Engine, error) {
 	if err := p.representable(); err != nil {
 		return nil, err
@@ -124,8 +126,13 @@ func newEngine(p *Definition, d *derivation, r *Registry, validated bool, opts [
 }
 
 // recordedHeader is the header of the journals of p, after checking that p survives recording: the
-// definition the header holds must read back to the same canonical form.
+// definition the header holds must read back to the same canonical form. Check the
+// complete header too: its enclosing object adds depth and bytes to the definition.
 func recordedHeader(p *Definition, validated bool) (string, error) {
+	header := EncodeHeader(p, validated)
+	if err := checkJournalLine(header); err != nil {
+		return "", fmt.Errorf("suimon: the definition cannot be recorded: %w", err)
+	}
 	canonical := definitionWire(p).render()
 	q, err := ParseDefinition([]byte(canonical))
 	if err == nil && definitionWire(q).render() != canonical {
@@ -134,7 +141,7 @@ func recordedHeader(p *Definition, validated bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("suimon: the definition cannot be recorded: %w", err)
 	}
-	return EncodeHeader(p, validated), nil
+	return header, nil
 }
 
 // A StartOption configures Start and Run.
