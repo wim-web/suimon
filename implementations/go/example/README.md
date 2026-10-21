@@ -4,10 +4,6 @@ Go ランタイムの動きを観察するためのサンプルです。外部�
 
 [ブラウザで試す](https://wim-web.github.io/suimon/)
 
-ビルドには [.go-version](../../../.go-version) の Go と [.node-version](../../../.node-version) の Node.js を使ってください。Node.js は組み込み CA も使うため、OS の CA 更新に加えて [Node.js 自体の修正版](https://github.com/nodejs/node/releases/tag/v24.22.1)が必要です。
-
-pnpm 12 は Node.js とは別の TLS 実装を使うため、CI では更新済み Node.js の CA 一覧を `cafile` に渡しています。ローカルの pnpm も、OS の信頼ストアまたは指定する CA ファイルを更新してください。
-
 中心は Stream と Batch の比較で、同じ入力・同じ待ち時間のまま、下流の処理が始まる時刻・最初の結果が出る時刻・全体の所要時間をタイムラインで見比べます。
 
 UI の実行状態と実行記録は、ランタイムが書いた実行記録の行を `Check` で再生して求めています。UI がエンジン内部を覗かず、実行記録を読む側と同じ手順で状態を得るためです。
