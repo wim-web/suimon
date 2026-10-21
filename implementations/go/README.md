@@ -4,6 +4,8 @@
 
 入口は [Engine](src/engine.go) と [Registry](src/registry.go)、ホスト側の資源上限は [Limits](src/limits.go) です。動く例として [playground](example/README.md) と [ランタイムのテスト](src/runtime_test.go) を参照してください。
 
+ビルドには [.go-version](../../.go-version) の Go を使ってください。`go.mod` の `go` 行はライブラリの最低要件であり、ビルドに使う Go は指定しません。[eMudhra 中間 CA の信頼を拒否する修正](https://go.dev/doc/devel/release#go1.27.3)を取り込むには、HTTPS を利用するアプリ側も修正済みの Go で再ビルド・再配布する必要があります。
+
 ## 検証
 
 リポジトリ直下で実行します。
