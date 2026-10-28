@@ -6,8 +6,9 @@ open Suimon.Trace Suimon.Test.Validate
 private def check (text : String) (limits : Limits := {}) : Except String Checked :=
   Suimon.Trace.check wireCodec Header.load text limits
 
-private def rejected (label expected text : String) (limits : Limits) : IO Unit := do
-  match check text limits with
+private def rejected (label expected text : String) (limits : Limits)
+    (codec : Codec := wireCodec) : IO Unit := do
+  match Suimon.Trace.check codec Header.load text limits with
   | .ok _ => throw (IO.userError s!"{label}: accepted")
   | .error e => ensure (e == expected) s!"{label}: expected {expected}, got {e}"
 
@@ -56,6 +57,10 @@ def run : IO Unit := do
     { exact with maxValues := 2 }
   -- Work rejects before decoding (even a codec that always fails) or executing the next step.
   rejected "work before parse" "record: replay-work limit exceeded (max 0)" text { maxWork := 0 }
+  let poisonHeader : Codec := { wireCodec with decodeHeader := fun _ => .error "header decoded" }
+  rejected "work before header decode" s!"line 1: replay-work limit exceeded (max {bytes})"
+    text { maxWork := bytes } poisonHeader
+  rejected "header decode with work available" "line 1: header decoded" text {} poisonHeader
   let header := Suimon.Test.Trace.header p
   let first := wireCodec.encode (.op 1 (.start (some "tenant")) [("tenant", "payload")])
   let commit := wireCodec.encode (.commit 2)
@@ -65,6 +70,20 @@ def run : IO Unit := do
   let _ ← IO.ofExcept (check short { maxWork := exactWork })
   rejected "work before step" s!"line 3: replay-work limit exceeded (max {exactWork - 1})" short
     { maxWork := exactWork - 1 }
+  let poisonRecord : Codec := { wireCodec with decode := fun _ => .error "record decoded" }
+  let headerWork := short.utf8ByteSize + header.utf8ByteSize
+  rejected "work before record decode" s!"line 2: replay-work limit exceeded (max {headerWork})"
+    short { maxWork := headerWork } poisonRecord
+  rejected "record decode with work available" "line 2: record decoded" short {} poisonRecord
+  -- An invalid step distinguishes charging before execution from returning the same
+  -- quota error after a successful step. With enough work it must reach the rejection.
+  let badFirst := wireCodec.encode (.op 1 (.start none) [])
+  let bad := header ++ badFirst ++ "\n" ++ commit ++ "\n"
+  let beforeStep := bad.utf8ByteSize + header.utf8ByteSize + badFirst.utf8ByteSize + 1 + commit.utf8ByteSize + 1
+  rejected "work wins over rejected step" s!"line 3: replay-work limit exceeded (max {beforeStep})"
+    bad { maxWork := beforeStep }
+  Suimon.Test.Trace.rejectedExactly "invalid step with work available"
+    "line 3: rejected {\"type\":\"start\"}: INPUT_MISMATCH" bad
   -- Complete uncommitted ops consume a record slot; a torn tail consumes bytes only.
   let pending := header ++ first ++ "\n"
   let pc ← IO.ofExcept (check pending { maxRecords := 1, maxValues := 0 })
@@ -79,20 +98,28 @@ def run : IO Unit := do
   -- Duplicate keys remain rejected by the wire parser, even with matching payloads.
   let duplicate := header ++ "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"tenant\"}," ++
     "\"values\":{\"tenant\":\"a\",\"tenant\":\"a\"}}\n{\"seq\":2,\"commit\":true}\n"
-  let _ ← Suimon.Test.Trace.checkBoth "bounded duplicate" duplicate
-  -- A value may recur in state, but its payload must not recur, even if identical.
+  Suimon.Test.Trace.rejectedText "bounded duplicate" "duplicate key" duplicate
+  -- Sequence validation still applies after a long committed prefix.
   let repeated := text ++ Suimon.Test.Trace.written [(.fetch (Key.invocation [] "fetchAllUsers" none), [])]
-  -- This also checks deterministic sequence validation after a long committed prefix.
-  let _ ← Suimon.Test.Trace.checkBoth "bounded sequence" repeated
+  Suimon.Test.Trace.rejectedExactly "bounded sequence" "line 14: expected sequence 13, got 1" repeated
+  -- A value may recur in state, but its payload must not recur, even if identical.
   let call := Key.invocation [] "fetchAllUsers" none
   let same := text ++ Suimon.Trace.text wireCodec [.op 13 (.fetch call) [], .commit 14,
     .op 15 (.yielded call "v0") [], .commit 16]
-  let _ ← Suimon.Test.Trace.checkBoth "reused identity without payload" same
-  let extra := text ++ Suimon.Trace.text wireCodec [.op 13 (.fetch call) [], .commit 14,
-    .op 15 (.yielded call "v0") [("v0", "different")], .commit 16]
-  let _ ← Suimon.Test.Trace.checkBoth "reused identity with payload" extra
+  let reused ← Suimon.Test.Trace.checkedText "reused identity without payload" same
+  ensure (reused.committed == 8 && reused.values == c.values && !reused.uncommitted &&
+      reused.state.results.map (·.value) == ["v0", "v1", "v0"])
+    "reused identity lost a result or changed payloads"
+  for payload in ["v0", "different"] do
+    let extra := text ++ Suimon.Trace.text wireCodec [.op 13 (.fetch call) [], .commit 14,
+      .op 15 (.yielded call "v0") [("v0", payload)], .commit 16]
+    Suimon.Test.Trace.rejectedExactly s!"reused identity with payload {payload}"
+      "line 17: payloads for [v0], which the transition does not introduce" extra
   for n in [64, 128, 256] do
-    let _ ← Suimon.Test.Trace.checkBoth s!"stream {n}" (stream p n)
+    let streamed ← Suimon.Test.Trace.checkedText s!"stream {n}" (stream p n)
+    ensure (streamed.committed == 2 + 2 * n && streamed.values.length == n + 1 && !streamed.uncommitted &&
+        streamed.state.results.map (·.value) == (List.range n).map (fun i => s!"v{i}"))
+      s!"stream {n}: lost transitions or payloads"
   for n in [512, 1024] do
     let start ← IO.monoMsNow
     let c ← IO.ofExcept (check (stream p n) { maxWork := 100000000000 })

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# schema also runs a pinned Python JSON Schema oracle in .lake/schema-venv.
+# PYTHON selects the Python 3 interpreter used to create that isolated environment.
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -35,4 +37,10 @@ fi
 if [[ "$suite" != lean ]]; then
   "$lake_bin" build suimon_schema_test
   .lake/build/bin/suimon_schema_test
+  # Keep the independent oracle isolated from the user's Python installation.
+  if [[ ! -x .lake/schema-venv/bin/python ]]; then
+    "${PYTHON:-python3}" -m venv .lake/schema-venv
+  fi
+  .lake/schema-venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --quiet -r Test/schema-requirements.txt
+  .lake/schema-venv/bin/python Test/schema_oracle.py
 fi

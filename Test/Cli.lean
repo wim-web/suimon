@@ -63,7 +63,18 @@ def run : IO Unit := do
             s!"\{\"committed\":0,\"status\":\"running\",\"uncommitted\":{torn},\"validated\":{validated}}\n")
           s!"check header {name}: {result.stdout}"
     let explored ← cli ["explore", definition, "--seeds", "20"] 0
-    Validate.ensure (explored.stdout.startsWith "{") s!"explore {name}: {explored.stdout}"
+    let counts ← IO.ofExcept (Json.parse explored.stdout >>= Json.getObj?)
+    let mut total := 0
+    for (status, count) in counts.toList do
+      Validate.ensure (["succeeded", "skipped", "failed", "cancelled"].contains status)
+        s!"explore {name}: unexpected status {status}"
+      total := total + (← IO.ofExcept count.getNat?)
+    Validate.ensure (total == 20 && explored.stderr.isEmpty)
+      s!"explore {name}: expected 20 outcomes and no error, got {explored.stdout} / {explored.stderr}"
+    let limited ← cli ["explore", definition, "--seeds", "1", "--steps", "0"] 1
+    Validate.ensure (limited.stdout.isEmpty &&
+        limited.stderr == "seed 1: no accepted operation in status running\n")
+      s!"explore {name}: exhausted step budget: {limited.stdout} / {limited.stderr}"
   let _ ← cli ["check", "Test/definitions/users.json"] 1
   let _ ← cli ["check", "Test/definitions/users.json", "--states"] 2
   let _ ← cli ["check", "x.jsonl", "--definition", "Test/definitions/users.json"] 2

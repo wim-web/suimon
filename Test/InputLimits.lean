@@ -35,6 +35,8 @@ def run : IO Unit := do
     succeeds "shallow definition" (Codec.parse text)
     succeeds "shallow record" (Wire.parse text)
   let atSize := "\"" ++ String.ofList (List.replicate (defaultMaxInputBytes - 2) 'x') ++ "\""
+  succeeds "raw whitespace at byte limit"
+    (({} : Suimon.InputLimits).check (String.ofList (List.replicate defaultMaxInputBytes ' ')))
   succeeds "definition at byte limit" (Codec.parse atSize)
   succeeds "record at byte limit" (Wire.parse atSize)
   succeeds "raised definition budget" (Codec.parse (atSize ++ " ") { maxBytes := defaultMaxInputBytes + 1 })

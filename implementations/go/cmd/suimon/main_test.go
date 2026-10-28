@@ -130,8 +130,25 @@ func TestCLI(t *testing.T) {
 		if err := json.Unmarshal([]byte(state.stdout), &doc); err != nil || doc["started"] != true || state.stdout != string(want)+"\n" {
 			t.Errorf("check --state %s: %v %.80s", name, err, state.stdout)
 		}
-		if r := cli(t, 0, "explore", definition(t, name), "--seeds", "20"); !strings.HasPrefix(r.stdout, "{") {
-			t.Errorf("explore %s: %s", name, r.stdout)
+		summary := cli(t, 0, "explore", definition(t, name), "--seeds", "20")
+		var counts map[string]int
+		if err := json.Unmarshal([]byte(summary.stdout), &counts); err != nil {
+			t.Fatalf("explore %s: invalid summary %q: %v", name, summary.stdout, err)
+		}
+		total := 0
+		for status, count := range counts {
+			switch status {
+			case "succeeded", "failed", "cancelled", "skipped":
+			default:
+				t.Errorf("explore %s: non-terminal status %q", name, status)
+			}
+			if count <= 0 || count > 20 {
+				t.Errorf("explore %s: invalid count %d for %s", name, count, status)
+			}
+			total += count
+		}
+		if total != 20 || summary.stderr != "" {
+			t.Errorf("explore %s: total %d, want 20; stderr %q", name, total, summary.stderr)
 		}
 	}
 	cli(t, 1, "check", definition(t, "users"))

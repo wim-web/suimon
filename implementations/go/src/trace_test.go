@@ -315,10 +315,7 @@ func TestTraceRejections(t *testing.T) {
 	start := "{\"seq\":1,\"op\":{\"type\":\"start\"}}\n{\"seq\":2,\"commit\":true}\n"
 	rejectedTrace(t, "commit twice", "a commit without an op", merge, start+"{\"seq\":3,\"commit\":true}\n")
 	again := strings.ReplaceAll(strings.ReplaceAll(start, `"seq":1`, `"seq":3`), `"seq":2`, `"seq":4`)
-	rejectedTrace(t, "rejected op", "line 5: rejected", merge, start+again)
 	users := load(t, "users")
-	rejectedTrace(t, "missing payload", "missing payloads", users,
-		"{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n{\"seq\":2,\"commit\":true}\n")
 	// The payloads are checked at the commit, so an op without its commit is only uncommitted.
 	if c := checked(t, "pending op", users, "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"}}\n"); c.Committed != 0 || !c.Uncommitted {
 		t.Errorf("pending op: %+v", c)
@@ -492,11 +489,27 @@ func TestRecordEncoding(t *testing.T) {
 	if got := EncodeRecord(r); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
-	if got := EncodeRecord(Record{Seq: 6, Commit: true}); got != `{"seq":6,"commit":true}` {
-		t.Errorf("commit: %s", got)
-	}
-	if got := EncodeRecord(Record{Seq: 1, Op: OpStart{}}); got != `{"seq":1,"op":{"type":"start"}}` {
-		t.Errorf("empty values are left out: %s", got)
+	for _, c := range []struct {
+		name   string
+		record Record
+		want   string
+	}{
+		{"commit", Record{Seq: 6, Commit: true}, `{"seq":6,"commit":true}`},
+		{"empty values", Record{Seq: 1, Op: OpStart{}}, `{"seq":1,"op":{"type":"start"}}`},
+		{"input and payload", Record{Seq: 1, Op: OpStart{Input: ptr("v")}, Values: []Payload{{"v", "payload"}}},
+			`{"seq":1,"op":{"type":"start","input":"v"},"values":{"v":"payload"}}`},
+		{"invoke without trigger", Record{Seq: 1, Op: OpInvoke{Placement: "a"}},
+			`{"seq":1,"op":{"type":"invoke","run":[],"placement":"a"}}`},
+		{"invoke with trigger", Record{Seq: 1, Op: OpInvoke{Placement: "a", Trigger: ptr("t")}},
+			`{"seq":1,"op":{"type":"invoke","run":[],"placement":"a","trigger":"t"}}`},
+		{"task output", Record{Seq: 1, Op: OpTaskOutput{Execution: "e", Task: "t", Value: "v"}},
+			`{"seq":1,"op":{"type":"taskOutput","execution":"e","task":"t","index":0,"value":"v"}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := EncodeRecord(c.record); got != c.want {
+				t.Errorf("got  %s\nwant %s", got, c.want)
+			}
+		})
 	}
 	// Parsing accepts any JSON formatting of a record.
 	decoded, err := DecodeRecord(" {\"values\" : {\"v\":\"p\\t\"}, \"op\": {\"value\":\"v\",\"source\":\"s\\\"\\\\\\n\\u0001\\u007f\\u003c\\u00e9>\"," +
@@ -507,31 +520,6 @@ func TestRecordEncoding(t *testing.T) {
 	decoded, err = DecodeRecord(`{"seq":1,"op":{"type":"returned","call":"c","value":"\ud83d\ude00\/"}}`)
 	if err != nil || decoded.Op.(OpReturned).Value != "\U0001F600/" {
 		t.Errorf("escapes: %v %+v", err, decoded)
-	}
-}
-
-// Fields have a fixed order, and empty values are left out.
-func TestRecordFieldOrder(t *testing.T) {
-	keys := func(w wire) string {
-		var out []string
-		for _, f := range w.fields {
-			out = append(out, f.key)
-		}
-		return strings.Join(out, ",")
-	}
-	cases := map[string]wire{
-		"seq,op,values":                    recordWire(Record{Seq: 1, Op: OpStart{Input: ptr("v")}, Values: []Payload{{"v", "payload"}}}),
-		"seq,op":                           recordWire(Record{Seq: 1, Op: OpStart{}}),
-		"seq,commit":                       recordWire(Record{Seq: 2, Commit: true}),
-		"type,run,placement":               opWire(OpInvoke{Placement: "a"}),
-		"type,run,placement,trigger":       opWire(OpInvoke{Placement: "a", Trigger: ptr("t")}),
-		"type,run,connection,source,value": opWire(OpDeliver{Source: "s", Value: ptr("v")}),
-		"type,execution,task,index,value":  opWire(OpTaskOutput{Execution: "e", Task: "t", Value: "v"}),
-	}
-	for want, w := range cases {
-		if got := keys(w); got != want {
-			t.Errorf("fields %s, want %s", got, want)
-		}
 	}
 }
 

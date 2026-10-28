@@ -110,7 +110,8 @@ func TestLongStream(t *testing.T) {
 	}
 }
 
-var benchSizes = []int{1000, 10000}
+// Keep both sizes within the default reader limit for the single collected-list record.
+var benchSizes = []int{100, 1000}
 
 func BenchmarkRuntimeStream(b *testing.B) {
 	_, e := streamEngine(b)
@@ -179,7 +180,8 @@ func usersEngine(tb testing.TB) (*Definition, *Engine) {
 	return p, e
 }
 
-var usersSizes = []int{1000, 5000}
+// Measure a tenfold workload increase within the default execution and record budgets.
+var usersSizes = []int{100, 1000}
 
 func BenchmarkRuntimeUsers(b *testing.B) {
 	_, e := usersEngine(b)

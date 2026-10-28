@@ -13,16 +13,20 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 )
 
-func newTestServer(t *testing.T) *httptest.Server {
+func newTestServer(t *testing.T, scenarios ...*scenario) *httptest.Server {
 	t.Helper()
-	scenarios, err := loadScenarios()
-	if err != nil {
-		t.Fatal(err)
+	var err error
+	if len(scenarios) == 0 {
+		scenarios, err = loadScenarios()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	assets := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>ui</title>")}}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,9 +174,26 @@ func TestServerRun(t *testing.T) {
 }
 
 func TestServerEvents(t *testing.T) {
-	srv := newTestServer(t)
-	id := startTestRun(t, srv, `{"scenario":"stream","unitMs":10}`)
-	res, err := http.Get(srv.URL + "/api/runs/" + id + "/events")
+	proceed := make(chan struct{})
+	release := sync.OnceFunc(func() { close(proceed) })
+	defer release()
+	sc := admissionScenario(t, "events", func(ctx context.Context) (int, error) {
+		select {
+		case <-proceed:
+			return 42, nil
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	})
+	srv := newTestServer(t, sc)
+	id := startTestRun(t, srv, `{"scenario":"events","unitMs":10}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/runs/"+id+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,12 +212,23 @@ func TestServerEvents(t *testing.T) {
 			continue
 		}
 		p := decode[progress](t, []byte(data))
+		if events == 0 {
+			if p.Done {
+				t.Fatal("run finished before its callback was released")
+			}
+			// Completion is permitted only after the client has received the first
+			// event, so multiple events do not depend on connection timing.
+			release()
+		}
 		if p.Offset != len(records) {
 			t.Fatalf("event at offset %d after %d records", p.Offset, len(records))
 		}
 		records = append(records, p.Records...)
 		last = p
 		events++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("read events: %v", err)
 	}
 	if !last.Done || events < 2 {
 		t.Fatalf("%d events, done %v", events, last.Done)

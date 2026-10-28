@@ -273,11 +273,7 @@ def run : IO Unit := do
     "header text"
   ensure (Suimon.Trace.wireCodec.encodeHeader ⟨.obj [], false⟩ == "{\"definition\":{},\"validated\":false}")
     "unchecked header text"
-  ensure (keys (Suimon.Trace.headerWire ⟨.obj [], true⟩) == ["definition", "validated"]) "header fields"
-  ensure (keys (Suimon.Trace.recordWire (.op 1 (.start (some "v")) [("v", "payload")])) == ["seq", "op", "values"])
-    "op record fields"
   ensure (keys (Suimon.Trace.recordWire (.op 1 (.start none) [])) == ["seq", "op"]) "empty values"
-  ensure (keys (Suimon.Trace.recordWire (.commit 2)) == ["seq", "commit"]) "commit record fields"
   ensure (keys (Suimon.Trace.opWire (.invoke [] "a" none)) == ["type", "run", "placement"]) "absent trigger"
   let p ← load "merge"
   ensure (keys (Codec.definitionWire p) == ["main", "functions", "judges", "transforms", "workflows"])

@@ -247,8 +247,13 @@ func Accepted(p *Definition, cfg Config, s *State) []Choice {
 
 // acceptedWith is Accepted with d, a derivation of p.
 func acceptedWith(p *Definition, d *derivation, cfg Config, s *State) []Choice {
+	return acceptChanges(p, d, s, candidatesWith(p, d, cfg, s))
+}
+
+// acceptChanges applies candidate operations without retaining rejections or no-ops.
+func acceptChanges(p *Definition, d *derivation, s *State, ops []Op) []Choice {
 	var choices []Choice
-	for _, op := range candidatesWith(p, d, cfg, s) {
+	for _, op := range ops {
 		next, err := stepWith(p, d, s, op)
 		if err == nil && !next.Equal(s) {
 			choices = append(choices, Choice{op, next})

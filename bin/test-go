@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests the Go implementation in implementations/go.
-#   unit         Go tests (the runtime scenarios and crash recovery included), the race detector
-#                on the package, and go vet.
+#   unit         Go tests (runtime scenarios and crash recovery included), race detection
+#                on runtime/example, benchmark setup smoke checks, and go vet.
 #   conformance  Compares the Go CLI with the Lean CLI at SUIMON_LEAN_CLI (default
 #                .lake/build/bin/suimon), and has it check the journals the runtime writes; it
 #                builds nothing, so build the Lean CLI first (lake build suimon).
@@ -27,7 +27,8 @@ unit() {
     unset SUIMON_LEAN_CLI
     cd implementations/go
     "$go_bin" test -count=1 "${packages[@]}"
-    "$go_bin" test -race -count=1 ./src
+    "$go_bin" test -race -count=1 ./src ./example
+    "$go_bin" test -run '^$' -bench . -benchtime=1x ./src
     "$go_bin" vet "${packages[@]}"
   )
 }

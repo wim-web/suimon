@@ -1,0 +1,17 @@
+{"definition":{"main":"parent","functions":[{"id":"work","output":{"single":"Item"}}],"judges":[],"transforms":[],"workflows":[{"id":"parent","placements":[{"name":"call","node":{"type":"subworkflow","workflow":"child","output":"result"},"policy":"stop"}],"connections":[]},{"id":"child","placements":[{"name":"result","node":{"type":"function","function":"work"},"policy":"stop"}],"connections":[]}]},"validated":true}
+{"seq":1,"op":{"type":"start"}}
+{"seq":2,"commit":true}
+{"seq":3,"op":{"type":"invoke","run":[],"placement":"call"}}
+{"seq":4,"commit":true}
+{"seq":5,"op":{"type":"invoke","run":["10:invocation4:call"],"placement":"result"}}
+{"seq":6,"commit":true}
+{"seq":7,"op":{"type":"returned","call":"19:10:invocation4:call21:10:invocation6:result","value":"5:value6:return46:19:10:invocation4:call21:10:invocation6:result"},"values":{"5:value6:return46:19:10:invocation4:call21:10:invocation6:result":"5:value6:return46:19:10:invocation4:call21:10:invocation6:result"}}
+{"seq":8,"commit":true}
+{"seq":9,"op":{"type":"settle","run":["10:invocation4:call"],"placement":"result"}}
+{"seq":10,"commit":true}
+{"seq":11,"op":{"type":"closeRun","run":["10:invocation4:call"]}}
+{"seq":12,"commit":true}
+{"seq":13,"op":{"type":"settle","run":[],"placement":"call"}}
+{"seq":14,"commit":true}
+{"seq":15,"op":{"type":"conclude"}}
+{"seq":16,"commit":true}

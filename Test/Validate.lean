@@ -167,13 +167,20 @@ def diamonds (n : Nat) : Definition := {
         [{ source := s!"s{i}", target := s!"{side}{i + 1}", transform := .declared (if i == 0 then "t" else "l") },
          { source := s!"{side}{i + 1}", target := s!"s{i + 1}", transform := .declared "t" }] }] }
 
-/-- Validates `p` within a second. Not inlined, so that the validation runs here and not where the
-    compiler would compute a closed definition. --/
-@[noinline] def acceptedQuickly (label : String) (p : Definition) : IO Unit := do
-  let start ← IO.monoMsNow
+/-- Count allocation heartbeats, not elapsed time. Keep validation out of the caller so a closed
+    definition is not validated before this measurement. --/
+@[noinline] def validationWork (label : String) (p : Definition) : IO Nat := do
+  let start ← IO.getNumHeartbeats
   accepted label p
-  let elapsed := (← IO.monoMsNow) - start
-  ensure (elapsed < 1000) s!"{label}: validation took {elapsed} ms"
+  return (← IO.getNumHeartbeats) - start
+
+/-- Doubling a small graph leaves room for polynomial validation work but rejects repeated
+    exponential kind derivation before attempting the larger regression examples. --/
+def validationGrowth (label : String) (make : Nat → Definition) : IO Unit := do
+  let small ← validationWork s!"{label} 8" (make 8)
+  let large ← validationWork s!"{label} 16" (make 16)
+  ensure (small > 0 && large ≤ 32 * small)
+    s!"{label}: validation work grew from {small} to {large} heartbeats when doubling the graph"
 
 def resourceLimits : IO Unit := do
   let base := mergeChain 0
@@ -201,12 +208,6 @@ def resourceLimits : IO Unit := do
   ensure ((Limits.type atDepth).isOk) "type at depth limit rejected"
   ensure ((Limits.text (String.ofList (List.replicate Limits.maxNameBytes 'x'))).isOk)
     "name at byte limit rejected"
-  ensure ((({} : InputLimits).check (String.ofList (List.replicate Limits.maxBytes ' '))).isOk)
-    "text at byte limit rejected"
-  parseRejected "byte limit" s!"input exceeds maximum size of {Limits.maxBytes} bytes"
-    (String.ofList (List.replicate (Limits.maxBytes + 1) ' '))
-  parseRejected "JSON nesting limit" s!"input exceeds maximum nesting depth of {Limits.maxJSONDepth}"
-    (String.ofList (List.replicate (Limits.maxJSONDepth + 1) '['))
 
 def run : IO Unit := do
   resourceLimits
@@ -302,8 +303,10 @@ def run : IO Unit := do
   rejected "Stream endpoint" "endpoint ship must be Single" <| branch |> mapWorkflow "shipping" fun w =>
     { dropConnection "ship" "receipts" w with placements := w.placements.filter (·.name != "receipts") }
   -- `kind?` takes time exponential in the length of these chains; compiled code uses `kindFast`.
+  validationGrowth "merge chain" mergeChain
+  validationGrowth "diamonds" diamonds
   for (label, p) in [("merge chain 20", mergeChain 20), ("merge chain 40", mergeChain 40), ("30 diamonds", diamonds 30)] do
-    acceptedQuickly label p
+    accepted label p
   ensure ((kinds (mergeChain 40) "w").all (·.2 == some .single)) "merge chain: a Merge of Singles is Single"
 
   -- Branch arms

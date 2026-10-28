@@ -1,6 +1,8 @@
 package suimon
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -502,9 +504,13 @@ func TestStepRejections(t *testing.T) {
 	merge := load(t, "merge")
 	users := load(t, "users")
 	empty := &State{}
-	started, err := Step(merge, empty, OpStart{})
-	if err != nil {
-		t.Fatal(err)
+	started := mustStep(t, merge, empty, OpStart{})
+	invoked := mustStep(t, merge, started, OpInvoke{Placement: "sales"})
+	call := keyInvocation(nil, "sales", nil)
+	returned := mustStep(t, merge, invoked, OpReturned{call, "v"})
+	result := keyCallResult(call, 0)
+	if returned.Results[0].ID != result {
+		t.Fatalf("result identity %q, want %q", returned.Results[0].ID, result)
 	}
 	cases := []struct {
 		label string
@@ -527,57 +533,36 @@ func TestStepRejections(t *testing.T) {
 		{"root run", merge, started, OpCloseRun{Run: Path{}}, "NOT_CLOSABLE"},
 		{"unknown execution", merge, started, OpBeginTask{"e", "t"}, "UNKNOWN_EXECUTION"},
 		{"cancel before start", merge, empty, OpCancel{}, "NOT_STARTED"},
+		{"duplicate invocation", merge, invoked, OpInvoke{Placement: "sales"}, "DUPLICATE_INVOCATION"},
+		{"fetch of a Single call", merge, invoked, OpFetch{call}, "NOT_FETCHABLE"},
+		{"timeout without a timeout", merge, invoked, OpTimedOut{call, false}, "NO_TIMEOUT"},
+		{"returned twice", merge, returned, OpReturned{call, "v"}, "NOT_RETURNABLE"},
+		{"value to discard", merge, returned, OpDeliver{Connection: 2, Source: result, Value: ptr("x")}, "TRANSFORM_MISMATCH"},
+		{"failing discard", merge, returned, OpTransformFailed{Connection: 2, Source: result}, "DISCARD_CANNOT_FAIL"},
+		{"delivery from another source", merge, returned, OpDeliver{Connection: 3, Source: result, Value: ptr("x")}, "NOT_ELIGIBLE"},
+		{"unknown connection", merge, returned, OpDeliver{Connection: 9, Source: result}, "UNKNOWN_CONNECTION"},
 	}
+	// Bypass State.MarshalJSON so the snapshot includes every field, independently
+	// of the wire encoder. Bytes also isolate nested paths, slices and pointers.
+	type stateSnapshot State
 	for _, c := range cases {
-		_, err := Step(c.p, c.s, c.op)
-		if r, ok := err.(*Rejection); !ok || r.Code != c.code {
-			t.Errorf("%s: got %v, want %s", c.label, err, c.code)
-		}
-	}
-	invoked, err := Step(merge, started, OpInvoke{Placement: "sales"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	call := keyInvocation(nil, "sales", nil)
-	if _, err := Step(merge, invoked, OpInvoke{Placement: "sales"}); err == nil || err.Error() != "DUPLICATE_INVOCATION" {
-		t.Errorf("duplicate invocation: %v", err)
-	}
-	if _, err := Step(merge, invoked, OpFetch{call}); err == nil || err.Error() != "NOT_FETCHABLE" {
-		t.Errorf("fetch of a Single call: %v", err)
-	}
-	if _, err := Step(merge, invoked, OpTimedOut{call, false}); err == nil || err.Error() != "NO_TIMEOUT" {
-		t.Errorf("timeout without a timeout: %v", err)
-	}
-	returned, err := Step(merge, invoked, OpReturned{call, "v"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Step(merge, returned, OpReturned{call, "v"}); err == nil || err.Error() != "NOT_RETURNABLE" {
-		t.Errorf("returned twice: %v", err)
-	}
-	result := keyCallResult(call, 0)
-	if returned.Results[0].ID != result {
-		t.Errorf("result identity %q, want %q", returned.Results[0].ID, result)
-	}
-	if _, err := Step(merge, returned, OpDeliver{Connection: 2, Source: result, Value: ptr("x")}); err == nil ||
-		err.Error() != "TRANSFORM_MISMATCH" {
-		t.Errorf("value to discard: %v", err)
-	}
-	if _, err := Step(merge, returned, OpTransformFailed{Connection: 2, Source: result}); err == nil ||
-		err.Error() != "DISCARD_CANNOT_FAIL" {
-		t.Errorf("failing discard: %v", err)
-	}
-	if _, err := Step(merge, returned, OpDeliver{Connection: 3, Source: result, Value: ptr("x")}); err == nil ||
-		err.Error() != "NOT_ELIGIBLE" {
-		t.Errorf("delivery from another source: %v", err)
-	}
-	if _, err := Step(merge, returned, OpDeliver{Connection: 9, Source: result}); err == nil ||
-		err.Error() != "UNKNOWN_CONNECTION" {
-		t.Errorf("unknown connection: %v", err)
-	}
-	// The rejected steps above did not change the states they were given.
-	if !invoked.Equal(mustStep(t, merge, started, OpInvoke{Placement: "sales"})) || len(returned.Deliveries) != 0 {
-		t.Error("a rejected operation changed the state")
+		t.Run(c.label, func(t *testing.T) {
+			before, err := json.Marshal(stateSnapshot(*c.s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = Step(c.p, c.s, c.op)
+			if r, ok := err.(*Rejection); !ok || r.Code != c.code {
+				t.Errorf("got %v, want %s", err, c.code)
+			}
+			after, err := json.Marshal(stateSnapshot(*c.s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Errorf("rejected operation changed its input state\nbefore: %s\nafter: %s", before, after)
+			}
+		})
 	}
 }
 
@@ -590,8 +575,7 @@ func mustStep(t *testing.T, p *Definition, s *State, op Op) *State {
 	return next
 }
 
-// Accepted drops an operation that is accepted but changes nothing.
-func TestAcceptedDropsNoOps(t *testing.T) {
+func TestCancelIsIdempotent(t *testing.T) {
 	merge := load(t, "merge")
 	s := mustStep(t, merge, &State{}, OpStart{})
 	s = mustStep(t, merge, s, OpCancel{})
@@ -602,9 +586,24 @@ func TestAcceptedDropsNoOps(t *testing.T) {
 	if !again.Equal(s) {
 		t.Fatal("a second cancel changes nothing")
 	}
-	for _, c := range Accepted(merge, DefaultConfig(), s) {
-		if _, isCancel := c.Op.(OpCancel); isCancel {
-			t.Fatal("Accepted kept a cancel that changes nothing")
+	for _, op := range Candidates(merge, DefaultConfig(), s) {
+		if _, isCancel := op.(OpCancel); isCancel {
+			t.Fatal("Candidates offered a redundant cancel")
 		}
+	}
+}
+
+func TestAcceptedDropsNoOps(t *testing.T) {
+	merge := load(t, "merge")
+	s := mustStep(t, merge, &State{}, OpStart{})
+	s = mustStep(t, merge, s, OpCancel{})
+	// Candidates already suppresses a repeated cancel. Supply it directly to
+	// the production filter, alongside a rejected op and a genuine transition.
+	choices := acceptChanges(merge, merge.derive(), s, []Op{OpStart{}, OpCancel{}, OpConclude{}})
+	if len(choices) != 1 {
+		t.Fatalf("got %d choices, want only the conclusion", len(choices))
+	}
+	if _, ok := choices[0].Op.(OpConclude); !ok || choices[0].Next.Status != StatusCancelled {
+		t.Fatalf("got %+v, want a conclusion to cancelled", choices[0])
 	}
 }

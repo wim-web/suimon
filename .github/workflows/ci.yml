@@ -44,14 +44,16 @@ jobs:
               - 'lake-manifest.json'
               - 'bin/test'
               - 'Test/definitions/**'
-              - '!Test/{Schema,SchemaMain}.lean'
+              - '!Test/{Schema,SchemaMain,SchemaOracle}.lean'
               - '!**/*.md'
             schema:
               - '.github/workflows/ci.yml'
               - 'Main.lean'
               - 'Suimon/**'
               - '!Suimon/Theorems/**'
-              - 'Test/{Schema,SchemaMain,Validate,Trace}.lean'
+              - 'Test/{Schema,SchemaMain,SchemaOracle,Validate,Trace}.lean'
+              - 'Test/schema_oracle.py'
+              - 'Test/schema-requirements.txt'
               - 'Test/definitions/**'
               - 'schema/**'
               - 'lakefile.lean'
@@ -99,6 +101,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm test
+      - run: pnpm --filter @suimon/ui-kit exec playwright install --with-deps chromium
+      - run: pnpm --filter @suimon/ui-kit test:browser
   lean:
     needs: changes
     if: needs.changes.outputs.lean == 'true'
@@ -124,10 +128,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install ripgrep
+      - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ripgrep
+          sudo apt-get install --yes --no-install-recommends ripgrep python3-venv
       - name: Install Lean toolchain manager
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh

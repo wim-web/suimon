@@ -77,13 +77,23 @@ func failureNames(r *suimon.Report) []string {
 	return names
 }
 
-func outputLen(t *testing.T, r *suimon.Report, endpoint string) int {
+// sortedValues ignores completion order while retaining every payload field and duplicate.
+func sortedValues(t *testing.T, data []byte) []string {
 	t.Helper()
-	var list []json.RawMessage
-	if err := r.Output(endpoint, &list); err != nil {
+	var list []any
+	if err := json.Unmarshal(data, &list); err != nil {
 		t.Fatal(err)
 	}
-	return len(list)
+	values := make([]string, len(list))
+	for i, value := range list {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		values[i] = string(encoded)
+	}
+	slices.Sort(values)
+	return values
 }
 
 func settled(r *suimon.Report, placement string) string {
@@ -153,6 +163,8 @@ func TestScenariosLoad(t *testing.T) {
 
 func TestScenarios(t *testing.T) {
 	t.Parallel()
+	const processed = `[{"index":0,"result":"BRAVO"},{"index":1,"result":"CHARLIE"},{"index":2,"result":"ECHO"},{"index":3,"result":"HOTEL"},{"index":4,"result":"LIMA"}]`
+	const found = `[{"index":0,"result":"found alpha"},{"index":2,"result":"found charlie"}]`
 	// Each lookup but the stuck one ends in time, after one unit.
 	timeout := func(t *testing.T, r *run) {
 		for _, s := range spansOf(r, "lookup") {
@@ -170,34 +182,18 @@ func TestScenarios(t *testing.T) {
 		unit     time.Duration
 		status   suimon.Status
 		failures []string
-		outputs  map[string]int
+		outputs  map[string]string
 		settled  map[string]string
 		check    func(t *testing.T, r *run)
 	}{
-		{id: "stream", status: suimon.StatusSucceeded, outputs: map[string]int{"collect": 5},
-			check: func(t *testing.T, r *run) {
-				// Downstream work starts while the generator is still running.
-				produce := spansOf(r, "produce")[0]
-				if first := spansOf(r, "process")[0]; first.StartMs >= *produce.EndMs {
-					t.Errorf("first process started at %.1fms, after produce ended at %.1fms", first.StartMs, *produce.EndMs)
-				}
-			}},
-		{id: "batch", status: suimon.StatusSucceeded, outputs: map[string]int{"collect": 5},
-			check: func(t *testing.T, r *run) {
-				// Downstream work cannot start before the whole list has been returned.
-				all := spansOf(r, "produceAll")[0]
-				for _, p := range spansOf(r, "process") {
-					if p.StartMs < *all.EndMs {
-						t.Errorf("process %s started at %.1fms, before produceAll ended at %.1fms", p.Detail, p.StartMs, *all.EndMs)
-					}
-				}
-			}},
-		{id: "branch", status: suimon.StatusSucceeded, outputs: map[string]int{"decide": 1},
+		{id: "stream", status: suimon.StatusSucceeded, outputs: map[string]string{"collect": processed}},
+		{id: "batch", status: suimon.StatusSucceeded, outputs: map[string]string{"collect": processed}},
+		{id: "branch", status: suimon.StatusSucceeded, outputs: map[string]string{"decide": `[{"order":"A-100","by":"approve"}]`},
 			settled: map[string]string{"review": "skipped", "approve": "normal", "decide": "normal"}},
-		{id: "branch", input: `{"id":"B-1","amount":5000}`, status: suimon.StatusSucceeded, outputs: map[string]int{"decide": 1},
+		{id: "branch", input: `{"id":"B-1","amount":5000}`, status: suimon.StatusSucceeded, outputs: map[string]string{"decide": `[{"order":"B-1","by":"review"}]`},
 			settled: map[string]string{"review": "normal", "approve": "skipped"}},
-		{id: "merge", status: suimon.StatusSucceeded, outputs: map[string]int{"summary": 3}},
-		{id: "limit", status: suimon.StatusSucceeded, outputs: map[string]int{"lookups": 4},
+		{id: "merge", status: suimon.StatusSucceeded, outputs: map[string]string{"summary": `[{"source":"profile","value":"profile of User u-1"},{"source":"orders","value":"orders of User u-1"},{"source":"points","value":"points of User u-1"}]`}},
+		{id: "limit", status: suimon.StatusSucceeded, outputs: map[string]string{"lookups": `[{"source":"profile","value":"profile of User u-1"},{"source":"orders","value":"orders of User u-1"},{"source":"points","value":"points of User u-1"},{"source":"coupons","value":"coupons of User u-1"}]`},
 			check: func(t *testing.T, r *run) {
 				var fetches []span
 				for _, s := range r.env.snapshot() {
@@ -220,12 +216,12 @@ func TestScenarios(t *testing.T) {
 					}
 				}
 			}},
-		{id: "timeout", status: suimon.StatusFailed, failures: []string{"lookup:timeout"}, outputs: map[string]int{"collect": 2},
+		{id: "timeout", status: suimon.StatusFailed, failures: []string{"lookup:timeout"}, outputs: map[string]string{"collect": found},
 			check: timeout},
 		// Its timeout does not scale with the unit, and holds at the largest unit.
 		{id: "timeout", unit: maxUnit, status: suimon.StatusFailed, failures: []string{"lookup:timeout"},
-			outputs: map[string]int{"collect": 2}, check: timeout},
-		{id: "stop", status: suimon.StatusFailed, failures: []string{"charge:error"}, outputs: map[string]int{},
+			outputs: map[string]string{"collect": found}, check: timeout},
+		{id: "stop", status: suimon.StatusFailed, failures: []string{"charge:error"}, outputs: map[string]string{},
 			check: func(t *testing.T, r *run) {
 				if s := spansOf(r, "ship")[0]; s.Outcome != "cancelled" {
 					t.Errorf("ship ended %s, want cancelled", s.Outcome)
@@ -252,9 +248,10 @@ func TestScenarios(t *testing.T) {
 			if len(report.Outputs) != len(c.outputs) {
 				t.Errorf("outputs %v, want %v", report.Outputs, c.outputs)
 			}
-			for endpoint, n := range c.outputs {
-				if got := outputLen(t, report, endpoint); got != n {
-					t.Errorf("%s has %d values, want %d", endpoint, got, n)
+			for endpoint, expected := range c.outputs {
+				got, want := sortedValues(t, report.Outputs[endpoint]), sortedValues(t, []byte(expected))
+				if !slices.Equal(got, want) {
+					t.Errorf("%s values %v, want %v", endpoint, got, want)
 				}
 			}
 			for placement, want := range c.settled {
@@ -282,9 +279,6 @@ func TestScenarios(t *testing.T) {
 	}
 }
 
-// offeredUnits are the units that the Unit select of the UI offers (ui/src/App.tsx).
-var offeredUnits = []time.Duration{200 * time.Millisecond, 600 * time.Millisecond, time.Second}
-
 func TestProcessUnits(t *testing.T) {
 	// process takes 0.5 to 3 units in steps of 0.1, drawn from the name of the item and nothing else.
 	for _, name := range []string{"", "alpha", "bravo", "lima", "stuck", "an item", "名前"} {
@@ -298,63 +292,70 @@ func TestProcessUnits(t *testing.T) {
 	}
 }
 
-// Stream and Batch run the same default input with the same delays. Each item takes as long to
-// process in both, and Stream, which processes an item as soon as it is fetched, finishes at least a
-// unit before Batch at each unit the UI offers.
-func TestStreamFinishesBeforeBatch(t *testing.T) {
+func TestProcessUsesRunUnit(t *testing.T) {
+	// A unit above the fallback's 250ms detects a process that loses the run
+	// context. One short item retains this guarantee without rerunning both flows.
+	const unit = 600 * time.Millisecond
+	it := item{Index: 7, Name: "lima"}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ctx = withEnv(ctx, newEnv(unit, nil))
+	started := time.Now()
+	got, err := process(ctx, it)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != (done{Index: 7, Result: "LIMA"}) {
+		t.Fatalf("process returned %+v", got)
+	}
+	if want := time.Duration(processUnits(it.Name) * float64(unit)); elapsed < want {
+		t.Errorf("process took %v with run unit %v, want at least %v", elapsed, unit, want)
+	}
+}
+
+// The journal establishes the stream/batch ordering without comparing wall-clock
+// completion times. TestProcessUsesRunUnit checks process unit propagation;
+// TestServerUnit checks the HTTP unit boundary.
+func TestStreamAndBatchInvocationOrder(t *testing.T) {
 	t.Parallel()
-	for _, unit := range offeredUnits {
-		t.Run(unit.String(), func(t *testing.T) {
-			t.Parallel()
-			stream, batch := startScenario(t, "stream", "", unit), startScenario(t, "batch", "", unit)
-			finish(t, stream)
-			finish(t, batch)
-			u := float64(unit.Milliseconds())
-			// Each item takes at least the time drawn from its name in both scenarios. A timer never fires
-			// early, but it may fire late under load, so only the lower bound is checked here; that the
-			// drawn time depends on the name alone is TestProcessUnits.
-			ps, pb := processTimes(stream), processTimes(batch)
-			if len(ps) != 5 || len(pb) != len(ps) {
-				t.Fatalf("process ran for %v in stream and %v in batch", ps, pb)
-			}
-			for name, s := range ps {
-				b, want := pb[name], processUnits(name)*u
-				if s < want-0.01 || b < want-0.01 {
-					t.Errorf("process %s took %.1fms in stream and %.1fms in batch, want at least %.0fms in both", name, s, b, want)
-				}
-			}
-			ss, sr := firstProcess(stream)
-			bs, br := firstProcess(batch)
-			t.Logf("stream: first process at %.0fms, first result at %.0fms, total %.0fms", ss, sr, stream.endMs)
-			t.Logf("batch:  first process at %.0fms, first result at %.0fms, total %.0fms", bs, br, batch.endMs)
-			// The order of the engine's own operations, which one goroutine records whatever the load:
-			// Stream invokes process while produce is still yielding, and Batch only after produceAll
-			// returned. That this makes Stream finish earlier for the default input is
-			// TestDefaultInputFavoursStream, from the drawn times alone.
-			yields, returns := 0, 0
-			for _, op := range recordedOps(t, stream) {
-				if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
-					break
-				}
-				if _, ok := op.(suimon.OpYielded); ok {
-					yields++
-				}
-			}
-			if yields == 0 || yields >= len(ps) {
-				t.Errorf("stream invoked process after %d of %d yields, want while produce was still yielding", yields, len(ps))
-			}
-			for _, op := range recordedOps(t, batch) {
-				if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
-					break
-				}
-				if _, ok := op.(suimon.OpReturned); ok {
-					returns++
-				}
-			}
-			if returns == 0 {
-				t.Errorf("batch invoked process before produceAll returned")
-			}
-		})
+	stream, batch := startScenario(t, "stream", "", testUnit), startScenario(t, "batch", "", testUnit)
+	finish(t, stream)
+	finish(t, batch)
+	ps, pb := processTimes(stream), processTimes(batch)
+	if len(ps) != 5 || len(pb) != len(ps) {
+		t.Fatalf("process ran for %v in stream and %v in batch", ps, pb)
+	}
+	for name, duration := range ps {
+		want := processUnits(name) * float64(testUnit.Milliseconds())
+		if other, ok := pb[name]; !ok || duration < want-0.01 || other < want-0.01 {
+			t.Errorf("process %s took %.1fms in stream and %.1fms in batch, want at least %.0fms in both", name, duration, other, want)
+		}
+	}
+	// The engine records this order in one goroutine, independent of when a
+	// callback goroutine receives CPU time to record its span.
+	yields, returns := 0, 0
+	for _, op := range recordedOps(t, stream) {
+		if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
+			break
+		}
+		if _, ok := op.(suimon.OpYielded); ok {
+			yields++
+		}
+	}
+	if yields == 0 || yields >= len(ps) {
+		t.Errorf("stream invoked process after %d of %d yields, want while produce was still yielding", yields, len(ps))
+	}
+	for _, op := range recordedOps(t, batch) {
+		if op, ok := op.(suimon.OpInvoke); ok && op.Placement == "process" {
+			break
+		}
+		if _, ok := op.(suimon.OpReturned); ok {
+			returns++
+		}
+	}
+	if returns == 0 {
+		t.Error("batch invoked process before produceAll returned")
 	}
 }
 
@@ -412,16 +413,4 @@ func processTimes(r *run) map[string]float64 {
 		out[s.Detail] = *s.EndMs - s.StartMs
 	}
 	return out
-}
-
-// firstProcess returns when the first call of process started, and when the first one returned.
-func firstProcess(r *run) (start, result float64) {
-	start, result = math.Inf(1), math.Inf(1)
-	for _, s := range spansOf(r, "process") {
-		start = min(start, s.StartMs)
-		if s.Outcome == "ok" {
-			result = min(result, *s.EndMs)
-		}
-	}
-	return start, result
 }

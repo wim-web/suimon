@@ -6,19 +6,58 @@ import { valueIndex } from '../src/lib/values';
 import { definition as largeDefinition, largeRun } from '../bench/data';
 import { definition, state } from './helpers';
 
-it('keeps lookups, call ownership, list members and run order consistent across snapshots', () => {
+it('matches fixture expectations and direct scans across immutable snapshots', () => {
   for (const fixture of ['users-a', 'users-b', 'users-c', 'branch-a', 'merge-a']) {
     const s = state(fixture), d = definition(fixture.split('-')[0]!), index = createRuntimeIndex(s);
-    expect(runTree(s, index)).toEqual(runTree(s));
-    expect(valueIndex(d, s, {}, index)).toEqual(valueIndex(d, s));
+    const sameRun = (left: string[], right: string[]) => JSON.stringify(left) === JSON.stringify(right);
+    const tree = runTree(s, index);
+    expect(tree.map(node => node.run.path)).toEqual(s.runs.map(run => run.path));
+    expect(tree.map(node => [node.run.workflow, node.depth, node.ordinal, node.owner?.task ?? null]))
+      .toEqual(fixture.startsWith('users')
+        ? [['users', 0, 1, null], ['profileFlow', 1, 1, 'profile'], ['profileFlow', 1, 2, 'profile']]
+        : [[fixture === 'branch-a' ? 'shipping' : 'dashboard', 0, 1, null]]);
+
+    // These member positions are expectations for the recorded fixtures, not another
+    // call to valueIndex with its default (identical) index implementation.
+    const output = (i: number) => {
+      const value = s.taskResults[i]!.output;
+      if (typeof value !== 'object') throw new Error(`expected transformed output ${i}`);
+      return value.value.v;
+    };
+    const delivered = (i: number) => {
+      const value = s.deliveries[i]!.outcome;
+      if (typeof value !== 'object') throw new Error(`expected delivered value ${i}`);
+      return value.value.v;
+    };
+    const list = (result: number, items: string[]): [string, string[]] => [s.results[result]!.value, items];
+    const expectedLists = fixture === 'users-a' ? [list(6, [output(1), output(2)]), list(7, [output(0), output(3)]), list(8, [delivered(4), delivered(5)])]
+      : fixture === 'users-b' ? [list(6, []), list(7, [output(0), output(2)]), list(8, [delivered(4), delivered(5)])]
+      : fixture === 'branch-a' ? [list(6, [delivered(3), delivered(5)])]
+      : fixture === 'merge-a' ? [list(3, [delivered(3), delivered(0)])] : [];
+    expect([...valueIndex(d, s, {}, index).lists], fixture).toEqual(expectedLists);
+
     for (const run of s.runs) {
       expect(findRun(s, run.path, index)).toBe(run);
-      expect(runOverlay(d, s, run.path, index)).toEqual(runOverlay(d, s, run.path));
+      const overlay = runOverlay(d, s, run.path, index)!;
+      expect(overlay.run).toBe(run);
+      const workflow = d.workflows.find(w => w.id === run.workflow)!;
+      expect(Object.keys(overlay.placements)).toEqual(workflow.placements.map(p => p.name));
+      for (const placement of workflow.placements) {
+        const at = (item: { run: string[]; placement: string }) => sameRun(item.run, run.path) && item.placement === placement.name;
+        expect(overlay.placements[placement.name]).toMatchObject({
+          invocations: s.invocations.filter(at), executions: s.executions.filter(at),
+          results: s.results.filter(at).length, failures: s.failures.filter(at),
+        });
+      }
       if (run.owner) expect(childRuns(s, run.owner, run.task, index)).toEqual(childRuns(s, run.owner, run.task));
     }
     for (const inv of s.invocations) {
       expect(findInvocation(s, inv.id, index)).toBe(inv);
-      expect(invocationResults(s, inv, index)).toEqual(invocationResults(s, inv));
+      // Scan the raw producer links without calling another indexed accessor.
+      const directCalls = s.calls.filter(call => call.owner === inv.id && call.task === null).map(call => call.id);
+      const expected = s.results.filter(result => sameRun(result.run, inv.run) && result.placement === inv.placement
+        && (directCalls.includes(result.producer) || (result.producer === inv.id && !s.calls.some(call => call.id === result.producer))));
+      expect(invocationResults(s, inv, index)).toEqual(expected);
     }
   }
   const a = state('users-a'), b = structuredClone(a);

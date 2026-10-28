@@ -289,9 +289,15 @@ def run : IO Unit := do
     (Explore.walk merge {} (2 ^ 32 + 3) 10000).2 != (Explore.walk merge {} 3 10000).2) "the seed of a walk"
   -- The JSON of a task result tells a pending output from a failed one.
   let pending : TaskResult := { execution := "e", task := "t", index := 0, value := "v" }
-  let outputs := [pending, { pending with output := .failed }, { pending with output := .value "w" }]
-  ensure (unique (outputs.map fun r => (toJson r).compress)) "task outputs: ambiguous JSON"
-  ensure (outputs.all fun r => (fromJson? (toJson r)).toOption == some r) "task outputs: JSON round trip"
+  for (result, text) in [
+      (pending, "{\"execution\":\"e\",\"task\":\"t\",\"index\":0,\"value\":\"v\",\"output\":\"pending\"}"),
+      ({ pending with output := .failed },
+        "{\"execution\":\"e\",\"task\":\"t\",\"index\":0,\"value\":\"v\",\"output\":\"failed\"}"),
+      ({ pending with output := .value "w" },
+        "{\"execution\":\"e\",\"task\":\"t\",\"index\":0,\"value\":\"v\",\"output\":{\"value\":{\"v\":\"w\"}}}")] do
+    let json ← IO.ofExcept (Json.parse text)
+    ensure (toJson result == json) s!"task outputs: unexpected JSON {(toJson result).compress}"
+    ensure ((fromJson? json).toOption == some result) s!"task outputs: cannot read {text}"
   IO.println "step: ok"
 
 end Suimon.Test.Step

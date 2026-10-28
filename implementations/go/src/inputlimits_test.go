@@ -55,6 +55,21 @@ func TestInputLimits(t *testing.T) {
 					t.Fatalf("size limit: %v", err)
 				}
 			}
+			// Preflight limits apply even to malformed input. At the boundary,
+			// syntax errors still belong to the parser, not the resource scanner.
+			for _, c := range []struct{ at, over, want string }{
+				{strings.Repeat(" ", DefaultMaxInputBytes), strings.Repeat(" ", DefaultMaxInputBytes+1),
+					"input exceeds maximum size of 1048576 bytes"},
+				{strings.Repeat("[", MaxInputDepth), strings.Repeat("[", MaxInputDepth+1),
+					"input exceeds maximum nesting depth of 64"},
+			} {
+				if err := parse(c.at); err == nil || strings.Contains(err.Error(), "input exceeds maximum") {
+					t.Fatalf("at limit should reach syntax validation: %v", err)
+				}
+				if err := parse(c.over); err == nil || err.Error() != c.want {
+					t.Fatalf("preflight before syntax: got %v, want %s", err, c.want)
+				}
+			}
 		})
 	}
 }

@@ -26,6 +26,13 @@ func rejected(t *testing.T, label, fragment string, p *Definition) {
 	}
 }
 
+func rejectedExactly(t *testing.T, label, want string, p *Definition) {
+	t.Helper()
+	if err := p.Validate(); err == nil || err.Error() != want {
+		t.Errorf("%s: got %v, want %q", label, err, want)
+	}
+}
+
 func decodeRejected(t *testing.T, label, fragment, text string) {
 	t.Helper()
 	_, err := ParseDefinition([]byte(text))
@@ -188,9 +195,13 @@ func TestValidateTypes(t *testing.T) {
 		func(w *Workflow) { w.Input = &Entry{Type: Named("Org"), Placement: "fetchAllUsers"} }))
 	rejected(t, "task input transform", "an input transform is required", mapWorkflow(load(t, "users"), "users",
 		mapPlacement("perUser", mapConcurrency(mapTask("orders", func(task *TaskSpec) { task.Input = nil })))))
-	rejected(t, "task output transform", "takes Profile, but the body produces Orders",
+	rejectedExactly(t, "task output transform", "users.perUser task orders: transform profileSummary takes Profile, but the body produces Orders",
 		mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(mapTask("orders",
 			func(task *TaskSpec) { task.Output = ptr("profileSummary") })))))
+	rejectedExactly(t, "nested entry type", "users: entry fetchAllUsers: the input type List<List<Org>> does not match the placement",
+		mapWorkflow(load(t, "users"), "users", func(w *Workflow) {
+			w.Input = &Entry{Type: ListOf(ListOf(Named("Org"))), Placement: "fetchAllUsers"}
+		}))
 }
 
 func TestValidateInputs(t *testing.T) {
@@ -202,7 +213,7 @@ func TestValidateInputs(t *testing.T) {
 				}
 			}
 		}))
-	rejected(t, "missing input", "archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
+	rejectedExactly(t, "missing input", "dashboard.archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
 		func(w *Workflow) { dropConnection(w, "sales", "archive") }))
 	rejected(t, "input to a node without input", "stock takes no input", mapWorkflow(load(t, "merge"), "dashboard",
 		func(w *Workflow) {
@@ -256,7 +267,7 @@ func TestValidateGraph(t *testing.T) {
 	rejected(t, "cycle", "connections contain a cycle", cycleDefinition())
 	rejected(t, "recursive call", "workflows call each other in a cycle", mapWorkflow(load(t, "users"), "profileFlow",
 		mapPlacement("format", func(pl *Placement) { pl.Control = CallControl{WorkflowBody("profileFlow", "format")} })))
-	rejected(t, "waitStream on Single", "waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
+	rejectedExactly(t, "waitStream on Single", "dashboard.page: waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
 		mapPlacement("page", func(pl *Placement) { pl.Control = WaitStreamControl{ListOf(Named("Widget"))} })))
 	rejected(t, "Merge of Stream", "Merge accepts only Single inputs (ship)", mapWorkflow(load(t, "branch"), "shipping",
 		mapPlacement("receipts", func(pl *Placement) { pl.Control = MergeControl{Named("Receipt")} })))
@@ -276,7 +287,7 @@ func TestValidateGraph(t *testing.T) {
 func TestValidateBranchArms(t *testing.T) {
 	rejected(t, "no connected arm", "at least one arm needs a connection", mapWorkflow(load(t, "branch"), "shipping",
 		func(w *Workflow) { dropConnection(w, "paid", "ship") }))
-	rejected(t, "unknown arm", "unknown arm refunded", mapWorkflow(load(t, "branch"), "shipping",
+	rejectedExactly(t, "unknown arm", "shipping: connection paid -> ship: unknown arm refunded", mapWorkflow(load(t, "branch"), "shipping",
 		mapConnection("paid", "ship", func(c *Connection) { c.Arm = ptr("refunded") })))
 	rejected(t, "missing arm", "a connection from a branch needs an arm", mapWorkflow(load(t, "branch"), "shipping",
 		mapConnection("paid", "ship", func(c *Connection) { c.Arm = nil })))
@@ -417,34 +428,6 @@ func TestDecodeRejections(t *testing.T) {
 	decodeRejected(t, "unknown field", "unknown field retries", base+`,"policy":"stop","retries":1}]}]}`)
 	decodeRejected(t, "missing policy", "missing field policy", base+`}]}]}`)
 	decodeRejected(t, "unknown policy", "policy is stop or continue", base+`,"policy":"retry"}]}]}`)
-}
-
-// Exact messages, where the Lean tests above only look for a fragment.
-func TestValidateMessages(t *testing.T) {
-	cases := []struct {
-		label, want string
-		p           *Definition
-	}{
-		{"two inputs", "dashboard.archive: needs exactly one input", mapWorkflow(load(t, "merge"), "dashboard",
-			func(w *Workflow) { dropConnection(w, "sales", "archive") })},
-		{"unknown arm", "shipping: connection paid -> ship: unknown arm refunded", mapWorkflow(load(t, "branch"), "shipping",
-			mapConnection("paid", "ship", func(c *Connection) { c.Arm = ptr("refunded") }))},
-		{"task output", "users.perUser task orders: transform profileSummary takes Profile, but the body produces Orders",
-			mapWorkflow(load(t, "users"), "users", mapPlacement("perUser", mapConcurrency(mapTask("orders",
-				func(task *TaskSpec) { task.Output = ptr("profileSummary") }))))},
-		{"list type", "dashboard.page: waitStream needs a Stream input", mapWorkflow(load(t, "merge"), "dashboard",
-			mapPlacement("page", func(pl *Placement) { pl.Control = WaitStreamControl{ListOf(Named("Widget"))} }))},
-		{"entry", "users: entry fetchAllUsers: the input type List<List<Org>> does not match the placement",
-			mapWorkflow(load(t, "users"), "users", func(w *Workflow) {
-				w.Input = &Entry{Type: ListOf(ListOf(Named("Org"))), Placement: "fetchAllUsers"}
-			})},
-	}
-	for _, c := range cases {
-		err := c.p.Validate()
-		if err == nil || err.Error() != c.want {
-			t.Errorf("%s: got %v, want %q", c.label, err, c.want)
-		}
-	}
 }
 
 func TestDecodeMessages(t *testing.T) {

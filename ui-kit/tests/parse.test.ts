@@ -4,6 +4,17 @@ import { clone, definition, definitionJson, definitionText, recordText, stateJso
 
 type Json = Record<string, any>;
 
+// The nearest representable numbers on either side of 2^64 are asymmetric.
+// JSON.parse rounds both uint64 max and 2^64 to 2^64; the UI accepts that rounded
+// value, but must reject the next representable value above it.
+const timeoutBoundaries = [
+  ['2^60', '1152921504606846976', 2 ** 60, true],
+  ['previous number below 2^64', '18446744073709549568', 2 ** 64 - 2048, true],
+  ['uint64 max rounded to 2^64', '18446744073709551615', 2 ** 64, true],
+  ['2^64, indistinguishable from uint64 max', '18446744073709551616', 2 ** 64, true],
+  ['next number above 2^64', '18446744073709555712', 2 ** 64 + 4096, false],
+] as const;
+
 describe('parseDefinition', () => {
   it('accepts the example definitions and normalizes optional lists', () => {
     for (const name of ['users', 'branch', 'merge']) expect(definition(name).workflows.length).toBeGreaterThan(0);
@@ -32,10 +43,22 @@ describe('parseDefinition', () => {
     expect(() => parseDefinition(json)).toThrow(message);
   });
 
-  it('accepts a timeout up to 2^64 - 1, as Lean and Go do', () => {
+  it.each(timeoutBoundaries)('bounds definition timeouts with JavaScript number rounding: %s', (_, literal, value, accepted) => {
     const json = clone(definitionJson('branch')) as Json;
-    json.workflows[0].placements[0].timeout.callMs = 2 ** 60;
-    expect(parseDefinition(json).workflows[0]!.placements[0]!.timeout?.callMs).toBe(2 ** 60);
+    json.workflows[0].placements[0].timeout = { callMs: value, elementMs: value };
+    const text = JSON.stringify(json).replace(
+      /"timeout":\{"callMs":[^}]+\}/,
+      `"timeout":{"callMs":${literal},"elementMs":${literal}}`,
+    );
+    expect(text).toContain(`"timeout":{"callMs":${literal},"elementMs":${literal}}`);
+    for (const input of [json, text]) {
+      if (accepted) expect(parseDefinition(input).workflows[0]!.placements[0]!.timeout).toEqual({ callMs: value, elementMs: value });
+      else expect(() => parseDefinition(input)).toThrow('timeout.callMs: must be at most 18446744073709551615');
+    }
+    if (!accepted) {
+      json.workflows[0].placements[0].timeout.callMs = 1;
+      expect(() => parseDefinition(json)).toThrow('timeout.elementMs: must be at most 18446744073709551615');
+    }
   });
 
   it('reads the text of a definition file, in which no object may repeat a key', () => {
@@ -82,12 +105,24 @@ describe('parseState', () => {
     expect(parseState(stateJson('merge-a')).deliveries.some(d => d.outcome === 'trigger')).toBe(true);
   });
 
-  it('accepts call timeouts up to 2^64 - 1, as a definition does', () => {
+  it.each(timeoutBoundaries)('bounds state timeouts after JavaScript number rounding: %s', (_, literal, value, accepted) => {
     const json = clone(stateJson('users-a')) as Json;
-    json.calls[0].timeout = { callMs: 2 ** 60, elementMs: 0 };
-    expect(parseState(json).calls[0]!.timeout).toEqual({ callMs: 2 ** 60, elementMs: 0 });
-    json.calls[0].timeout = { callMs: 2 ** 65, elementMs: null };
-    expect(() => parseState(json)).toThrow('timeout.callMs: must be at most 18446744073709551615');
+    // The transport has already parsed JSON before parseState receives it.
+    json.calls[0].timeout = JSON.parse(`{"callMs":${literal},"elementMs":${literal}}`);
+    if (accepted) expect(parseState(json).calls[0]!.timeout).toEqual({ callMs: value, elementMs: value });
+    else {
+      expect(() => parseState(json)).toThrow('timeout.callMs: must be at most 18446744073709551615');
+      json.calls[0].timeout.callMs = 0;
+      expect(() => parseState(json)).toThrow('timeout.elementMs: must be at most 18446744073709551615');
+    }
+  });
+
+  it('allows zero and absent timeouts in unchecked runtime state', () => {
+    const json = clone(stateJson('users-a')) as Json;
+    json.calls[0].timeout = { callMs: 0, elementMs: null };
+    expect(parseState(json).calls[0]!.timeout).toEqual({ callMs: 0, elementMs: null });
+    json.calls[0].timeout = { elementMs: 0 };
+    expect(parseState(json).calls[0]!.timeout).toEqual({ callMs: null, elementMs: 0 });
   });
 
   it('reads task outputs as pending, a value or failed, and the producer of each result', () => {
