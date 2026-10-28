@@ -163,6 +163,9 @@ func TestExploreValues(t *testing.T) {
 	if !a.Equal(b) || len(opsA) != len(opsB) || !a.Status.Terminal() {
 		t.Error("a walk is reproducible and ends in a final state")
 	}
+	if !slices.EqualFunc(opsA, opsB, func(a, b Op) bool { return EncodeOp(a) == EncodeOp(b) }) {
+		t.Error("the same seed produced different operation sequences")
+	}
 	if _, ops := Walk(merge, DefaultConfig(), 5, 3); len(ops) != 3 {
 		t.Errorf("limit: %d ops", len(ops))
 	}

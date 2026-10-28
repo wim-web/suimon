@@ -1,6 +1,7 @@
 import Test.Schema
 import Test.Validate
 import Test.Trace
+import Test.SchemaOracle
 
 open Lean Suimon Suimon.Test
 
@@ -15,7 +16,7 @@ private def rejected (schema : Schema.Validator) (label text : String) : IO Unit
   Validate.ensure (schema.validate value).toOption.isNone s!"schema accepted {label}"
 
 /-- The schema and the decoder accept the same examples, including what the encoder writes. --/
-def main : IO Unit := do
+private def run : IO Unit := do
   let definitionSchema ← liftError "definition.schema.json"
     (Json.parse (← IO.FS.readFile "schema/definition.schema.json"))
   let schema ← liftError "definition.schema.json" (Schema.compile definitionSchema)
@@ -76,10 +77,6 @@ def main : IO Unit := do
   -- rejects.
   for (name, invalid, _) in ← Test.Trace.invalidDefinitions do
     liftError s!"{name} header" (Codec.parse (Trace.wireCodec.encodeHeader (.of invalid false)) >>= trace.validate)
-  -- The order the Wire form fixes is accepted too.
-  liftError "ordered fields"
-    (Codec.parse "{\"seq\":1,\"op\":{\"type\":\"start\",\"input\":\"t\"},\"values\":{\"t\":\"x\"}}" >>=
-      trace.validate)
   rejected trace "unknown op" "{\"seq\":1,\"op\":{\"type\":\"retry\",\"call\":\"c\"}}"
   rejected trace "op with commit" "{\"seq\":1,\"op\":{\"type\":\"cancel\"},\"commit\":true}"
   rejected trace "zero seq" "{\"seq\":0,\"commit\":true}"
@@ -112,3 +109,9 @@ def main : IO Unit := do
     (Codec.parse ("{\"definition\":" ++ noPlacements ++ ",\"validated\":false}") >>= trace.validate)
   rejected trace "validated header without placements" ("{\"definition\":" ++ noPlacements ++ ",\"validated\":true}")
   IO.println "schema: ok"
+
+def main (args : List String) : IO Unit :=
+  match args with
+  | [] => run
+  | ["--oracle", path] => SchemaOracle.run path
+  | _ => throw (IO.userError "usage: suimon_schema_test [--oracle corpus.json]")

@@ -72,7 +72,6 @@ func TestRuntimeParserRecordSize(t *testing.T) {
 	}{
 		{"at limit", strings.Repeat("x", DefaultMaxInputBytes-overhead), true},
 		{"limit plus one", strings.Repeat("x", DefaultMaxInputBytes-overhead+1), false},
-		{"reported regression", strings.Repeat("x", 1<<20), false},
 		{"escaped payload", strings.Repeat("\n", DefaultMaxInputBytes/3), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,27 +161,35 @@ func parserLimitSizedDefinition(t *testing.T, size int, validated bool) *Definit
 	return p
 }
 
+// This private guard includes the header envelope in the parser depth budget.
+// Public constructors reject these definitions earlier at the lower type-depth limit.
+func TestRecordedHeaderParserDepth(t *testing.T) {
+	for _, depth := range []int{MaxInputDepth - 1, MaxInputDepth, MaxInputDepth + 1} {
+		t.Run(fmt.Sprintf("depth=%d", depth), func(t *testing.T) {
+			p := parserLimitDefinition()
+			// Header -> definition -> functions -> function -> output -> list wrappers.
+			p.Functions[0].Output.Type.Lists = depth - 5
+			_, err := recordedHeader(p, true)
+			if (err == nil) != (depth <= MaxInputDepth) {
+				t.Fatalf("header depth %d: %v", depth, err)
+			}
+		})
+	}
+}
+
 func TestRuntimeParserHeaderLimits(t *testing.T) {
 	for _, validated := range []bool{false, true} {
-		for _, depth := range []int{MaxInputDepth - 1, MaxInputDepth, MaxInputDepth + 1} {
-			t.Run(fmt.Sprintf("validated=%t/parser depth=%d", validated, depth), func(t *testing.T) {
-				p := parserLimitDefinition()
-				// Header -> definition -> functions -> function -> output -> list wrappers.
-				p.Functions[0].Output.Type.Lists = depth - 5
-				_, err := recordedHeader(p, validated)
-				if (err == nil) != (depth <= MaxInputDepth) {
-					t.Fatalf("header depth %d: %v", depth, err)
-				}
-				// The validator has a tighter type limit, for checked and unchecked engines.
-				constructor := NewEngine
-				if !validated {
-					constructor = NewUncheckedEngine
-				}
-				if _, err := constructor(p, nil); err == nil || !strings.Contains(err.Error(), "type depth limit") {
-					t.Fatalf("definition admission: %v", err)
-				}
-			})
-		}
+		t.Run(fmt.Sprintf("validated=%t/type depth limit", validated), func(t *testing.T) {
+			p := parserLimitDefinition()
+			p.Functions[0].Output.Type.Lists = MaxDefinitionTypeDepth + 1
+			constructor := NewEngine
+			if !validated {
+				constructor = NewUncheckedEngine
+			}
+			if _, err := constructor(p, nil); err == nil || !strings.Contains(err.Error(), "type depth limit") {
+				t.Fatalf("definition admission: %v", err)
+			}
+		})
 		p := parserLimitDefinition()
 		p.Functions[0].Output.Type.Lists = MaxDefinitionTypeDepth
 		testParserLimitHeader(t, p, validated, true)

@@ -325,9 +325,23 @@ func TestRuntimeResumeErrors(t *testing.T) {
 	}
 }
 
-// A file journal survives the process: it is read back, its torn tail is cut off, and the
-// execution continues in the same file.
+// FileJournal preserves the committed prefix when reopening and truncating a torn tail.
+// The process subtest also recovers after killing the process that wrote the journal.
 func TestFileJournal(t *testing.T) {
+	if os.Getenv(journalProcessRole) == "recovery-writer" {
+		j, err := CreateJournal(os.Getenv(journalProcessPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer j.Close()
+		e, err := NewEngine(fileJournalProcessDefinition(), mustRegistry(t,
+			FuncNoInput("produce", func(context.Context) (int, error) { return 42, nil })))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.Run(context.Background(), nil, WithJournal(&tornFileJournal{j}))
+		t.Fatalf("writer returned before the parent killed it: %v", err)
+	}
 	sc := scenarioNamed(t, "users")
 	p := load(t, sc.definition)
 	path := filepath.Join(t.TempDir(), "users.jsonl")
@@ -354,7 +368,7 @@ func TestFileJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyJournal(t, p, string(data), want)
-	// Crash in the middle of a line; the process starts again and resumes from the file.
+	// Exercise the file adapter's truncate/append behavior at a torn line.
 	cuts := cutPoints(string(data))
 	cut := cuts[len(cuts)/2]
 	if strings.HasSuffix(string(data[:cut]), "\n") {
@@ -390,6 +404,92 @@ func TestFileJournal(t *testing.T) {
 	}
 	if _, err := OpenJournal(filepath.Join(t.TempDir(), "missing.jsonl")); err == nil {
 		t.Error("OpenJournal needs an existing file")
+	}
+	t.Run("process recovery", testFileJournalProcessRecovery)
+}
+
+func fileJournalProcessDefinition() *Definition {
+	return &Definition{
+		Main:      "main",
+		Functions: []FunctionDecl{{ID: "produce", Output: Contract{Kind: KindSingle, Type: Named("Int")}}},
+		Workflows: []Workflow{{ID: "main", Placements: []Placement{{
+			Name: "out", Control: CallControl{Body: FunctionBody("produce")}, Policy: PolicyStop,
+		}}}},
+	}
+}
+
+// The child's actual FileJournal contains a committed running call and a torn returned
+// record when it reports ready. Killing it loses all engine state and leaves the file open.
+type tornFileJournal struct{ *FileJournal }
+
+func (j *tornFileJournal) Append(lines []byte) error {
+	if !strings.Contains(string(lines), `"type":"returned"`) {
+		return j.FileJournal.Append(lines)
+	}
+	end := strings.IndexByte(string(lines), '\n')
+	if end < 2 {
+		return errors.New("test: returned record has no complete line")
+	}
+	if err := j.FileJournal.Append(lines[:end/2]); err != nil {
+		return err
+	}
+	if err := j.FileJournal.Sync(); err != nil {
+		return err
+	}
+	return holdJournalProcess()
+}
+
+func testFileJournalProcessRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "crashed.jsonl")
+	child, waitChild := startJournalProcess(t, "TestFileJournal", "recovery-writer", path)
+	if err := child.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitChild(); err == nil {
+		t.Fatal("the journal writer was not terminated")
+	}
+	j := openJournalAfterProcessExit(t, path)
+	defer j.Close()
+	prefix, err := j.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := fileJournalProcessDefinition()
+	c := mustCheck(t, p, string(prefix))
+	if !c.Uncommitted || len(c.State.Calls) != 1 || !hasRunningCall(c.State) {
+		t.Fatal("the killed writer must leave a running call and a torn record")
+	}
+	e, err := NewEngine(p, mustRegistry(t, FuncNoInput("produce", func(context.Context) (int, error) {
+		t.Error("Resume ran the crashed call again")
+		return 42, nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := e.Resume(context.Background(), j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := wait(t, x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != StatusFailed || len(r.Failures) != 1 || r.Failures[0].Cause != CauseLost ||
+		!errors.Is(r.Failures[0].Err, ErrLost) || r.State.Calls[0].Status != CallLost {
+		t.Fatalf("the crashed call must be reported lost: status=%v failures=%v calls=%v", r.Status, r.Failures, r.State.Calls)
+	}
+	expectNoOutput(t, r, "out")
+	resumed, err := j.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyJournal(t, p, string(resumed), r)
+	if !strings.HasPrefix(string(resumed), string(prefix[:c.Length])) {
+		t.Fatal("process recovery changed the committed prefix")
+	}
+	ops := opsOf(t, string(resumed[c.Length:]))
+	if len(ops) == 0 || ops[0] != (OpLost{Call: c.State.Calls[0].ID}) {
+		t.Fatalf("process recovery did not first record the lost call: %v", ops)
 	}
 }
 

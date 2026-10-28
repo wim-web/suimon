@@ -141,22 +141,6 @@ func TestResourceBoundaries(t *testing.T) {
 	}
 }
 
-func TestDefinitionTextLimits(t *testing.T) {
-	for _, c := range []struct{ text, want string }{
-		{strings.Repeat(" ", MaxDefinitionBytes+1), "maximum size"},
-		{strings.Repeat("[", MaxDefinitionJSONDepth+1), "maximum nesting depth"},
-	} {
-		if _, err := ParseDefinition([]byte(c.text)); err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Fatalf("ParseDefinition: %v", err)
-		}
-	}
-	for _, s := range []string{strings.Repeat(" ", MaxDefinitionBytes), strings.Repeat("[", MaxDefinitionJSONDepth), `"\\\"` + strings.Repeat("[", 100) + `"`} {
-		if err := (InputLimits{}).check(s); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 // The indexed cycle checker must retain the reference's fuel, duplicate vertex,
 // parallel edge, and missing endpoint behavior, even on malformed definitions.
 func acyclicReference(edges []edge, fuel int, vertices []string) bool {

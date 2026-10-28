@@ -290,7 +290,24 @@ func TestQuotaResumeCountsRetainedPayloads(t *testing.T) {
 	if !errors.Is(err, ErrQuotaExceeded) || r == nil {
 		t.Fatalf("resumed payload quota: %v", err)
 	}
-	verifyJournal(t, e.definition, resumed.text(), r)
+	journal := resumed.text()
+	verifyJournal(t, e.definition, journal, r)
+	for _, op := range opsOf(t, journal) {
+		if settle, ok := op.(OpSettle); ok && settle.Placement == "all" {
+			t.Error("Resume admitted an aggregate after retained payloads filled the budget")
+		}
+	}
+	checked, err := Check(journal, sameDefinition(e.definition))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, v := range checked.Values {
+		total += int64(len(v.Payload))
+	}
+	if total > retained {
+		t.Errorf("Resume retained %d payload bytes, exceeding the %d-byte budget", total, retained)
+	}
 }
 
 func TestQuotaShutdownReserveAndRecovery(t *testing.T) {

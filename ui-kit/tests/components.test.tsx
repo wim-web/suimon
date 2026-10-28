@@ -89,10 +89,13 @@ it('shows a payload with its numbers as written', () => {
 });
 
 it('renders the toolbar status and failure count', () => {
-  const html = renderToStaticMarkup(<WorkflowToolbar title="users" status="failed" failures={2} />);
+  const html = renderToStaticMarkup(<WorkflowToolbar title="users" status="failed" />);
   expect(html).toContain('role="img" aria-label="suimon"');
-  expect(html).toContain('2 failures');
-  expect(html).toContain('sui-tone-danger');
+  expect(html).toMatch(/<span class="sui-status sui-tone-danger">(?:<[^>]+>)*failed<\/span>/);
+  expect(html).not.toContain('failures</button>');
+  const withFailures = renderToStaticMarkup(<WorkflowToolbar title="users" status="running" failures={2} />);
+  expect(withFailures).toMatch(/<button\b[^>]*class="sui-button sui-tone-danger"[^>]*>[\s\S]*?2 failures<\/button>/);
+  expect(withFailures).toMatch(/<span class="sui-status sui-tone-accent">(?:<[^>]+>)*running<\/span>/);
 });
 
 it('composes the workbench from a definition alone or with a state and records', () => {

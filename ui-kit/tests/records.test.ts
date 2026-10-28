@@ -1,8 +1,9 @@
 import { expect, it } from 'vitest';
 import { filterTransitions, recordRelation, recordTransitions, recordValues, relationLabel } from '../src/lib/records';
+import type { RecordRelation } from '../src/lib/records';
+import type { Op } from '../src/types';
 import { resolveValue, valueIndex, previewValue } from '../src/lib/values';
 import { parseRecordLog, parseRecords } from '../src/lib/parse';
-import { runTree } from '../src/lib/status';
 import { definition, recordText, records, state } from './helpers';
 
 it('marks an op without its commit as uncommitted', () => {
@@ -26,16 +27,31 @@ it('relates every op of a completed run to a run and placement through the state
   const transitions = recordTransitions(records('users-a'));
   const relations = new Map(transitions.map(t => [t.seq, recordRelation(t.op, p, s)]));
   const byType = (type: string) => transitions.filter(t => t.op.type === type).map(t => relations.get(t.seq)!);
-  expect(byType('start')).toEqual([{ run: [], placement: 'fetchAllUsers' }]);
-  for (const type of ['fetch', 'yielded', 'returned', 'ended', 'taskInput', 'beginTask', 'taskOutput', 'closeExecution', 'closeRun', 'invoke', 'settle'])
-    expect(byType(type).every(r => r.placement !== undefined), type).toBe(true);
-  expect(byType('deliver')[0]).toEqual({ run: [], placement: 'perUser', source: 'fetchAllUsers', connection: 0 });
+  const child = s.runs[1]!.path, secondChild = s.runs[2]!.path;
+  const source = { run: [], placement: 'fetchAllUsers' }, perUser = { run: [], placement: 'perUser' };
+  const profile = { ...perUser, task: 'profile' }, orders = { ...perUser, task: 'orders' };
+  const fetch = { run: child, placement: 'fetch' }, format = { run: child, placement: 'format' };
+  const secondFetch = { run: secondChild, placement: 'fetch' }, secondFormat = { run: secondChild, placement: 'format' };
+  const all = { run: [], placement: 'all' };
+  const expected: Record<string, RecordRelation[]> = {
+    start: [source],
+    invoke: [source, perUser, perUser, fetch, secondFetch, format, secondFormat],
+    fetch: [source, source, source], yielded: [source, source], ended: [source],
+    deliver: [
+      { ...perUser, source: 'fetchAllUsers', connection: 0 }, { ...perUser, source: 'fetchAllUsers', connection: 0 },
+      { ...format, source: 'fetch', connection: 0 }, { ...secondFormat, source: 'fetch', connection: 0 },
+      { ...all, source: 'perUser', connection: 1 }, { ...all, source: 'perUser', connection: 1 },
+    ],
+    taskInput: [profile, orders, profile, orders], beginTask: [profile, orders, orders, profile],
+    returned: [fetch, orders, orders, secondFetch, format, secondFormat],
+    taskOutput: [orders, orders, profile, profile],
+    settle: [fetch, source, format, secondFetch, secondFormat, perUser, all],
+    closeRun: [{ ...profile, childRun: child }, { ...profile, childRun: secondChild }],
+    closeExecution: [perUser, perUser], conclude: [{ run: [] }],
+  };
+  expect([...new Set(transitions.map(t => t.op.type))].sort()).toEqual(Object.keys(expected).sort());
+  for (const [type, expectedRelations] of Object.entries(expected)) expect(byType(type), type).toEqual(expectedRelations);
   expect(relationLabel(byType('deliver')[0])).toBe('fetchAllUsers → perUser');
-  expect(byType('taskInput')[0]).toMatchObject({ run: [], placement: 'perUser', task: 'profile' });
-  const child = runTree(s)[1]!.run.path;
-  expect(byType('closeRun').find(r => r.childRun?.[0] === child[0])).toMatchObject({ run: [], placement: 'perUser', task: 'profile' });
-  const fetch = byType('returned').find(r => r.placement === 'fetch')!;
-  expect(fetch.run).toHaveLength(1);
   // Without the state only ops that name their run and placement are related.
   const bare = recordRelation(transitions.find(t => t.op.type === 'fetch')!.op, p);
   expect(bare).toEqual({});
@@ -45,11 +61,39 @@ it('relates every op of a completed run to a run and placement through the state
   const inChild = filterTransitions(transitions, relations, { run: child });
   expect(inChild.map(t => t.op.type)).toContain('closeRun');
   expect(inChild.filter(t => t.op.type === 'invoke')).toHaveLength(2);
-  const format = filterTransitions(transitions, relations, { run: child, placement: 'format' });
-  expect(format.length).toBeGreaterThan(0);
-  expect(format.every(t => relations.get(t.seq)!.placement === 'format')).toBe(true);
+  const formatRecords = filterTransitions(transitions, relations, { run: child, placement: 'format' });
+  expect(formatRecords.map(t => [t.seq, t.op.type])).toEqual([[47, 'deliver'], [63, 'invoke'], [65, 'returned'], [67, 'settle']]);
   expect(filterTransitions(transitions, relations, { run: [], placement: 'format' })).toEqual([]);
   expect(filterTransitions(transitions, relations, { uncommittedOnly: true })).toEqual([]);
+});
+
+it('relates failure reports to their actual call, execution and connection owners', () => {
+  const p = definition('users'), s = state('users-b');
+  const failures = recordTransitions(records('users-b')).filter(t => ['timedOut', 'terminated', 'taskOutputFailed'].includes(t.op.type));
+  expect(failures.map(t => t.op.type)).toEqual(['timedOut', 'terminated', 'taskOutputFailed']);
+  expect(failures.map(t => recordRelation(t.op, p, s))).toEqual([
+    { run: [], placement: 'perUser', task: 'orders' },
+    { run: [], placement: 'perUser', task: 'orders' },
+    { run: [], placement: 'perUser', task: 'profile' },
+  ]);
+
+  // The resolver reads identities from a snapshot; report acceptance belongs to the
+  // engine. Exercise the other failure op variants with these known owner links.
+  const timeout = failures[0]!.op;
+  if (timeout.type !== 'timedOut') throw new Error('expected the recorded orders timeout');
+  const childInvocation = s.invocations.find(invocation => invocation.placement === 'fetch' && invocation.run[0] === s.runs[1]!.path[0])!;
+  const childCall = s.calls.find(call => call.owner === childInvocation.id)!;
+  expect(childCall).toBeDefined();
+  expect(childCall.target).toEqual({ function: { id: 'fetchProfile' } });
+  const cases: [Op, RecordRelation][] = [
+    [{ type: 'failed', call: timeout.call }, { run: [], placement: 'perUser', task: 'orders' }],
+    [{ type: 'lost', call: childCall.id }, { run: s.runs[1]!.path, placement: 'fetch' }],
+    [{ type: 'taskInputFailed', execution: s.executions[0]!.id, task: 'profile' }, { run: [], placement: 'perUser', task: 'profile' }],
+    [{ type: 'transformFailed', run: s.runs[1]!.path, connection: 0, source: 'unknown' }, { run: s.runs[1]!.path, placement: 'format', source: 'fetch', connection: 0 }],
+    [{ type: 'failed', call: 'unknown' }, {}],
+    [{ type: 'cancel' }, { run: [] }],
+  ];
+  for (const [op, expected] of cases) expect(recordRelation(op, p, s), op.type).toEqual(expected);
 });
 
 it('shows the payloads of engine-built lists from the records', () => {

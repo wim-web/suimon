@@ -10,6 +10,9 @@ const span = (fn: string, detail: string, startMs: number, endMs: number | null,
 /** The text of each lane header. */
 const headers = (html: string) => [...html.matchAll(/<div class="app-lane-header">(.*?)<\/div>/g)].map(m => m[1]!.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
 const lane = (key: string, label: string, run: TimelineRun | null): TimelineLane => ({ key, label, unitMs: 100, run });
+const styles = (html: string, className: string) => [...html.matchAll(/<[^>]+class="([^"]+)"[^>]*style="([^"]*)"[^>]*>/g)]
+  .filter(([, classes]) => classes!.split(' ').includes(className))
+  .map(([, , style]) => Object.fromEntries(style!.split(';').filter(Boolean).map(declaration => declaration.split(':'))));
 
 it('marks the first downstream start in each lane, and shows a lane that has not run', () => {
   const html = renderToStaticMarkup(<Timeline highlight="process" lanes={[
@@ -26,6 +29,14 @@ it('marks the first downstream start in each lane, and shows a lane that has not
   expect(html.match(/class="app-mark"/g)).toHaveLength(2);
   // The marker runs through every row of the lane.
   expect(html.match(/class="app-marker"/g)).toHaveLength(2);
+  // Both bars and the marker use the full 152ms lane; yield marks use the 100ms producer bar.
+  const first = `${51 / 152 * 100}%`;
+  expect(styles(html, 'app-marker')).toEqual([{ left: first }, { left: first }]);
+  expect(styles(html, 'app-mark')).toEqual([{ left: '50%' }, { left: '100%' }]);
+  expect(styles(html, 'app-bar').map(({ left, width }) => ({ left, width }))).toEqual([
+    { left: '0%', width: `max(2px, ${100 / 152 * 100}%)` },
+    { left: first, width: `max(2px, ${100 / 152 * 100}%)` },
+  ]);
 });
 
 it('compares when downstream work starts, when the first result appears and the total time of the runs', () => {

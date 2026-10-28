@@ -210,24 +210,21 @@ func TestLongMergeChains(t *testing.T) {
 		p     *Definition
 		end   string
 	}{{"merge chain 20", mergeChain(20), "p20"}, {"merge chain 40", mergeChain(40), "p40"}, {"30 diamonds", diamonds(30), "s30"}} {
-		start := time.Now()
-		accepted(t, c.label, c.p)
-		if elapsed := time.Since(start); elapsed > time.Second {
-			t.Errorf("%s: validation took %v", c.label, elapsed)
-		}
-		start = time.Now()
-		e, err := NewEngine(c.p, mustRegistry(t, chainBindings()...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		r, err := e.Run(context.Background(), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if elapsed := time.Since(start); elapsed > 5*time.Second {
-			t.Errorf("%s: creating the engine and running took %v", c.label, elapsed)
-		}
-		expectStatusOf(t, r, StatusSucceeded)
-		expectOutput(t, r, c.end, []string{"x", "x"})
+		t.Run(c.label, func(t *testing.T) {
+			accepted(t, c.label, c.p)
+			e, err := NewEngine(c.p, mustRegistry(t, chainBindings()...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Bound a stalled run; BenchmarkKindChain measures scaling separately.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			r, err := e.Run(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectStatusOf(t, r, StatusSucceeded)
+			expectOutput(t, r, c.end, []string{"x", "x"})
+		})
 	}
 }

@@ -995,25 +995,6 @@ func newOwnedRecorder(p *Definition, d *derivation, s *State, values []Payload, 
 	return r
 }
 
-// recordWith is Recorder.RecordWith. A rejected op changes nothing; after any other error the
-// state has changed without records, and the recorder must not be used again.
-func (r *ownedRecorder) recordWith(op Op, payload func(value string) (string, error)) ([]Record, error) {
-	introduced, err := r.machine.apply(op)
-	if err != nil {
-		return nil, err
-	}
-	values, err := payloadsOf(unknown(introduced, nil, r.known), payload)
-	if err != nil {
-		return nil, err
-	}
-	records := []Record{{Seq: r.seq, Op: op, Values: values}, {Seq: r.seq + 1, Commit: true}}
-	r.seq += len(records)
-	for _, v := range values {
-		r.known[v.Value] = true
-	}
-	return records, nil
-}
-
 // recordAdmitted prepares the record before the rule changes state. A refusal leaves the
 // recorder usable, so the runtime can record cancellation using its reserved shutdown budget.
 func (r *ownedRecorder) recordAdmitted(op Op, payload func(string) (string, error), admit func([]Record) error) ([]Record, error) {

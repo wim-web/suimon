@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 
@@ -504,7 +503,7 @@ func header(t *testing.T, cli, path string) string {
 	return generated.stdout
 }
 
-// Lean gen writes records that the Go checker accepts with the summary of Lean check.
+// Both generators write the same records, which both checkers accept with the same summary and state.
 func TestConformanceCheck(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
@@ -512,28 +511,24 @@ func TestConformanceCheck(t *testing.T) {
 		name := baseName(path)
 		for _, seed := range conformanceSeeds {
 			generated := runLean(t, cli, "gen", path, "--seed", seed)
-			if generated.code != 0 {
-				t.Fatalf("Lean gen %s %s: %s", name, seed, generated.stderr)
+			goGenerated := runGo("gen", path, "--seed", seed)
+			for implementation, r := range map[string]result{"Lean": generated, "Go": goGenerated} {
+				if r.code != 0 || !strings.HasSuffix(r.stdout, "\n") || strings.Count(r.stdout, "\n") < 3 {
+					t.Fatalf("%s gen %s %s: expected a complete header and committed start, got %+v", implementation, name, seed, r)
+				}
 			}
+			sameResult(t, fmt.Sprintf("gen %s seed %s", name, seed), generated, goGenerated)
 			trace := filepath.Join(dir, name+"-"+seed+".jsonl")
 			if err := os.WriteFile(trace, []byte(generated.stdout), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"check", trace}
-			sameResult(t, fmt.Sprintf("check Lean records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
-			// The replayed states are the same, compared as the JSON of Lean's ToJson State.
-			args = append(args, "--state")
-			sameResult(t, fmt.Sprintf("check --state Lean records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
-			// And the other way: Lean check accepts the records Go gen writes.
-			goGenerated := runGo("gen", path, "--seed", seed)
-			goTrace := filepath.Join(dir, name+"-"+seed+"-go.jsonl")
-			if err := os.WriteFile(goTrace, []byte(goGenerated.stdout), 0o644); err != nil {
-				t.Fatal(err)
+			// Equal generator output needs only one replay in each checker. Check the full state too.
+			for _, args := range [][]string{{"check", trace}, {"check", trace, "--state"}} {
+				lean, goResult := runLean(t, cli, args...), runGo(args...)
+				expectCode(t, lean, 0, args...)
+				expectCode(t, goResult, 0, args...)
+				sameResult(t, fmt.Sprintf("check %s seed %s %v", name, seed, args[2:]), lean, goResult)
 			}
-			args = []string{"check", goTrace}
-			sameResult(t, fmt.Sprintf("check Go records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
-			args = append(args, "--state")
-			sameResult(t, fmt.Sprintf("check --state Go records %s seed %s", name, seed), runLean(t, cli, args...), runGo(args...))
 		}
 	}
 }
@@ -545,40 +540,51 @@ func TestConformanceTorn(t *testing.T) {
 	dir := t.TempDir()
 	for _, path := range conformanceDefinitions(t) {
 		generated := runGo("gen", path, "--seed", "3")
+		if generated.code != 0 || !strings.HasSuffix(generated.stdout, "\n") {
+			t.Fatalf("gen %s seed 3: expected complete records, got %+v", baseName(path), generated)
+		}
 		lines := strings.SplitAfter(generated.stdout, "\n")
 		lines = lines[:len(lines)-1]
-		check := func(label, text string) {
+		if len(lines) < 7 {
+			t.Fatalf("%s: need a header and at least three committed transitions for corruption cases, got %d lines", baseName(path), len(lines))
+		}
+		check := func(label, text string, code int, fragment string) {
+			t.Helper()
 			trace := filepath.Join(dir, "torn.jsonl")
 			if err := os.WriteFile(trace, []byte(text), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			args := []string{"check", trace}
-			sameResult(t, label, runLean(t, cli, args...), runGo(args...))
+			lean, goResult := runLean(t, cli, args...), runGo(args...)
+			for implementation, r := range map[string]result{"Lean": lean, "Go": goResult} {
+				if r.code != code || (fragment != "" && !strings.Contains(r.stderr, fragment)) {
+					t.Errorf("%s %s: expected exit %d and error containing %q, got %+v", label, implementation, code, fragment, r)
+				}
+			}
+			sameResult(t, label, lean, goResult)
 		}
 		for cut := 0; cut <= len(lines); cut++ {
 			prefix := strings.Join(lines[:cut], "")
 			label := fmt.Sprintf("%s cut %d", baseName(path), cut)
-			check(label, prefix)
+			check(label, prefix, 0, "")
 			if cut < len(lines) {
 				runes := []rune(lines[cut])
-				check(label+" half", prefix+string(runes[:len(runes)/2]))
+				check(label+" half", prefix+string(runes[:len(runes)/2]), 0, "")
 			}
 		}
-		if len(lines) >= 7 {
-			corrupt := append([]string(nil), lines...)
-			corrupt[4] = "{\"seq\":4,\"commit\":tru\n"
-			check(baseName(path)+" corrupt", strings.Join(corrupt, ""))
-			check(baseName(path)+" reordered", lines[0]+lines[2]+lines[1]+strings.Join(lines[3:], ""))
-			check(baseName(path)+" commit twice", strings.Join(lines[:3], "")+strings.Replace(lines[2], "2", "3", 1))
-			check(baseName(path)+" no header", strings.Join(lines[1:], ""))
-			// The same records under the header of an execution started without validation.
-			if !strings.HasSuffix(lines[0], `,"validated":true}`+"\n") {
-				t.Fatalf("%s: the header has no flag: %s", baseName(path), lines[0])
-			}
-			unchecked := strings.TrimSuffix(lines[0], `,"validated":true}`+"\n") + `,"validated":false}` + "\n"
-			check(baseName(path)+" unchecked", unchecked+strings.Join(lines[1:], ""))
-			check(baseName(path)+" header twice", lines[0]+strings.Join(lines, ""))
+		corrupt := append([]string(nil), lines...)
+		corrupt[4] = "{\"seq\":4,\"commit\":tru\n"
+		check(baseName(path)+" corrupt", strings.Join(corrupt, ""), 1, "line 5:")
+		check(baseName(path)+" reordered", lines[0]+lines[2]+lines[1]+strings.Join(lines[3:], ""), 1, "line 2: expected sequence 1")
+		check(baseName(path)+" commit twice", strings.Join(lines[:3], "")+strings.Replace(lines[2], "2", "3", 1), 1, "a commit without an op")
+		check(baseName(path)+" no header", strings.Join(lines[1:], ""), 1, "line 1: header:")
+		// The same records under the header of an execution started without validation.
+		if !strings.HasSuffix(lines[0], `,"validated":true}`+"\n") {
+			t.Fatalf("%s: the header has no flag: %s", baseName(path), lines[0])
 		}
+		unchecked := strings.TrimSuffix(lines[0], `,"validated":true}`+"\n") + `,"validated":false}` + "\n"
+		check(baseName(path)+" unchecked", unchecked+strings.Join(lines[1:], ""), 0, "")
+		check(baseName(path)+" header twice", lines[0]+strings.Join(lines, ""), 1, "line 2: record:")
 	}
 }
 
@@ -768,19 +774,21 @@ func TestConformanceUnchecked(t *testing.T) {
 	cli := leanCLI(t)
 	dir := t.TempDir()
 	type source struct {
-		data  []byte
-		seeds []uint64
+		data      []byte
+		seeds     []uint64
+		validated []bool
 	}
 	sources := map[string]source{}
 	for _, path := range conformanceDefinitions(t) {
-		sources[baseName(path)] = source{mustRead(t, path), []uint64{1, 2, 3, 7}}
+		// Validated records of these fixtures are covered by TestConformanceCheck.
+		sources[baseName(path)] = source{mustRead(t, path), []uint64{1, 2, 3, 7}, []bool{false}}
 	}
 	for label, mutate := range mutations() {
 		data, err := json.Marshal(mutate(t))
 		if err != nil {
 			t.Fatal(err)
 		}
-		sources["mutation "+label] = source{data, []uint64{1, 3, 7}}
+		sources["mutation "+label] = source{data, []uint64{1, 3, 7}, []bool{false, true}}
 	}
 	for label, src := range sources {
 		p, err := suimon.ParseDefinition(src.data)
@@ -789,7 +797,7 @@ func TestConformanceUnchecked(t *testing.T) {
 		}
 		for _, seed := range src.seeds {
 			records := walkRecords(t, p, seed)
-			for _, validated := range []bool{false, true} {
+			for _, validated := range src.validated {
 				trace := filepath.Join(dir, fmt.Sprintf("%s-%d-%t.jsonl", strings.ReplaceAll(label, " ", "-"), seed, validated))
 				if err := os.WriteFile(trace, []byte(suimon.EncodeHeader(p, validated)+"\n"+records), 0o644); err != nil {
 					t.Fatal(err)
@@ -827,23 +835,11 @@ func TestConformanceGen(t *testing.T) {
 				// Both write the canonical rendering, so the texts are the same too.
 				if lean.stdout != goResult.stdout {
 					t.Errorf("%s: the same records are rendered differently:\n%s", label,
-						firstDifference(lean.stdout, goResult.stdout, splitText(lean.stdout), splitText(goResult.stdout)))
+						firstDifference(lean.stdout, goResult.stdout))
 				}
 				continue
 			}
-			// Diagnose: compare with identities decoded into their parts, whichever encoding each side uses.
-			leanNorm, goNorm := normalize(leanRecords, decodeAny), normalize(goRecords, decodeAny)
-			if reflect.DeepEqual(leanNorm, goNorm) {
-				t.Errorf("%s: the records differ only in how identities are encoded (Lean writes %s)", label,
-					firstString(leanRecords))
-				continue
-			}
-			if leanOps, goOps := withoutValues(leanNorm), withoutValues(goNorm); reflect.DeepEqual(leanOps, goOps) {
-				t.Errorf("%s: the ops are the same, but the payloads differ:\n%s", label,
-					firstDifference(lean.stdout, goResult.stdout, leanNorm, goNorm))
-				continue
-			}
-			t.Errorf("%s: the records differ:\n%s", label, firstDifference(lean.stdout, goResult.stdout, leanNorm, goNorm))
+			t.Errorf("%s: the records differ:\n%s", label, firstDifference(lean.stdout, goResult.stdout))
 		}
 	}
 }
@@ -881,115 +877,10 @@ func parseLines(t *testing.T, text string) []any {
 	return records
 }
 
-// decodeLegacy decodes the escape-based identities the Lean model wrote before the length-prefixed
-// encoding: each part is escaped with \ and ended by ;.
-func decodeLegacy(id string) ([]string, bool) {
-	var parts []string
-	var current []rune
-	runes := []rune(id)
-	for i := 0; i < len(runes); i++ {
-		switch runes[i] {
-		case '\\':
-			if i+1 == len(runes) {
-				return nil, false
-			}
-			i++
-			current = append(current, runes[i])
-		case ';':
-			parts = append(parts, string(current))
-			current = nil
-		default:
-			current = append(current, runes[i])
-		}
-	}
-	return parts, len(current) == 0
-}
-
-// decodeAny decodes an identity in the current encoding, or else in the legacy one.
-func decodeAny(id string) ([]string, bool) {
-	if id == "" {
-		return nil, true
-	}
-	if parts, ok := suimon.DecodeIdentity(id); ok && suimon.Identity(parts...) == id {
-		return parts, true
-	}
-	return decodeLegacy(id)
-}
-
-// normalize replaces identities by their decoded parts, sorts the elements of list values, and
-// turns objects into sorted pairs, so that encodings and key orders compare equal.
-func normalize(v any, decode func(string) ([]string, bool)) any {
-	switch v := v.(type) {
-	case string:
-		parts, ok := decode(v)
-		if !ok {
-			return v
-		}
-		out := []any{"#id"}
-		for _, part := range parts {
-			out = append(out, normalize(part, decode))
-		}
-		if len(parts) > 0 && parts[0] == "list" {
-			rest := out[2:]
-			sort.Slice(rest, func(i, j int) bool { return fmt.Sprint(rest[i]) < fmt.Sprint(rest[j]) })
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, item := range v {
-			out[i] = normalize(item, decode)
-		}
-		return out
-	case map[string]any:
-		var pairs []any
-		for key, value := range v {
-			pairs = append(pairs, []any{normalize(key, decode), normalize(value, decode)})
-		}
-		sort.Slice(pairs, func(i, j int) bool { return fmt.Sprint(pairs[i]) < fmt.Sprint(pairs[j]) })
-		return pairs
-	}
-	return v
-}
-
-func splitText(text string) []any {
-	var lines []any
-	for _, line := range strings.Split(text, "\n") {
-		lines = append(lines, line)
-	}
-	return lines
-}
-
-// withoutValues drops the payloads from normalized records, leaving seq and op.
-func withoutValues(records any) []any {
-	var out []any
-	for _, r := range records.([]any) {
-		var kept []any
-		for _, pair := range r.([]any) {
-			if pair.([]any)[0] != "values" {
-				kept = append(kept, pair)
-			}
-		}
-		out = append(out, kept)
-	}
-	return out
-}
-
-func firstString(records []any) string {
-	for _, r := range records {
-		if op, ok := r.(map[string]any)["op"].(map[string]any); ok {
-			if call, ok := op["call"].(string); ok {
-				return fmt.Sprintf("call %q", call)
-			}
-		}
-	}
-	return "identities in another form"
-}
-
-func firstDifference(leanText, goText string, leanNorm, goNorm any) string {
+func firstDifference(leanText, goText string) string {
 	leanLines, goLines := strings.Split(leanText, "\n"), strings.Split(goText, "\n")
-	ln, gn := leanNorm.([]any), goNorm.([]any)
-	for i := 0; i < len(ln) || i < len(gn); i++ {
-		if i >= len(ln) || i >= len(gn) || !reflect.DeepEqual(ln[i], gn[i]) {
+	for i := 0; i < len(leanLines) || i < len(goLines); i++ {
+		if i >= len(leanLines) || i >= len(goLines) || leanLines[i] != goLines[i] {
 			line := func(lines []string) string {
 				if i < len(lines) {
 					return lines[i]
@@ -999,5 +890,5 @@ func firstDifference(leanText, goText string, leanNorm, goNorm any) string {
 			return fmt.Sprintf("  line %d\n  Lean: %s\n  Go:   %s", i+1, line(leanLines), line(goLines))
 		}
 	}
-	return "  (no difference after normalization)"
+	return "  (no difference)"
 }

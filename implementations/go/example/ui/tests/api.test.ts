@@ -100,7 +100,15 @@ it('keeps the WASM transport independent of HTTP capabilities', async () => {
 });
 
 it('parses a report', () => {
-  const report = parseReport({ status: 'failed', outputs: { collect: '[1]' }, endpoints: { collect: 'normal' }, failures: [{ run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' }] });
-  expect(report.failures[0]).toEqual({ run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' });
+  const report = parseReport({ status: 'failed', outputs: { collect: '[1]' }, endpoints: { collect: 'normal' }, failures: [
+    { run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' },
+    { run: ['child'], placement: 'parallel', task: 'lookup-user', cause: 'error', error: 'user missing' },
+  ] });
+  expect(report).toEqual({
+    status: 'failed', outputs: { collect: '[1]' }, endpoints: { collect: 'normal' }, failures: [
+      { run: [], placement: 'lookup', cause: 'timeout', error: 'suimon: timed out' },
+      { run: ['child'], placement: 'parallel', task: 'lookup-user', cause: 'error', error: 'user missing' },
+    ],
+  });
   expect(() => parseReport({ status: 'x', outputs: {}, endpoints: { a: 1 }, failures: [] })).toThrow(/endpoints/);
 });

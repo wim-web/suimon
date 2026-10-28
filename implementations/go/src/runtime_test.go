@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -492,15 +493,10 @@ func scenarios() []scenario {
 				return run{bindings: usersBindings(usersKnobs{failOrdersOf: 2}), check: func(t *testing.T, r *Report, _ string) {
 					expectStatusOf(t, r, StatusFailed)
 					expectFailures(t, r, "perUser/orders:error")
-					got, err := outputSet(r, "all")
-					if err != nil || len(got) != 3 {
-						t.Fatalf("all: %q %v", got, err)
-					}
-					for _, list := range got {
-						if strings.Contains(list, `"user":2`) && strings.Contains(list, "orders") {
-							t.Errorf("the list of user 2 keeps its profile only: %s", list)
-						}
-					}
+					expectOutputSet(t, r, "all",
+						[]any{summary{User: 1, Kind: "orders", Text: "10"}, summary{User: 1, Kind: "profile", Text: "profile of raw-1"}},
+						[]any{summary{User: 2, Kind: "profile", Text: "profile of raw-2"}},
+						[]any{summary{User: 3, Kind: "orders", Text: "30"}, summary{User: 3, Kind: "profile", Text: "profile of raw-3"}})
 				}}
 			},
 		},
@@ -957,6 +953,11 @@ func scenarios() []scenario {
 
 func TestRuntimeScenarios(t *testing.T) {
 	for _, sc := range scenarios() {
+		// The barrier case covers the ordinary limit run with stronger overlap/output checks.
+		// Keep the deterministic fixture for recovery, where the barrier cannot be used.
+		if sc.name == "limit" {
+			continue
+		}
 		t.Run(sc.name, func(t *testing.T) {
 			t.Parallel()
 			runOnce(t, sc)
@@ -1039,7 +1040,33 @@ func maps2Equal(a, b map[string]string) bool {
 
 // Several executions of one engine run at once without sharing state.
 func TestRuntimeConcurrentExecutions(t *testing.T) {
-	e, err := NewEngine(load(t, "users"), mustRegistry(t, usersBindings(usersKnobs{})...))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	started := make(chan struct{}, 8)
+	release := make(chan struct{})
+	bindings := replaceBinding(usersBindings(usersKnobs{}),
+		Stream("fetchAllUsers", func(ctx context.Context, input tenant) iter.Seq2[user, error] {
+			return func(yield func(user, error) bool) {
+				started <- struct{}{}
+				select {
+				case <-release:
+				case <-ctx.Done():
+					yield(user{}, ctx.Err())
+					return
+				}
+				base, err := strconv.Atoi(input.Name)
+				if err != nil {
+					yield(user{}, err)
+					return
+				}
+				for i := 1; i <= input.Users; i++ {
+					if !yield(user{ID: base + i}, nil) {
+						return
+					}
+				}
+			}
+		}))
+	e, err := NewEngine(load(t, "users"), mustRegistry(t, bindings...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1048,16 +1075,37 @@ func TestRuntimeConcurrentExecutions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r, err := e.Run(context.Background(), tenant{Name: fmt.Sprint(n), Users: n})
+			r, err := e.Run(ctx, tenant{Name: fmt.Sprint(100 * n), Users: n})
 			if err != nil || r.Status != StatusSucceeded {
 				t.Errorf("run %d: %v %v", n, r, err)
 				return
 			}
-			if got, err := outputSet(r, "all"); err != nil || len(got) != n {
-				t.Errorf("run %d: %d lists", n, len(got))
+			var want []any
+			for i := 1; i <= n; i++ {
+				id := 100*n + i
+				want = append(want, []any{
+					summary{User: id, Kind: "orders", Text: fmt.Sprint(id * 10)},
+					summary{User: id, Kind: "profile", Text: fmt.Sprintf("profile of raw-%d", id)},
+				})
 			}
+			expectOutputSet(t, r, "all", want...)
 		}()
 	}
+	// All executions must be active together, and their payloads use disjoint user IDs.
+	for range 8 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Error("not all executions started before the deadline")
+			close(release)
+			wg.Wait()
+			return
+		}
+	}
+	if len(runtimeWorkerStacks()) == 0 {
+		t.Error("worker inspection did not see the eight blocked executions")
+	}
+	close(release)
 	wg.Wait()
 }
 
@@ -1192,7 +1240,7 @@ func TestRuntimeJournalFailure(t *testing.T) {
 		}
 		r, err := wait(t, x)
 		if err == nil {
-			// The run needed fewer appends: every failing append has been tried.
+			// This run needed fewer appends; earlier iterations exercised shorter failing prefixes.
 			if failAt < 5 || r.Status != StatusSucceeded {
 				t.Fatalf("fail at %d: %v", failAt, r.Status)
 			}
@@ -1251,20 +1299,44 @@ func TestRuntimeJournalHeader(t *testing.T) {
 	verifyJournal(t, p, j.text(), r)
 }
 
-// Executions leave no goroutine behind, whether they conclude, stop, time out or are cancelled.
+// runtimeWorkerStacks identifies the driver/call goroutines and suspended generator coroutines.
+// Counting only these stacks prevents unrelated goroutine exits from hiding a runtime leak.
+func runtimeWorkerStacks() []string {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			var workers []string
+			for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+				if strings.Contains(stack, "/src.(*driver).") ||
+					strings.Contains(stack, "/src.generate(") || strings.Contains(stack, "/src.encodeAll[") {
+					workers = append(workers, stack)
+				}
+			}
+			return workers
+		}
+		buf = make([]byte, len(buf)*2)
+	}
+}
+
+// Executions leave no runtime worker behind, whether they conclude, stop, time out or are cancelled.
 func TestRuntimeNoLeaks(t *testing.T) {
-	baseline := runtime.NumGoroutine()
 	for _, name := range []string{"merge", "merge stop", "merge timeout", "users stop", "users cancel", "branch element timeout",
 		"limit slot held", "branch invalid UTF-8 element"} {
-		runOnce(t, scenarioNamed(t, name))
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for runtime.NumGoroutine() > baseline {
-		if time.Now().After(deadline) {
-			buf := make([]byte, 1<<16)
-			t.Fatalf("%d goroutines, %d before:\n%s", runtime.NumGoroutine(), baseline, buf[:runtime.Stack(buf, true)])
-		}
-		time.Sleep(10 * time.Millisecond)
+		t.Run(name, func(t *testing.T) {
+			runOnce(t, scenarioNamed(t, name))
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				workers := runtimeWorkerStacks()
+				if len(workers) == 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("runtime workers remained after %s:\n%s", name, strings.Join(workers, "\n\n"))
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
 	}
 }
 
