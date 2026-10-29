@@ -507,3 +507,16 @@ test('recovery loses calls in creation order and stops before starting untouched
   assert.deepEqual(report.failures.map(failure => failure.placement), ['f']);
   await replay(journal, definition, report);
 });
+
+test('streams fall back to sync iteration when the async method is null or undefined', async () => {
+  for (const absent of [undefined, null]) {
+    const sequence = { [Symbol.asyncIterator]: absent, *[Symbol.iterator]() { yield 1; yield 2; } };
+    const engine = new Engine(streamFlow(), [
+      { kind: 'stream', id: 'source', input: false, run: () => sequence },
+      { kind: 'single', id: 'sink', input: true, run: input => input }, identity,
+    ]);
+    const report = await engine.run();
+    assert.equal(report.status, 'succeeded');
+    assert.deepEqual([...report.outputs.get('all')].sort(), [1, 2]);
+  }
+});

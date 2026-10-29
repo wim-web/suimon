@@ -67,6 +67,16 @@ export function encodeValue(value: unknown): string {
 
 export function decodeValue(payload: string): unknown { return JSON.parse(payload); }
 
+export function synchronousTransformResult(value: unknown): unknown {
+  if (value !== null && (typeof value === 'object' || typeof value === 'function') &&
+      'then' in value && typeof value.then === 'function') {
+    if (value instanceof Promise) void value.catch(() => {});
+    throw new TypeError('suimon: transforms must return synchronously');
+  }
+  return value;
+}
+
+
 export type CallbackEvent =
   | { kind: 'returned'; call: string; payload: string }
   | { kind: 'yielded'; call: string; payload: string; index: number }
@@ -92,6 +102,15 @@ export function scheduleTimer(milliseconds: bigint, fire: () => void): () => voi
   };
   arm();
   return () => { cancelled = true; clearTimeout(handle); };
+}
+
+export function iteratorOf<T>(sequence: Sequence<T>): Iterator<T> | AsyncIterator<T> {
+  if (typeof sequence !== 'string' && Symbol.asyncIterator in sequence) {
+    const method = sequence[Symbol.asyncIterator];
+    if (method != null) return method.call(sequence);
+  }
+  if (typeof sequence === 'string' || Symbol.iterator in sequence) return sequence[Symbol.iterator]();
+  throw new TypeError('suimon: a stream must return an iterable');
 }
 
 export class Callback {
@@ -135,8 +154,7 @@ export class Callback {
   }
 
   private async generate(sequence: Sequence<unknown>): Promise<CallbackEvent> {
-    const iterator = typeof sequence === 'string' ? sequence[Symbol.iterator]()
-      : Symbol.asyncIterator in sequence ? sequence[Symbol.asyncIterator]() : sequence[Symbol.iterator]();
+    const iterator = iteratorOf(sequence);
     let finished = false;
     try {
       for (let index = 0; await this.fetchRequested(); index++) {

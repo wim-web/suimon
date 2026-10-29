@@ -1,0 +1,53 @@
+name: TypeScript engine
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - '.github/workflows/typescript.yml'
+      - 'implementations/typescript/**'
+      - 'implementations/go/src/**'
+      - 'implementations/go/cmd/**'
+      - 'implementations/go/go.*'
+      - 'Test/definitions/**'
+      - 'ui-kit/tests/fixtures/**'
+      - 'schema/**'
+      - 'Suimon/**'
+      - 'Main.lean'
+      - 'lakefile.lean'
+      - 'lean-toolchain'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - 'mise.toml'
+  pull_request:
+    paths: *paths
+permissions:
+  contents: read
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: implementations/go/go.mod
+          cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: mise.toml
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @suimon/engine typecheck
+      - run: pnpm --filter @suimon/engine test
+      - name: Install Lean toolchain manager
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - run: lake build suimon
+      - name: Compare TypeScript with Go and Lean
+        run: SUIMON_LEAN_CLI="$PWD/.lake/build/bin/suimon" pnpm --filter @suimon/engine test:conformance
+      - run: pnpm --filter @suimon/engine test:package

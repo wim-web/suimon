@@ -5,7 +5,7 @@ import { checkDefinitionResources, encodeDefinition, parseDefinition, validateDe
 import { controlCandidates, initialState, Rejection, step } from './machine.js';
 import { decodeIdentity, exploreValue, identity } from './identity.js';
 import { checkTrace, encodeHeader, encodeRecord, introduced } from './trace.js';
-import { Bindings, Callback, decodeValue, encodeValue, scheduleTimer } from './callbacks.js';
+import { Bindings, Callback, decodeValue, encodeValue, scheduleTimer, synchronousTransformResult } from './callbacks.js';
 import type { CallbackEvent } from './callbacks.js';
 import { Budget, byteLength, checkLine, ended, engineLimits, QuotaError, terminal } from './limits.js';
 
@@ -225,11 +225,7 @@ class Driver {
     try {
       const binding = transform === undefined ? undefined : this.bindings.transforms.get(transform);
       if (!binding || input == null) throw new Error(`suimon: transform ${String(transform)} has no binding or input`);
-      const result = binding.run(decodeValue(this.payloadOf(input)));
-      if (typeof result === 'object' && result !== null && 'then' in result && typeof result.then === 'function') {
-        if (result instanceof Promise) void result.catch(() => {});
-        throw new TypeError('suimon: transforms must return synchronously');
-      }
+      const result = synchronousTransformResult(binding.run(decodeValue(this.payloadOf(input))));
       return { op, payload: { value, payload: encodeValue(result) } };
     } catch (error) { return { op: failed, error }; }
   }

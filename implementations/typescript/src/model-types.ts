@@ -1,4 +1,3 @@
-// Definitions follow schema/definition.schema.json. UInt64 fields stay exact in memory.
 export type ValueType = string | { list: ValueType };
 export type Kind = 'single' | 'stream';
 export type Policy = 'stop' | 'continue';
@@ -42,7 +41,6 @@ export interface State {
   results: Result[]; taskResults: TaskResult[]; deliveries: Delivery[]; settled: Settled[]; failures: Failure[];
 }
 
-// The operation fields follow schema/trace.schema.json; missing optional fields are omitted on wire.
 export type Op =
   | { type: 'start'; input?: string }
   | { type: 'invoke'; run: Path; placement: string; trigger?: string }

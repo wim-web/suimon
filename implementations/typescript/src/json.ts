@@ -280,7 +280,7 @@ class Parser {
       fraction = this.digits();
       exponent = BigInt(fraction.length);
     }
-    let mantissa = BigInt(whole + fraction);
+    let decimal = whole + fraction;
     if (this.peek() === 'e' || this.peek() === 'E') {
       this.pos++;
       const sign = this.peek();
@@ -295,12 +295,18 @@ class Parser {
         else {
           const padding = shift - exponent;
           exponent = 0n;
-          if (mantissa !== 0n) mantissa *= 10n ** (padding > 64n ? 64n : padding);
+          decimal += '0'.repeat(Number(padding > 64n ? 64n : padding));
         }
       }
     }
-    if (mantissa === 0n) return 0n;
-    while (exponent > 0n && mantissa % 10n === 0n) { mantissa /= 10n; exponent--; }
+    let end = decimal.length;
+    while (end > 0 && decimal[end - 1] === '0') end--;
+    if (end === 0) return 0n;
+    const trailing = BigInt(decimal.length - end);
+    const remove = exponent < trailing ? exponent : trailing;
+    decimal = decimal.slice(0, decimal.length - Number(remove));
+    exponent -= remove;
+    const mantissa = BigInt(decimal);
     if (exponent === 0n) return negative ? -mantissa : mantissa;
     return new JsonNumber(negative, mantissa, exponent);
   }

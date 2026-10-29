@@ -48,9 +48,8 @@ class Fields {
     return value;
   }
 
-  index(key: string): number {
+  saturatedIndex(key: string): number {
     const value = this.natural(key);
-    // An unreachable index remains a valid pending op until its commit rejects it.
     return Number(value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : value);
   }
 
@@ -92,10 +91,10 @@ function readOp(value: JsonValue): Op {
       return { type, call: reader.text('call'), element: reader.boolean('element') };
     case 'deliver':
       keys('run', 'connection', 'source', 'value');
-      return { type, run: reader.path('run'), connection: reader.index('connection'), source: reader.text('source'), ...reader.optionalText('value') };
+      return { type, run: reader.path('run'), connection: reader.saturatedIndex('connection'), source: reader.text('source'), ...reader.optionalText('value') };
     case 'transformFailed':
       keys('run', 'connection', 'source');
-      return { type, run: reader.path('run'), connection: reader.index('connection'), source: reader.text('source') };
+      return { type, run: reader.path('run'), connection: reader.saturatedIndex('connection'), source: reader.text('source') };
     case 'taskInput':
       keys('execution', 'task', 'value');
       return { type, execution: reader.text('execution'), task: reader.text('task'), ...reader.optionalText('value') };
@@ -104,10 +103,10 @@ function readOp(value: JsonValue): Op {
       return { type, execution: reader.text('execution'), task: reader.text('task') };
     case 'taskOutput':
       keys('execution', 'task', 'index', 'value');
-      return { type, execution: reader.text('execution'), task: reader.text('task'), index: reader.index('index'), value: reader.text('value') };
+      return { type, execution: reader.text('execution'), task: reader.text('task'), index: reader.saturatedIndex('index'), value: reader.text('value') };
     case 'taskOutputFailed':
       keys('execution', 'task', 'index');
-      return { type, execution: reader.text('execution'), task: reader.text('task'), index: reader.index('index') };
+      return { type, execution: reader.text('execution'), task: reader.text('task'), index: reader.saturatedIndex('index') };
     case 'settle':
       keys('run', 'placement');
       return { type, run: reader.path('run'), placement: reader.text('placement') };

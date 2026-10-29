@@ -231,3 +231,17 @@ test('Go differential acceptance, canonical headers, and first errors', { skip: 
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('large decimal zero suffixes are scanned before bigint construction', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { parseDefinition } from ${JSON.stringify(new URL('../dist/definition.js', import.meta.url).href)};
+    import { parseJson } from ${JSON.stringify(new URL('../dist/json.js', import.meta.url).href)};
+    const number = '1' + '0'.repeat(200_000) + 'e-200000';
+    assert.equal(parseJson(number, 'definition'), 1n);
+    assert.throws(() => parseDefinition('{"main":"w","unknown":' + number + '}'), /unknown field unknown/);
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.error, undefined, String(result.error));
+  assert.equal(result.status, 0, result.stderr);
+});
