@@ -104,6 +104,26 @@ test('bindings and definition are snapshotted; undeclared unused functions need 
   assert.throws(() => new Engine(single(), [{ kind: 'stream', id: 'f', input: false, run: () => [] }]), /declared as/);
 });
 
+for (const validate of [true, false]) {
+  test(`engine rejects unpaired surrogates before recording a definition (validate=${validate})`, () => {
+    const definition = single({ name: 'p\ud800' });
+    assert.throws(() => new Engine(definition, [binding(() => 7)], { validate }), {
+      name: 'ValidationError', message: 'the name "p\\ud800" is not valid UTF-8',
+    });
+  });
+
+  test(`engine preserves astral placement names in outputs and journals (validate=${validate})`, async () => {
+    const definition = single({ name: 'p😀' });
+    const journal = new MemoryJournal();
+    const report = await new Engine(definition, [binding(() => 7)], { validate }).run(undefined, { journal });
+    assert.equal(report.status, 'succeeded');
+    assert.deepEqual([...report.outputs], [['p😀', 7]]);
+    const trace = await replay(journal, definition, report);
+    assert.deepEqual(trace.definition, definition);
+    assert.equal(trace.validated, validate);
+  });
+}
+
 test('start, callback invocation, and final report wait for journal sync', { timeout: 5000 }, async () => {
   for (const block of ['start', 'invoke', 'conclude']) {
     const journal = new BarrierJournal(); journal.block = block;
