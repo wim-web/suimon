@@ -13,7 +13,7 @@ try {
   assert.ok(archive, 'pack must produce a tarball');
   writeFileSync(join(temp, 'package.json'), JSON.stringify({ name: 'suimon-consumer-test', private: true, type: 'module' }));
   execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(temp, archive)], { cwd: temp, stdio: 'inherit' });
-  copyFileSync(join(packageRoot, 'examples/workflow.mjs'), join(temp, 'example.mjs'));
+  copyFileSync(join(temp, 'node_modules/@suimon/engine/examples/workflow.mjs'), join(temp, 'example.mjs'));
   const output = execFileSync(process.execPath, ['example.mjs'], { cwd: temp, encoding: 'utf8' });
   assert.match(output, /succeeded/);
   assert.match(output, /HELLO/);

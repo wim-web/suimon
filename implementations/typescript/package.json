@@ -8,6 +8,8 @@
   },
   "files": [
     "dist",
+    "src",
+    "examples",
     "README.md"
   ],
   "sideEffects": false,
@@ -28,5 +30,13 @@
   "devDependencies": {
     "@types/node": "24.19.2",
     "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wim-web/suimon.git",
+    "directory": "implementations/typescript"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

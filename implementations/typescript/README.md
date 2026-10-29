@@ -1,6 +1,6 @@
 # Suimon TypeScript
 
-[Suimon の制御仕様](../../docs/suimon-spec.md)を Node.js で実行するライブラリ。関数、Stream、分岐、並列、サブworkflow、合流、キャンセル、タイムアウトと現行 journal からの復元を扱う。
+[Suimon の制御仕様](https://github.com/wim-web/suimon/blob/main/docs/suimon-spec.md)を Node.js で実行するライブラリ。関数、Stream、分岐、並列、サブworkflow、合流、キャンセル、タイムアウトと現行 journal からの復元を扱う。
 
 入口は `@suimon/engine`。型付き構築と復元の動く例は [workflow.mjs](examples/workflow.mjs)、永続化 adapter の契約は [runtime-types.ts](src/runtime-types.ts) を参照する。JSON の値を保存するため、大きなデータは保存先のキーなどで渡す。callback は AbortSignal に応じて終了する。
 
