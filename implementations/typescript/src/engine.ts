@@ -1,7 +1,7 @@
 import { setImmediate } from 'node:timers/promises';
 import type { Concurrency, Definition, Op, Path, Payload, State, TaskSpec, Workflow } from './model-types.js';
 import type { Binding, EngineOptions, Execution, Journal, Limits, Report, RecoverableJournal, ResumeOptions, StartOptions } from './runtime-types.js';
-import { checkDefinitionResources, encodeDefinition, parseDefinition, validateDefinition } from './definition.js';
+import { checkDefinitionRepresentation, checkDefinitionResources, encodeDefinition, parseDefinition, validateDefinition } from './definition.js';
 import { controlCandidates, initialState, Rejection, step } from './machine.js';
 import { decodeIdentity, exploreValue, identity } from './identity.js';
 import { checkTrace, encodeHeader, encodeRecord, introduced } from './trace.js';
@@ -31,6 +31,7 @@ export class Engine {
 
   constructor(definition: Definition, bindings: readonly Binding[], options: EngineOptions = {}) {
     checkDefinitionResources(definition);
+    checkDefinitionRepresentation(definition);
     const canonical = encodeDefinition(definition);
     this.definition = parseDefinition(canonical);
     if (encodeDefinition(this.definition) !== canonical) throw new Error('suimon: the definition cannot be recorded faithfully');

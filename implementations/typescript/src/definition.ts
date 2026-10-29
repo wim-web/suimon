@@ -406,7 +406,7 @@ export function deriveKinds(def: Definition): Map<string, Map<string, Kind>> {
   return result;
 }
 
-function representable(def: Definition): void {
+export function checkDefinitionRepresentation(def: Definition): void {
   const name = (s: string): void => { if (/[\uD800-\uDFFF]/u.test(s)) invalid(`the name ${JSON.stringify(s)} is not valid UTF-8`); };
   const type = (t?: ValueType): void => { if (t !== undefined) name(typeName(t)); };
   const body = (b: Body): void => { if (b.type === 'function') name(b.function); else { name(b.workflow); name(b.output); } };
@@ -600,7 +600,7 @@ function validateWorkflow(def: Definition, w: Workflow, kinds: Map<string, Kind>
 }
 export function validateDefinition(def: Definition): void {
   checkDefinitionResources(def);
-  representable(def);
+  checkDefinitionRepresentation(def);
   if (!unique(def.functions.map(f => f.id))) invalid('duplicate function id');
   if (!unique(def.judges.map(j => j.id))) invalid('duplicate judge id');
   if (!unique(def.transforms.map(t => t.id))) invalid('duplicate transform id');
