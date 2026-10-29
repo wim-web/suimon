@@ -514,6 +514,9 @@ export function controlCandidates(definition: Definition, state: State): Op[] {
   if (state.status === 'stopping') return [{ type: 'conclude' }];
   if (state.status !== 'running') return [];
   const view = new View(definition, state);
+  const invoked = new Set(state.invocations.map(i => JSON.stringify([i.run, i.placement, i.trigger])));
+  const delivered = new Set(state.deliveries.map(d => JSON.stringify([d.run, d.connection, d.source])));
+  const settled = new Set(state.settled.map(s => JSON.stringify([s.run, s.placement])));
   const ops: Op[] = state.calls.filter(c => c.stream && c.status === 'running').map(c => ({ type: 'fetch', call: c.id }));
   const closing: Op[] = [];
   for (const run of state.runs) {
@@ -522,17 +525,25 @@ export function controlCandidates(definition: Definition, state: State): Op[] {
     if (workflow === undefined) continue;
     if (run.path.length !== 0) closing.push({ type: 'closeRun', run: run.path });
     for (const placement of workflow.placements) {
+      if (settled.has(JSON.stringify([run.path, placement.name]))) continue;
       closing.push({ type: 'settle', run: run.path, placement: placement.name });
+      if (placement.node.type === 'waitStream' || placement.node.type === 'merge') continue;
       const shape = view.shape(workflow, placement.name);
       if (shape === undefined) continue;
       if (shape.kind === 'none' || shape.kind === 'entry') {
-        ops.push({ type: 'invoke', run: run.path, placement: placement.name });
+        if (!invoked.has(JSON.stringify([run.path, placement.name, null]))) {
+          ops.push({ type: 'invoke', run: run.path, placement: placement.name });
+        }
       } else if (shape.kind === 'single') {
         const resolution = view.resolveSingle(run.path, shape.index, shape.connection);
-        if (resolution.kind === 'value') ops.push({ type: 'invoke', run: run.path, placement: placement.name, trigger: resolution.source });
+        if (resolution.kind === 'value' && !invoked.has(JSON.stringify([run.path, placement.name, resolution.source]))) {
+          ops.push({ type: 'invoke', run: run.path, placement: placement.name, trigger: resolution.source });
+        }
       } else if (shape.kind === 'stream') {
         for (const delivery of view.deliveriesOn(run.path, shape.index)) {
-          if (delivery.outcome.kind !== 'failed') ops.push({ type: 'invoke', run: run.path, placement: placement.name, trigger: delivery.source });
+          if (delivery.outcome.kind !== 'failed' && !invoked.has(JSON.stringify([run.path, placement.name, delivery.source]))) {
+            ops.push({ type: 'invoke', run: run.path, placement: placement.name, trigger: delivery.source });
+          }
         }
       }
     }
@@ -542,7 +553,7 @@ export function controlCandidates(definition: Definition, state: State): Op[] {
     if (workflow === undefined) continue;
     workflow.connections.forEach((connection, index) => {
       if (connection.source !== result.placement || (connection.arm !== undefined && result.arm !== connection.arm)
-        || view.delivery(result.run, index, result.id) !== undefined) return;
+        || delivered.has(JSON.stringify([result.run, index, result.id]))) return;
       const op: Op = { type: 'deliver', run: result.run, connection: index, source: result.id };
       if (connection.transform !== 'discard') op.value = exploreValue('transform', String(index), result.id);
       ops.push(op);
