@@ -28,8 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      SUIMON_GO_ORACLE: ${{ runner.temp }}/suimon-go
-      SUIMON_GO_CLI: ${{ runner.temp }}/suimon-go
+      SUIMON_GO_ORACLE: ${{ github.workspace }}/.lake/build/bin/suimon-go
+      SUIMON_GO_CLI: ${{ github.workspace }}/.lake/build/bin/suimon-go
       SUIMON_LEAN_CLI: ${{ github.workspace }}/.lake/build/bin/suimon
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
