@@ -27,6 +27,10 @@ jobs:
   engine:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      SUIMON_GO_ORACLE: ${{ runner.temp }}/suimon-go
+      SUIMON_GO_CLI: ${{ runner.temp }}/suimon-go
+      SUIMON_LEAN_CLI: ${{ github.workspace }}/.lake/build/bin/suimon
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -41,13 +45,17 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @suimon/engine typecheck
-      - run: pnpm --filter @suimon/engine test
       - name: Install Lean toolchain manager
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
           sh /tmp/elan-init.sh -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - run: lake build suimon
+      - name: Build reference CLIs
+        run: |
+          lake build suimon
+          go -C implementations/go build -o "$SUIMON_GO_CLI" ./cmd/suimon
+      - name: Test engine and differential cases
+        run: pnpm --filter @suimon/engine test
       - name: Compare TypeScript with Go and Lean
-        run: SUIMON_LEAN_CLI="$PWD/.lake/build/bin/suimon" pnpm --filter @suimon/engine test:conformance
+        run: pnpm --filter @suimon/engine test:conformance
       - run: pnpm --filter @suimon/engine test:package
