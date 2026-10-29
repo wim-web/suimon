@@ -1,0 +1,4 @@
+ts	phase	decision	why	evidence	result
+2026-10-30T00:00:00+09:00	frame	Base the isolated TS implementation on f5456f2	The requested 9188b39 is five commits behind fetched main; later changes strengthen regression coverage	f5456f2	grounded
+2026-10-30T02:30:00+09:00	design	Use one Step implementation for execution and replay, with async byte journal adapter	Prevents divergent control semantics and keeps durability inside the engine	implementations/typescript/src/model-types.ts; implementations/go/src/driver.go:429	contract typecheck passed
+2026-10-30T02:30:00+09:00	design	Select D lifecycle with A parser boundary after four candidate designs	Promise reports keep lifecycle small; required parsers preserve types across recovery	decision.md	independent cross-judge agreed
