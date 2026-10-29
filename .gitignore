@@ -11,3 +11,5 @@ ui-kit/playwright-report/
 implementations/go/example/ui/test-results/
 implementations/go/example/ui/playwright-report/
 ui-kit/.bench-dist/
+implementations/typescript/dist/
+.audit/

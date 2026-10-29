@@ -1,0 +1,42 @@
+{
+  "name": "@suimon/engine",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Suimon workflow execution engine for Node.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "examples",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm build && node --test test/*.test.mjs",
+    "prepack": "pnpm build",
+    "test:conformance": "pnpm build && node --test test/conformance.mjs",
+    "test:package": "node test/package.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wim-web/suimon.git",
+    "directory": "implementations/typescript"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
