@@ -153,6 +153,8 @@ test('wire renderers preserve ordered opaque values and full numbers', () => {
   for (const source of ['{"a":1,"a":2}', String.raw`{"a":1,"\u0061":2}`, '[{"a":{"b":[],"b":{}}}]']) assert.throws(() => parseJson(source, 'trace'), /duplicate key/);
   assert.equal(typeof parseJson('18446744073709551616', 'trace'), 'bigint');
   assert.ok(parseJson('0.5', 'definition') instanceof JsonNumber);
+  assert.equal(renderWire(new JsonNumber(false, 2n, -2n)), '2e2');
+  assert.equal(renderWire(new JsonNumber(true, 25n, 1n)), '-25e-1');
 });
 
 test('input limits count bytes and open containers while ignoring string punctuation', () => {

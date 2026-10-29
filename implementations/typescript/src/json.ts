@@ -77,7 +77,7 @@ function render(value: JsonValue, lean: boolean): string {
   }
   if (value instanceof JsonNumber) {
     const sign = value.negative && value.mantissa !== 0n ? '-' : '';
-    return `${sign}${value.mantissa}${value.exponent === 0n ? '' : `e-${value.exponent}`}`;
+    return `${sign}${value.mantissa}${value.exponent === 0n ? '' : `e${-value.exponent}`}`;
   }
   if (Array.isArray(value)) return `[${value.map(v => render(v, lean)).join(',')}]`;
   const entries = jsonEntries(value);
