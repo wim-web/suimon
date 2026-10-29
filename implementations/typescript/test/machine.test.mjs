@@ -144,6 +144,53 @@ test('empty streams settle normally and scheduler supplies only control operatio
   }
 });
 
+test('stream scheduler offers each trigger once and settles aggregates without invoking them', () => {
+  const definition = {
+    main: 'main',
+    functions: [{ id: 'source', output: { stream: 'T' } }, { id: 'sink', input: 'T', output: { single: 'T' } }],
+    judges: [], transforms: [{ id: 'id', input: 'T', output: 'T' }],
+    workflows: [{ id: 'main', placements: [
+      { name: 'source', node: { type: 'function', function: 'source' }, policy: 'continue' },
+      { name: 'sink', node: { type: 'function', function: 'sink' }, policy: 'continue' },
+      { name: 'all', node: { type: 'waitStream', element: 'T' }, policy: 'continue' },
+    ], connections: [
+      { source: 'source', target: 'sink', transform: 'id' },
+      { source: 'sink', target: 'all', transform: 'id' },
+    ] }],
+  };
+  let state = step(definition, initialState(), { type: 'start' });
+  const candidates = () => controlCandidates(definition, state);
+  const invokeCandidates = () => candidates().filter(op => op.type === 'invoke');
+  const apply = op => { state = step(definition, state, op); };
+  assert.deepEqual(invokeCandidates(), [{ type: 'invoke', run: [], placement: 'source' }]);
+  apply(invokeCandidates()[0]);
+  const sourceCall = state.calls[0].id;
+  for (const value of ['a', 'b']) {
+    assert.deepEqual(invokeCandidates(), []);
+    apply({ type: 'fetch', call: sourceCall });
+    apply({ type: 'yielded', call: sourceCall, value });
+    const source = state.results.at(-1).id;
+    apply({ type: 'deliver', run: [], connection: 0, source, value });
+    assert.deepEqual(invokeCandidates(), [{ type: 'invoke', run: [], placement: 'sink', trigger: source }]);
+    apply(invokeCandidates()[0]);
+    assert.deepEqual(invokeCandidates(), []);
+    apply({ type: 'returned', call: state.calls.at(-1).id, value });
+    apply({ type: 'deliver', run: [], connection: 1, source: state.results.at(-1).id, value });
+    assert.deepEqual(candidates().filter(op => op.type === 'deliver'), []);
+  }
+  apply({ type: 'fetch', call: sourceCall });
+  apply({ type: 'ended', call: sourceCall });
+  for (const placement of ['source', 'sink', 'all']) {
+    assert.ok(candidates().some(op => op.type === 'settle' && op.placement === placement));
+    apply({ type: 'settle', run: [], placement });
+    assert.ok(candidates().every(op => op.placement !== placement));
+  }
+  assert.deepEqual(candidates(), [{ type: 'conclude' }]);
+  apply(candidates()[0]);
+  assert.equal(state.status, 'succeeded');
+  assert.equal(state.results.at(-1).value, listValue(['a', 'b']));
+});
+
 const oracle = process.env.SUIMON_GO_ORACLE;
 test('Go random walks cover every operation and agree on final states', { skip: !oracle }, () => {
   const directory = mkdtempSync(join(tmpdir(), 'suimon-machine-'));
