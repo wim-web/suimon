@@ -20,7 +20,7 @@
   "peerDependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
   "dependencies": { "@xyflow/react": "12.12.1", "lucide-react": "1.70.0" },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
+    "@playwright/test": "1.65.0",
     "@types/node": "26.6.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
